@@ -1,0 +1,13 @@
+[project]
+name = "astraform-sample-refund-agent"
+version = "0.3.0"
+description = "Standalone A2A refund agent with deterministic, Ollama and durable conversation modes"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+    "a2a-sdk[http-server]==1.1.4",
+    "httpx==0.28.1",
+    "uvicorn>=0.35,<1",
+]
+
+[tool.uv]
+package = false

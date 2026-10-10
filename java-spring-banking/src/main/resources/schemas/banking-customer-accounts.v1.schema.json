@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:astraform:sample:banking-customer-accounts.v1.schema.json",
+  "title": "Bank-owned customer account view",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "contextRef": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+    },
+    "subjectRef": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "logicalTimeEpochMs": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 253402300799998
+    },
+    "accounts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "accountId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "productCode": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "balance": {
+            "type": "string",
+            "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+            "maxLength": 40
+          },
+          "currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "limit": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+            "maxLength": 40
+          },
+          "currentMinPayment": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+            "maxLength": 40
+          }
+        },
+        "required": [
+          "accountId",
+          "name",
+          "productCode",
+          "balance",
+          "currency"
+        ]
+      }
+    },
+    "statements": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "billId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+          },
+          "accountId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+          },
+          "closingAmount": {
+            "type": "string",
+            "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+            "maxLength": 40
+          },
+          "minimumAmountDue": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+            "maxLength": 40
+          },
+          "currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "statementStartDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "statementEndDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "dueDate": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        "required": [
+          "billId",
+          "accountId",
+          "closingAmount",
+          "minimumAmountDue",
+          "currency",
+          "statementStartDate",
+          "statementEndDate",
+          "dueDate"
+        ]
+      },
+      "description": "Without statementPeriod, latest 12 statement records per customer (not a rolling 12-month filter); with statementPeriod, only statements whose end date falls in that month, selected from complete bank history. Both are oldest to newest by statement end date and bill ID. More than 100 matching statements fails rather than returning a partial month."
+    },
+    "statementPeriod": {
+      "type": "string",
+      "pattern": "^(?!0000)[0-9]{4}-(0[1-9]|1[0-2])$",
+      "description": "Optional requested closing month (YYYY-MM, years 0001–9999), echoed only for a filtered partner API read. Statements are the complete matching set, at most 100; empty means no issued statement for that month.",
+      "minLength": 7,
+      "maxLength": 7
+    }
+  },
+  "required": [
+    "contextRef",
+    "subjectRef",
+    "version",
+    "logicalTimeEpochMs",
+    "accounts",
+    "statements"
+  ]
+}

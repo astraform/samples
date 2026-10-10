@@ -1,0 +1,284 @@
+{
+  "input": {
+    "simulationRunId": "run-rate-change-001",
+    "presetId": "credit-apr-lift",
+    "parameters": {
+      "productCode": "CC001",
+      "baselineRate": "0.19",
+      "candidateRate": "0.24",
+      "prePolicyDays": "10",
+      "simulationStartEpochMs": 1770000000000,
+      "cohortTargetSize": 2,
+      "cohortArtifactDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "cohortAgentIdentitySetDigest": "1694ef241a176207ee610f029b7ccd4ae724955c205ed80db1c853b92d9647c9",
+      "baselineLimit": null,
+      "candidateLimit": null,
+      "candidateStimulusAmount": "0",
+      "candidateCrash": "false",
+      "candidateHardshipScan": "false",
+      "candidateFraudAlert": "false"
+    }
+  },
+  "expectedControlActionDescriptor": {
+    "actionId": "schedule-rate-change-plan",
+    "label": "Install rate-change plan",
+    "description": "Install the launch-pinned clock-driven rate-change plan.",
+    "category": "POLICY_CHANGE",
+    "inputSchema": {
+      "type": "object",
+      "required": ["schemaVersion", "planDigest", "plan"],
+      "properties": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "banking.clock-driven-intervention-plan-snapshot.v1"
+        },
+        "planDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "plan": {
+          "type": "object",
+          "required": [
+            "schemaVersion",
+            "simulationRunId",
+            "interventionId",
+            "interventionType",
+            "productCode",
+            "expectedPreviousRate",
+            "newRate",
+            "scheduledOffsetDays",
+            "simulationStartEpochMs",
+            "scheduledForEpochMs",
+            "effectiveAtEpochMs",
+            "mutationOperationId",
+            "workId"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "type": "string",
+              "const": "banking.clock-driven-rate-change-plan.v1"
+            },
+            "simulationRunId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "interventionId": {
+              "type": "string",
+              "const": "policy_rate_candidate_shift"
+            },
+            "interventionType": {
+              "type": "string",
+              "const": "RATE_CHANGE"
+            },
+            "productCode": {
+              "type": "string",
+              "const": "CC001"
+            },
+            "expectedPreviousRate": {
+              "type": "string",
+              "const": "0.19"
+            },
+            "newRate": {
+              "type": "string",
+              "const": "0.24"
+            },
+            "scheduledOffsetDays": {
+              "type": "integer",
+              "const": 10
+            },
+            "simulationStartEpochMs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "scheduledForEpochMs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "effectiveAtEpochMs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "mutationOperationId": {
+              "type": "string",
+              "pattern": "^rate-change:[0-9a-f]{64}$"
+            },
+            "workId": {
+              "type": "string",
+              "pattern": "^rate-change-work:[0-9a-f]{32}$"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "supportedModes": ["CLOCK_DRIVEN_HYBRID"],
+    "targetScopes": ["BROADCAST"],
+    "requiredCapabilities": [],
+    "uiSchema": {
+      "fields": [],
+      "readOnly": true
+    },
+    "sideEffectLevel": "HIGH",
+    "evidenceRequirements": ["updated opaque state", "installed plan digest"],
+    "limitations": ["This action accepts only the canonical day-10 CC001 plan."]
+  },
+  "expectedSnapshot": {
+    "schemaVersion": "banking.clock-driven-intervention-plan-snapshot.v1",
+    "planDigest": "8f31020128f07ff098585811cf92c57e919afaf311e0e67823f5047c30e0eb18",
+    "plan": {
+      "schemaVersion": "banking.clock-driven-rate-change-plan.v1",
+      "simulationRunId": "run-rate-change-001",
+      "interventionId": "policy_rate_candidate_shift",
+      "interventionType": "RATE_CHANGE",
+      "productCode": "CC001",
+      "expectedPreviousRate": "0.19",
+      "newRate": "0.24",
+      "scheduledOffsetDays": 10,
+      "simulationStartEpochMs": 1770000000000,
+      "scheduledForEpochMs": 1770864000000,
+      "effectiveAtEpochMs": 1770864000000,
+      "mutationOperationId": "rate-change:eba03fd06becea05775e168a2d52bc3ab4e28dc320371b9fa9a1a91be9e072e3",
+      "workId": "rate-change-work:eba03fd06becea05775e168a2d52bc3a"
+    }
+  },
+  "expectedInstallOperationId": "install-rate-change:8f31020128f07ff098585811cf92c57e919afaf311e0e67823f5047c30e0eb18",
+  "expectedInstallationManifest": {
+    "schemaVersion": "banking.clock-driven-rate-change-installation.v1",
+    "manifestDigest": "76b80885b291c080253b0433e22a01502f06a87bc9e7b9f609187ea194b94b5e",
+    "simulationRunId": "run-rate-change-001",
+    "planDigest": "8f31020128f07ff098585811cf92c57e919afaf311e0e67823f5047c30e0eb18",
+    "installOperationId": "install-rate-change:8f31020128f07ff098585811cf92c57e919afaf311e0e67823f5047c30e0eb18",
+    "cohortArtifactDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "agentIdentitySetDigest": "1694ef241a176207ee610f029b7ccd4ae724955c205ed80db1c853b92d9647c9",
+    "installedAgentCount": 2,
+    "eligibleCustomerCount": 1,
+    "customers": [
+      {
+        "cohortAgentId": "customer-001",
+        "providerRuntimeAgentId": "provider-customer-001",
+        "opportunityAgentId": "opportunity-customer-001",
+        "eligibleAccountCount": 1
+      },
+      {
+        "cohortAgentId": "customer-002",
+        "providerRuntimeAgentId": "provider-customer-002",
+        "opportunityAgentId": "opportunity-customer-002",
+        "eligibleAccountCount": 0
+      }
+    ]
+  },
+  "event": {
+    "eventType": "remote_domain_rate_changed",
+    "businessEventId": "rate-change:eba03fd06becea05775e168a2d52bc3ab4e28dc320371b9fa9a1a91be9e072e3|customer:customer-001",
+    "occurrenceKey": "banking|clock-driven-rate-change|rate-change:eba03fd06becea05775e168a2d52bc3ab4e28dc320371b9fa9a1a91be9e072e3",
+    "workId": "rate-change-work:eba03fd06becea05775e168a2d52bc3a",
+    "simulationRunId": "run-rate-change-001",
+    "customerId": "customer-001",
+    "interventionId": "policy_rate_candidate_shift",
+    "operationId": "rate-change:eba03fd06becea05775e168a2d52bc3ab4e28dc320371b9fa9a1a91be9e072e3",
+    "planDigest": "8f31020128f07ff098585811cf92c57e919afaf311e0e67823f5047c30e0eb18",
+    "productCode": "CC001",
+    "oldRate": "0.19",
+    "newRate": "0.24",
+    "scheduledForEpochMs": 1770864000000,
+    "effectiveAtEpochMs": 1770864000000,
+    "appliedAtEpochMs": 1770864000000,
+    "affectedAccountCount": 1,
+    "affectedAccountIds": ["acct-001"],
+    "outcome": "SUCCESS",
+    "severity": "INFO"
+  },
+  "expectedTrigger": {
+    "schemaVersion": "customer_decision_trigger.v1",
+    "triggerId": "rate_or_policy_change:rate-change:eba03fd06becea05775e168a2d52bc3ab4e28dc320371b9fa9a1a91be9e072e3|customer:customer-001",
+    "triggerType": "rate_or_policy_change",
+    "triggerRef": "rate-change:eba03fd06becea05775e168a2d52bc3ab4e28dc320371b9fa9a1a91be9e072e3|customer:customer-001",
+    "scheduledForEpochMs": 1770864000000,
+    "priority": "NORMAL",
+    "schedulingPriority": "NORMAL",
+    "reason": "Rate or policy changed",
+    "payload": {
+      "policyVersion": "banking.customer-decision-trigger-policy.v1",
+      "numericEncoding": "canonical_decimal_string.v1",
+      "normalizedEventType": "rate_or_policy_change",
+      "sourceEventType": "remote_domain_rate_changed",
+      "eventType": "remote_domain_rate_changed",
+      "businessEventId": "rate-change:eba03fd06becea05775e168a2d52bc3ab4e28dc320371b9fa9a1a91be9e072e3|customer:customer-001",
+      "simulationRunId": "run-rate-change-001",
+      "customerId": "customer-001",
+      "interventionId": "policy_rate_candidate_shift",
+      "operationId": "rate-change:eba03fd06becea05775e168a2d52bc3ab4e28dc320371b9fa9a1a91be9e072e3",
+      "planDigest": "8f31020128f07ff098585811cf92c57e919afaf311e0e67823f5047c30e0eb18",
+      "occurrenceKey": "banking|clock-driven-rate-change|rate-change:eba03fd06becea05775e168a2d52bc3ab4e28dc320371b9fa9a1a91be9e072e3",
+      "workId": "rate-change-work:eba03fd06becea05775e168a2d52bc3a",
+      "productCode": "CC001",
+      "scheduledForEpochMs": "1770864000000",
+      "effectiveAtEpochMs": "1770864000000",
+      "appliedAtEpochMs": "1770864000000",
+      "affectedAccountCount": "1",
+      "oldRate": "0.19",
+      "newRate": "0.24",
+      "outcome": "SUCCESS"
+    },
+    "evidenceRefs": [
+      "rate-change:eba03fd06becea05775e168a2d52bc3ab4e28dc320371b9fa9a1a91be9e072e3|customer:customer-001"
+    ]
+  },
+  "expectedCorrelationAudit": {
+    "schemaVersion": "customer_decision_opportunity_correlation_audit.v1",
+    "simulationRunId": "run-rate-change-001",
+    "triggerType": "rate_or_policy_change",
+    "opportunityCount": 1,
+    "opportunities": [
+      {
+        "opportunityId": "28b4628b-1df0-4a21-9b49-d095fc5b9a52",
+      "agentId": "opportunity-customer-001",
+        "domainId": "banking",
+      "triggerId": "rate_or_policy_change:rate-change:eba03fd06becea05775e168a2d52bc3ab4e28dc320371b9fa9a1a91be9e072e3|customer:customer-001",
+        "triggerType": "rate_or_policy_change",
+      "triggerRef": "rate-change:eba03fd06becea05775e168a2d52bc3ab4e28dc320371b9fa9a1a91be9e072e3|customer:customer-001",
+        "scheduledForEpochMs": 1770864000000,
+        "priority": "NORMAL",
+        "reason": "Rate or policy changed",
+        "status": "SUCCEEDED",
+        "attemptCount": 1,
+        "decisionMode": "STUB_LLM",
+        "triggerDigest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "payload": {
+          "policyVersion": "banking.customer-decision-trigger-policy.v1",
+          "numericEncoding": "canonical_decimal_string.v1",
+          "normalizedEventType": "rate_or_policy_change",
+          "sourceEventType": "remote_domain_rate_changed",
+          "eventType": "remote_domain_rate_changed",
+        "businessEventId": "rate-change:eba03fd06becea05775e168a2d52bc3ab4e28dc320371b9fa9a1a91be9e072e3|customer:customer-001",
+          "simulationRunId": "run-rate-change-001",
+        "customerId": "customer-001",
+          "interventionId": "policy_rate_candidate_shift",
+          "operationId": "rate-change:eba03fd06becea05775e168a2d52bc3ab4e28dc320371b9fa9a1a91be9e072e3",
+          "planDigest": "8f31020128f07ff098585811cf92c57e919afaf311e0e67823f5047c30e0eb18",
+          "occurrenceKey": "banking|clock-driven-rate-change|rate-change:eba03fd06becea05775e168a2d52bc3ab4e28dc320371b9fa9a1a91be9e072e3",
+          "workId": "rate-change-work:eba03fd06becea05775e168a2d52bc3a",
+          "productCode": "CC001",
+          "scheduledForEpochMs": "1770864000000",
+          "effectiveAtEpochMs": "1770864000000",
+          "appliedAtEpochMs": "1770864000000",
+          "affectedAccountCount": "1",
+          "oldRate": "0.19",
+          "newRate": "0.24",
+          "outcome": "SUCCESS"
+        },
+        "evidenceRefs": [
+        "rate-change:eba03fd06becea05775e168a2d52bc3ab4e28dc320371b9fa9a1a91be9e072e3|customer:customer-001"
+        ],
+        "decisionEventId": "585d88fe-5a6d-40a7-aef9-52b14bdaf588",
+        "decisionAttempt": 1,
+        "decisionContractValid": true
+      }
+    ],
+    "asOf": "2026-02-12T00:00:00Z"
+  }
+}

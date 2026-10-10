@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://astraform.ai/samples/marketing-ops/creative-agency-response.v1.schema.json",
+  "title": "Creative Agency business response",
+  "description": "Optional JSON text returned in the A2A message. In LLM mode, the model selects scenario/disposition and advice; deterministic mode is an explicit protocol fixture. This reports advice, not campaign execution or resolved provider state.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "scenario",
+    "disposition",
+    "responseText",
+    "metadata"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "marketing.creative-agency.response.v1"
+    },
+    "scenario": {
+      "enum": [
+        "creative-rework",
+        "asset-review",
+        "launch-blocker"
+      ]
+    },
+    "disposition": {
+      "enum": [
+        "REVISE",
+        "REQUEST_CHANGES",
+        "APPROVE_WITH_NOTES",
+        "ESCALATE",
+        "UNBLOCK_PLAN",
+        "AWAIT_REVIEW",
+        "NO_EXTERNAL_BLOCKER"
+      ]
+    },
+    "responseText": {
+      "type": "string",
+      "minLength": 1
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "service",
+        "scenario",
+        "disposition",
+        "generationProvider",
+        "generationModel",
+        "generationBindingRevision",
+        "generationFallback",
+        "generationContentAuthoritative"
+      ],
+      "properties": {
+        "service": {
+          "const": "marketing-ops-creative-agency"
+        },
+        "scenario": {
+          "enum": [
+            "creative-rework",
+            "asset-review",
+            "launch-blocker"
+          ]
+        },
+        "disposition": {
+          "enum": [
+            "REVISE",
+            "REQUEST_CHANGES",
+            "APPROVE_WITH_NOTES",
+            "ESCALATE",
+            "UNBLOCK_PLAN",
+            "AWAIT_REVIEW",
+            "NO_EXTERNAL_BLOCKER"
+          ]
+        },
+        "generationProvider": {
+          "type": "string"
+        },
+        "generationModel": {
+          "type": "string"
+        },
+        "generationBindingRevision": {
+          "type": "string"
+        },
+        "generationFallback": {
+          "const": false
+        },
+        "generationContentAuthoritative": {
+          "const": false,
+          "description": "Advice does not execute campaign work or prove a change to provider state. The model-selected decision is preserved in LLM mode."
+        },
+        "generationDecisionSource": {
+          "description": "Origin of the scenario/disposition decision; optional for compatibility with earlier receipts.",
+          "enum": [
+            "llm",
+            "deterministic"
+          ]
+        }
+      }
+    }
+  }
+}

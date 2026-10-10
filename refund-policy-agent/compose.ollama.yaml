@@ -1,0 +1,13 @@
+# Add alongside the bundle and optional deterministic sample overlay.
+# Docker Desktop can reach the host's existing Ollama through this hostname.
+# On other hosts, set OLLAMA_BASE_URL to an address reachable from the container.
+services:
+  refund-ollama:
+    image: astraform/refund-policy-agent:local
+    environment:
+      REFUND_AGENT_URL: http://refund-ollama:8095
+      REFUND_AGENT_MODE: ollama
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:4b}
+      OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-90}
+    restart: unless-stopped

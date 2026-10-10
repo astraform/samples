@@ -1,0 +1,92 @@
+name: ${COMPOSE_PROJECT_NAME:?Run python3 init.py first}
+
+# This starter connects to one initialized Astraform bundle through its network.
+# The bank database is separate and is never attached to the platform network.
+services:
+  bank-db:
+    image: ${POSTGRES_IMAGE:?Use the packaged release.env}
+    environment:
+      POSTGRES_DB: banking
+      POSTGRES_USER: banking
+      POSTGRES_PASSWORD: ${BANKING_DB_PASSWORD:?Run python3 init.py first}
+    volumes:
+      - bankData:/var/lib/postgresql/data
+    networks: [bank]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U banking -d banking']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  bank:
+    image: ${BANKING_IMAGE:?Use the packaged release.env}
+    depends_on:
+      bank-db:
+        condition: service_healthy
+    environment:
+      BANKING_BACKEND_ENABLED: "true"
+      BANKING_BACKEND_DATABASE_URL: postgresql://banking:${BANKING_DB_PASSWORD}@bank-db:5432/banking
+      BANKING_BACKEND_MAX_POOL_SIZE: "8"
+    networks:
+      bank: {}
+      platform:
+        aliases: ["${COMPOSE_PROJECT_NAME}-bank"]
+
+  advice:
+    image: ${ADVICE_IMAGE:?Use the packaged release.env}
+    depends_on:
+      bank:
+        condition: service_healthy
+    environment:
+      BANKING_ADVICE_AGENT_URL: http://${COMPOSE_PROJECT_NAME}-advice:8099
+      BANKING_BACKEND_URL: http://${COMPOSE_PROJECT_NAME}-bank:8092
+      BANKING_CUSTOMER_BINDING_KEY: banking
+      BANKING_LLM_BASE_URL: ${BANKING_LLM_BASE_URL:?Configure private/partner.env}
+      BANKING_LLM_MODEL: ${BANKING_LLM_MODEL:?Configure private/partner.env}
+      BANKING_LLM_BINDING_REVISION: ${BANKING_LLM_BINDING_REVISION:?Configure private/partner.env}
+      BANKING_LLM_AUTH_TYPE: ${BANKING_LLM_AUTH_TYPE:-bearer}
+      BANKING_LLM_API_KEY: ${BANKING_LLM_API_KEY:-}
+      BANKING_LLM_TIMEOUT_SECONDS: ${BANKING_LLM_TIMEOUT_SECONDS:-120}
+      BANKING_LLM_MAX_OUTPUT_TOKENS: ${BANKING_LLM_MAX_OUTPUT_TOKENS:-2048}
+      BANKING_LLM_REASONING_EFFORT: ${BANKING_LLM_REASONING_EFFORT:-}
+      BANKING_LLM_MAX_CONCURRENCY: ${BANKING_LLM_MAX_CONCURRENCY:-1}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      platform:
+        aliases: ["${COMPOSE_PROJECT_NAME}-advice"]
+
+  customer:
+    profiles: [tools]
+    image: ${ADVICE_IMAGE:?Use the packaged release.env}
+    entrypoint: [python, /app/run-customer.py]
+    command: [--help]
+    user: "${LOCAL_UID:?Run python3 init.py first}:${LOCAL_GID:?Run python3 init.py first}"
+    environment:
+      ASTRAFORM_API_BASE: http://dashboard:8084
+      BANKING_BACKEND_URL: http://${COMPOSE_PROJECT_NAME}-bank:8092
+      BANKING_SAMPLE_FILE: /scenario.json
+      BANKING_CUSTOMER_BINDING_KEY: banking
+      BANKING_PARTNER_TARGET_AGENT_KEY: banking-advice
+    volumes:
+      - type: bind
+        source: ./scenario.json
+        target: /scenario.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./runs
+        target: /runs
+        bind:
+          create_host_path: false
+    networks: [platform]
+
+networks:
+  bank:
+    internal: true
+  platform:
+    external: true
+    name: ${ASTRAFORM_NETWORK:?Run python3 init.py first}
+volumes:
+  bankData:

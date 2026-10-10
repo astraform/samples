@@ -1,0 +1,16 @@
+# Add to the partner bundle's Compose project. Use an image containing conversation.py.
+services:
+  refund-conversation:
+    image: ${REFUND_CONVERSATION_IMAGE:?Supply the reviewed refund conversation image reference}
+    environment:
+      REFUND_AGENT_URL: http://refund-conversation:8095
+      REFUND_AGENT_MODE: conversation-reference
+      REFUND_CONVERSATION_DB: /data/refund-conversations.sqlite3
+      REFUND_CONVERSATION_DELAY_MS: ${REFUND_CONVERSATION_DELAY_MS:-0}
+      REFUND_CONVERSATION_WRONG_DAY30: ${REFUND_CONVERSATION_WRONG_DAY30:-false}
+    volumes:
+      - refundConversationData:/data
+    restart: unless-stopped
+
+volumes:
+  refundConversationData:

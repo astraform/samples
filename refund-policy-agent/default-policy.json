@@ -1,0 +1,37 @@
+{
+  "policyVersion": "refund-policy-v1",
+  "maximumCalendarDays": 30,
+  "dateFormat": "YYYY-MM-DD",
+  "dayCalculation": "Subtract purchaseDate from requestDate as calendar dates. The purchase date is day 0. Day 30 is included; day 31 is outside the window. Dates in this scenario are valid and requestDate never precedes purchaseDate. Never use the runtime clock or today's date.",
+  "itemConditions": [
+    "unopened",
+    "opened"
+  ],
+  "missingData": "An absent or null purchaseDate, requestDate, or itemCondition is unknown. A known exclusion establishes ineligibility even when another field is unknown. Otherwise missing data requires needs_information.",
+  "rules": [
+    {
+      "priority": 1,
+      "when": "Both dates are known and requestDate is more than 30 calendar days after purchaseDate.",
+      "decision": "ineligible",
+      "reasonCode": "OUTSIDE_RETURN_WINDOW"
+    },
+    {
+      "priority": 2,
+      "when": "The first rule did not match and itemCondition is opened.",
+      "decision": "ineligible",
+      "reasonCode": "ITEM_OPENED"
+    },
+    {
+      "priority": 3,
+      "when": "Neither exclusion matched and any of purchaseDate, requestDate, or itemCondition is missing or null.",
+      "decision": "needs_information",
+      "reasonCode": "MISSING_REQUIRED_INFORMATION"
+    },
+    {
+      "priority": 4,
+      "when": "Both dates are known, the elapsed calendar days are between 0 and 30 inclusive, and itemCondition is unopened.",
+      "decision": "eligible",
+      "reasonCode": "WITHIN_WINDOW_UNOPENED"
+    }
+  ]
+}

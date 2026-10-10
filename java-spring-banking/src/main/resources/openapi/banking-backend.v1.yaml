@@ -1,0 +1,101 @@
+openapi: 3.1.0
+info:
+  title: Sample partner-owned banking backend
+  version: 1.0.0
+  description: |
+    Partner setup/read API on the private trusted network. Customers are assigned
+    the MCP get_customer_accounts tool, not these broad backend routes. Banking
+    records are populated before Astraform customer creation. Authentication is
+    deferred; network access and the trusted caller binding are required.
+paths:
+  /api/banking/v1/contexts/{contextRef}/customers/{subjectRef}:
+    parameters:
+      - $ref: '#/components/parameters/ContextRef'
+      - $ref: '#/components/parameters/SubjectRef'
+    put:
+      operationId: populateBankingCustomer
+      summary: Prepopulate one customer in the bank-owned database
+      description: Repeating identical data is safe. Different data for an existing customer or an account already owned by another customer returns 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/banking-customer-seed.v1.schema.json'
+      responses:
+        '200':
+          $ref: '#/components/responses/CustomerAccounts'
+        '400':
+          description: Invalid banking records or references
+        '409':
+          description: Customer or account already populated with different ownership/data
+  /api/banking/v1/contexts/{contextRef}/customers/{subjectRef}/accounts:
+    parameters:
+      - $ref: '#/components/parameters/ContextRef'
+      - $ref: '#/components/parameters/SubjectRef'
+    get:
+      operationId: readPartnerCustomerAccounts
+      summary: Partner-side read of one customer's persisted bank records
+      description: |
+        Returns all current accounts and, without statementPeriod, the latest 12 statements
+        in chronological order. Optional statementPeriod selects the closing month from
+        complete database history before the result bound is applied and is echoed in the
+        response. A requested month without an issued statement returns 200 with an empty
+        statements array; no other month is substituted and no future statement is generated.
+        More than 100 matching statements returns 422 rather than a partial month.
+        After native attachment all
+        three read guard fields are required and must match its owner, version and logical
+        time. Unowned prepopulated customers remain readable without a guard.
+      parameters:
+        - name: statementPeriod
+          in: query
+          required: false
+          description: Closing month of issued statements, YYYY-MM with year 0001 through 9999. Empty or malformed values are rejected.
+          schema:
+            type: string
+            pattern: '^(?!0000)[0-9]{4}-(0[1-9]|1[0-2])$'
+            minLength: 7
+            maxLength: 7
+        - name: contextId
+          in: query
+          schema: {type: string, minLength: 1, maxLength: 256}
+        - name: resourceVersion
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 9007199254740991}
+        - name: logicalTimeEpochMs
+          in: query
+          schema: {type: integer, minimum: 0, maximum: 253402300799998}
+      responses:
+        '200':
+          $ref: '#/components/responses/CustomerAccounts'
+        '400':
+          description: Invalid reference, incomplete read guard or malformed statementPeriod
+        '404':
+          description: No populated customer in this context
+        '409':
+          description: Read guard does not match authoritative native owner, bank version or logical time
+        '422':
+          description: More than 100 statements match the requested closing month; no partial response is returned
+components:
+  parameters:
+    ContextRef:
+      name: contextRef
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$'
+    SubjectRef:
+      name: subjectRef
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$'
+  responses:
+    CustomerAccounts:
+      description: Current customer account view from the bank database
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/banking-customer-accounts.v1.schema.json'

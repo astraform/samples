@@ -1,0 +1,26 @@
+{
+  "logicalTimeEpochMs": 1769904000000,
+  "accounts": [
+    {
+      "accountId": "customer-b-credit",
+      "name": "Everyday credit",
+      "productCode": "CC001",
+      "balance": "-1200",
+      "currency": "AUD",
+      "limit": "4500",
+      "currentMinPayment": "48"
+    }
+  ],
+  "statements": [
+    {
+      "billId": "customer-b-credit-2026-01",
+      "accountId": "customer-b-credit",
+      "closingAmount": "-1200",
+      "minimumAmountDue": "48",
+      "currency": "AUD",
+      "statementStartDate": "2026-01-01",
+      "statementEndDate": "2026-01-31",
+      "dueDate": "2026-02-14"
+    }
+  ]
+}

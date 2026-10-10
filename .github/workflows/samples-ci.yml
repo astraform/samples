@@ -1,0 +1,560 @@
+name: Astraform Samples CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish_images:
+        description: "Publish sample images to GHCR"
+        required: false
+        type: boolean
+        default: false
+      publish_java_image:
+        description: "Publish java-spring-banking on manual publish"
+        required: false
+        type: boolean
+        default: false
+      publish_marketing_image:
+        description: "Publish marketing-ops-remote on manual publish"
+        required: false
+        type: boolean
+        default: false
+      publish_creative_agency_image:
+        description: "Publish marketing-ops-creative-agency on manual publish"
+        required: false
+        type: boolean
+        default: false
+      publish_python_image:
+        description: "Publish banking-starter-bank on manual publish"
+        required: false
+        type: boolean
+        default: false
+      publish_banking_advice_image:
+        description: "Publish banking-starter-advice on manual publish"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: astraform-sample-images-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  java:
+    name: Java Spring Banking
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Test
+        working-directory: java-spring-banking
+        run: mvn -B -ntp -Dmaven.repo.local="${RUNNER_TEMP}/m2-java-banking" test
+
+  marketing:
+    name: Java Spring Marketing Ops
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Test
+        working-directory: marketing-ops-remote
+        run: mvn -B -ntp test
+      - name: Test Marketing Ops creative agency
+        working-directory: marketing-ops-creative-agency
+        run: mvn -B -ntp test
+
+  python:
+    name: Python FastAPI Banking
+    runs-on: ubuntu-24.04
+    services:
+      python-banking-db:
+        image: postgres:16
+        env:
+          POSTGRES_DB: banking_python
+          POSTGRES_USER: banking
+          POSTGRES_PASSWORD: banking
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U banking -d banking_python"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      BANKING_TEST_DATABASE_URL: postgresql://banking:banking@127.0.0.1:5432/banking_python
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install 'uv==0.11.28'
+          uv sync --locked --extra test --directory python-fastapi-banking
+      - name: Test
+        working-directory: python-fastapi-banking
+        run: uv run --locked --extra test pytest
+      - name: Install profile-capable conformance SDK
+        run: uv pip install --python python-fastapi-banking/.venv/bin/python 'astraform-remote-domain-conformance==0.3.1'
+      - name: Policy Wind Tunnel conformance
+        run: |
+          PYTHONPATH="python-fastapi-banking/conformance${PYTHONPATH:+:${PYTHONPATH}}" \
+            python-fastapi-banking/.venv/bin/remote-domain-conformance \
+            --app policy_wind_tunnel_app:app \
+            --wind-tunnel \
+            --pack-id banking-python-policy-pack \
+            --preset-id hardship-python-smoke
+
+  docker:
+    name: Docker Images
+    runs-on: ubuntu-24.04
+    needs:
+      - java
+      - marketing
+      - python
+      - release-preflight
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - name: Build Java sample image
+        run: docker build -f java-spring-banking/Dockerfile -t astraform/java-spring-banking:ci .
+      - name: Build Marketing Ops sample image
+        run: docker build -f marketing-ops-remote/Dockerfile -t astraform/marketing-ops-remote:ci .
+      - name: Build Marketing Ops creative-agency image
+        run: docker build -f marketing-ops-creative-agency/Dockerfile -t astraform/marketing-ops-creative-agency:ci .
+      - name: Smoke Marketing Ops creative-agency image
+        run: |
+          container="creative-agency-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            docker rm -f "${container}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run -d --name "${container}" \
+            -e CREATIVE_AGENCY_GENERATION_MODE=deterministic \
+            -p 127.0.0.1:8091:8091 \
+            astraform/marketing-ops-creative-agency:ci >/dev/null
+          deadline=$((SECONDS + 120))
+          until curl -fsS --connect-timeout 2 --max-time 5 \
+              http://127.0.0.1:8091/actuator/health/readiness >/dev/null; do
+            if (( SECONDS >= deadline )); then
+              docker logs "${container}" >&2 || true
+              exit 1
+            fi
+            sleep 2
+          done
+          CREATIVE_AGENCY_A2A_URL=http://127.0.0.1:8091 \
+            ./integration/marketing-ops-a2a/check-creative-agency-a2a-v1-live.sh
+      - name: Build Python sample image
+        run: docker build -f python-fastapi-banking/Dockerfile -t astraform/python-fastapi-banking:ci .
+      - name: Build Banking Advice agent image
+        run: docker build -f banking-advice-agent/Dockerfile -t astraform/banking-advice-agent:ci .
+      - name: Smoke Banking Advice agent startup without model calls
+        run: |
+          container="banking-advice-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            docker rm -f "${container}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run -d --name "${container}" --network none \
+            -e BANKING_BACKEND_URL=http://127.0.0.1:1 \
+            -e BANKING_LLM_BASE_URL=http://127.0.0.1:1/v1 \
+            -e BANKING_LLM_AUTH_TYPE=none \
+            -e BANKING_LLM_MODEL=ci-startup-only \
+            -e BANKING_LLM_BINDING_REVISION=ci-startup-only \
+            astraform/banking-advice-agent:ci >/dev/null
+          deadline=$((SECONDS + 60))
+          until docker exec "${container}" python -c \
+              "import urllib.request; from astraform_platform_client import ApiClient; urllib.request.urlopen('http://127.0.0.1:8099/health', timeout=3).read()"; do
+            if (( SECONDS >= deadline )); then
+              docker logs "${container}" >&2 || true
+              exit 1
+            fi
+            sleep 2
+          done
+
+  publish-images:
+    name: Publish Sample Images
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch'
+        && github.ref_type == 'tag'
+        && (inputs.publish_images == true || inputs.publish_images == 'true')
+      }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    needs:
+      - java
+      - marketing
+      - python
+      - release-preflight
+      - docker
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+
+      - name: Resolve image tag
+        id: image-tag
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            if [[ "${GITHUB_REF}" != "refs/tags/${tag}" ]]; then
+              echo "Manual image publication must run from the exact existing tag ref." >&2
+              exit 1
+            fi
+          fi
+          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "image_tag must be an immutable vMAJOR.MINOR.PATCH release tag" >&2
+            exit 1
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve image selection
+        id: image-selection
+        env:
+          INPUT_PUBLISH_JAVA_IMAGE: ${{ inputs.publish_java_image }}
+          INPUT_PUBLISH_MARKETING_IMAGE: ${{ inputs.publish_marketing_image }}
+          INPUT_PUBLISH_CREATIVE_AGENCY_IMAGE: ${{ inputs.publish_creative_agency_image }}
+          INPUT_PUBLISH_PYTHON_IMAGE: ${{ inputs.publish_python_image }}
+          INPUT_PUBLISH_BANKING_ADVICE_IMAGE: ${{ inputs.publish_banking_advice_image }}
+        run: |
+          java="${INPUT_PUBLISH_JAVA_IMAGE:-false}"
+          marketing="${INPUT_PUBLISH_MARKETING_IMAGE:-false}"
+          creative_agency="${INPUT_PUBLISH_CREATIVE_AGENCY_IMAGE:-false}"
+          python="${INPUT_PUBLISH_PYTHON_IMAGE:-false}"
+          banking_advice="${INPUT_PUBLISH_BANKING_ADVICE_IMAGE:-false}"
+          if [[ "${java}" != "true" && "${marketing}" != "true" \
+                && "${creative_agency}" != "true" && "${python}" != "true" \
+                && "${banking_advice}" != "true" ]]; then
+            echo "At least one image selection input must be true." >&2
+            exit 1
+          fi
+
+          echo "java=${java}" >> "$GITHUB_OUTPUT"
+          echo "marketing=${marketing}" >> "$GITHUB_OUTPUT"
+          echo "creative_agency=${creative_agency}" >> "$GITHUB_OUTPUT"
+          echo "python=${python}" >> "$GITHUB_OUTPUT"
+          echo "banking_advice=${banking_advice}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          image: tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          version: v0.35.0
+          driver-opts: image=moby/buildkit@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve Java candidate coordinates
+        if: ${{ steps.image-selection.outputs.java == 'true' }}
+        id: java-candidate
+        run: |
+          repository="ghcr.io/astraform/java-spring-banking"
+          tag="candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "repository=${repository}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${repository}:${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build immutable Java candidate
+        if: ${{ steps.image-selection.outputs.java == 'true' }}
+        id: java-build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: java-spring-banking/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ${{ steps.java-candidate.outputs.tag }}
+
+      - name: Promote immutable Java manifest
+        if: ${{ steps.image-selection.outputs.java == 'true' }}
+        env:
+          DIGEST: ${{ steps.java-build.outputs.digest }}
+          REPOSITORY: ${{ steps.java-candidate.outputs.repository }}
+          TAG: ${{ steps.image-tag.outputs.tag }}
+        run: |
+          if [[ ! "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Java build did not return an immutable digest" >&2
+            exit 1
+          fi
+          bash scripts/promote-immutable-image.sh \
+            java-spring-banking \
+            "${TAG}" \
+            "${REPOSITORY}@${DIGEST}"
+          printf 'Java image: `%s@%s`\n' "${REPOSITORY}" "${DIGEST}" \
+            >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Resolve Marketing Ops candidate coordinates
+        if: ${{ steps.image-selection.outputs.marketing == 'true' }}
+        id: marketing-candidate
+        run: |
+          repository="ghcr.io/astraform/marketing-ops-remote"
+          tag="candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "repository=${repository}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${repository}:${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build immutable Marketing Ops candidate
+        if: ${{ steps.image-selection.outputs.marketing == 'true' }}
+        id: marketing-build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: marketing-ops-remote/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ${{ steps.marketing-candidate.outputs.tag }}
+
+      - name: Promote immutable Marketing Ops manifest
+        if: ${{ steps.image-selection.outputs.marketing == 'true' }}
+        env:
+          DIGEST: ${{ steps.marketing-build.outputs.digest }}
+          REPOSITORY: ${{ steps.marketing-candidate.outputs.repository }}
+          TAG: ${{ steps.image-tag.outputs.tag }}
+        run: |
+          if [[ ! "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Marketing Ops build did not return an immutable digest" >&2
+            exit 1
+          fi
+          bash scripts/promote-immutable-image.sh \
+            marketing-ops-remote \
+            "${TAG}" \
+            "${REPOSITORY}@${DIGEST}"
+          printf 'Marketing Ops image: `%s@%s`\n' "${REPOSITORY}" "${DIGEST}" \
+            >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Resolve Creative Agency candidate coordinates
+        if: ${{ steps.image-selection.outputs.creative_agency == 'true' }}
+        id: creative-agency-candidate
+        run: |
+          repository="ghcr.io/astraform/marketing-ops-creative-agency"
+          tag="candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "repository=${repository}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${repository}:${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build immutable Creative Agency candidate
+        if: ${{ steps.image-selection.outputs.creative_agency == 'true' }}
+        id: creative-agency-build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: marketing-ops-creative-agency/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ${{ steps.creative-agency-candidate.outputs.tag }}
+
+      - name: Smoke immutable Creative Agency candidate
+        if: ${{ steps.image-selection.outputs.creative_agency == 'true' }}
+        env:
+          DIGEST: ${{ steps.creative-agency-build.outputs.digest }}
+          REPOSITORY: ${{ steps.creative-agency-candidate.outputs.repository }}
+        run: |
+          if [[ ! "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Creative Agency build did not return an immutable digest" >&2
+            exit 1
+          fi
+          container="creative-agency-publish-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            docker rm -f "${container}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run -d --name "${container}" \
+            -e CREATIVE_AGENCY_GENERATION_MODE=deterministic \
+            -p 127.0.0.1:8091:8091 \
+            "${REPOSITORY}@${DIGEST}" >/dev/null
+          deadline=$((SECONDS + 120))
+          until curl -fsS --connect-timeout 2 --max-time 5 \
+              http://127.0.0.1:8091/actuator/health/readiness >/dev/null; do
+            if (( SECONDS >= deadline )); then
+              docker logs "${container}" >&2 || true
+              exit 1
+            fi
+            sleep 2
+          done
+          CREATIVE_AGENCY_A2A_URL=http://127.0.0.1:8091 \
+            ./integration/marketing-ops-a2a/check-creative-agency-a2a-v1-live.sh
+
+      - name: Promote immutable Creative Agency manifest
+        if: ${{ steps.image-selection.outputs.creative_agency == 'true' }}
+        env:
+          DIGEST: ${{ steps.creative-agency-build.outputs.digest }}
+          REPOSITORY: ${{ steps.creative-agency-candidate.outputs.repository }}
+          TAG: ${{ steps.image-tag.outputs.tag }}
+        run: |
+          if [[ ! "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Creative Agency build did not return an immutable digest" >&2
+            exit 1
+          fi
+          bash scripts/promote-immutable-image.sh \
+            marketing-ops-creative-agency \
+            "${TAG}" \
+            "${REPOSITORY}@${DIGEST}"
+          printf 'Creative Agency image: `%s@%s`\n' "${REPOSITORY}" "${DIGEST}" \
+            >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Resolve Python candidate coordinates
+        if: ${{ steps.image-selection.outputs.python == 'true' }}
+        id: python-candidate
+        run: |
+          repository="ghcr.io/astraform/banking-starter-bank"
+          tag="candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "repository=${repository}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${repository}:${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build immutable Python candidate
+        if: ${{ steps.image-selection.outputs.python == 'true' }}
+        id: python-build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: python-fastapi-banking/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ${{ steps.python-candidate.outputs.tag }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Promote immutable Python manifest
+        if: ${{ steps.image-selection.outputs.python == 'true' }}
+        env:
+          DIGEST: ${{ steps.python-build.outputs.digest }}
+          REPOSITORY: ${{ steps.python-candidate.outputs.repository }}
+          TAG: ${{ steps.image-tag.outputs.tag }}
+        run: |
+          if [[ ! "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Python build did not return an immutable digest" >&2
+            exit 1
+          fi
+          bash scripts/promote-immutable-image.sh \
+            banking-starter-bank \
+            "${TAG}" \
+            "${REPOSITORY}@${DIGEST}"
+          printf 'Python image: `%s@%s`\n' "${REPOSITORY}" "${DIGEST}" \
+            >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Resolve Banking Advice candidate coordinates
+        if: ${{ steps.image-selection.outputs.banking_advice == 'true' }}
+        id: banking-advice-candidate
+        run: |
+          repository="ghcr.io/astraform/banking-starter-advice"
+          tag="candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "repository=${repository}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${repository}:${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build immutable Banking Advice candidate
+        if: ${{ steps.image-selection.outputs.banking_advice == 'true' }}
+        id: banking-advice-build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: banking-advice-agent/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ${{ steps.banking-advice-candidate.outputs.tag }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Smoke immutable Banking Advice candidate without model calls
+        if: ${{ steps.image-selection.outputs.banking_advice == 'true' }}
+        env:
+          DIGEST: ${{ steps.banking-advice-build.outputs.digest }}
+          REPOSITORY: ${{ steps.banking-advice-candidate.outputs.repository }}
+        run: |
+          if [[ ! "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Banking Advice build did not return an immutable digest" >&2
+            exit 1
+          fi
+          container="banking-advice-publish-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            docker rm -f "${container}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run -d --name "${container}" --network none \
+            -e BANKING_BACKEND_URL=http://127.0.0.1:1 \
+            -e BANKING_LLM_BASE_URL=http://127.0.0.1:1/v1 \
+            -e BANKING_LLM_AUTH_TYPE=none \
+            -e BANKING_LLM_MODEL=ci-startup-only \
+            -e BANKING_LLM_BINDING_REVISION=ci-startup-only \
+            "${REPOSITORY}@${DIGEST}" >/dev/null
+          deadline=$((SECONDS + 60))
+          until docker exec "${container}" python -c \
+              "import urllib.request; from astraform_platform_client import ApiClient; urllib.request.urlopen('http://127.0.0.1:8099/health', timeout=3).read()"; do
+            if (( SECONDS >= deadline )); then
+              docker logs "${container}" >&2 || true
+              exit 1
+            fi
+            sleep 2
+          done
+
+      - name: Promote immutable Banking Advice manifest
+        if: ${{ steps.image-selection.outputs.banking_advice == 'true' }}
+        env:
+          DIGEST: ${{ steps.banking-advice-build.outputs.digest }}
+          REPOSITORY: ${{ steps.banking-advice-candidate.outputs.repository }}
+          TAG: ${{ steps.image-tag.outputs.tag }}
+        run: |
+          if [[ ! "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Banking Advice build did not return an immutable digest" >&2
+            exit 1
+          fi
+          bash scripts/promote-immutable-image.sh \
+            banking-starter-advice \
+            "${TAG}" \
+            "${REPOSITORY}@${DIGEST}"
+          printf 'Banking Advice image: `%s@%s`\n' "${REPOSITORY}" "${DIGEST}" \
+            >> "${GITHUB_STEP_SUMMARY}"
+
+  release-preflight:
+    name: Release Preflight
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+      - name: Verify and install committed release tooling
+        run: |
+          uv lock --check --directory python-fastapi-banking
+          uv sync --locked --no-dev --no-editable --group release --directory python-fastapi-banking
+      - name: Compile canonical parity gate
+        run: uv run --locked --no-dev --no-editable --group release --project python-fastapi-banking python -m py_compile scripts/check_banking_remote_provider_parity.py
+      - name: Test release gate regressions
+        run: >-
+          uv run --locked --no-dev --no-editable --group release
+          --project python-fastapi-banking python -m unittest
+          scripts.tests.test_banking_remote_provider_parity
+          scripts.tests.test_samples_ci_workflow
+          scripts.tests.test_banking_starter_package

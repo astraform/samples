@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Banking statement advice request v1",
+  "description": "Read-only statement advice. In bank-backend mode Astraform supplies trusted customer references after the model decision; the partner retrieves its own bank records. The customer writes only its question. Legacy supplied-statement mode is retained for older examples.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "customerMessage"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "banking.statement-advice.request.v1"
+    },
+    "customerMessage": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384,
+      "pattern": "\\S"
+    },
+    "statement": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Legacy supplied-statement input only. In bank-backend mode these fields are ignored and statements are fetched from the bank.",
+      "properties": {
+        "billId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "\\S"
+        },
+        "accountId": {
+          "type": [
+            "string",
+            "integer"
+          ],
+          "description": "Numeric IDs must fit I-JSON's exact integer range; larger identifiers must be supplied as strings.",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "\\S",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "closingAmount": {
+          "type": [
+            "string",
+            "number"
+          ],
+          "maxLength": 40,
+          "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "minimumAmountDue": {
+          "type": [
+            "string",
+            "number"
+          ],
+          "maxLength": 40,
+          "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$"
+        },
+        "statementEndDate": {
+          "type": "string",
+          "format": "date",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "dueDate": {
+          "type": "string",
+          "format": "date",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        }
+      }
+    },
+    "astraformCustomerContexts": {
+      "type": "array",
+      "maxItems": 8,
+      "description": "Reserved host-supplied references from the accepted launch. The model must not choose identities or read guards; Astraform overwrites this field before dispatch. Reference-state simulations include the accepted bank context, version and logical time in readContext. Backend mode requires a reference for its configured binding.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bindingKey",
+          "contextRef",
+          "subjectRef"
+        ],
+        "properties": {
+          "bindingKey": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+          },
+          "contextRef": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+          },
+          "subjectRef": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+          },
+          "readContext": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Trusted simulation read guard, supplied by Astraform after accepting the domain checkpoint; never model-authored.",
+            "required": [
+              "contextId",
+              "resourceVersion",
+              "logicalTimeEpochMs"
+            ],
+            "properties": {
+              "contextId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "resourceVersion": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "logicalTimeEpochMs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 253402300799998
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

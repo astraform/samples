@@ -1,0 +1,32 @@
+# Build outputs
+target/
+build/
+dist/
+*.egg-info/
+
+# Python
+.venv/
+.pytest_cache/
+__pycache__/
+*.pyc
+
+# Java / Maven
+.mvn/timing.properties
+dependency-reduced-pom.xml
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+release.properties
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+
+# OS / local
+.DS_Store
+*.log
+.env
+*.env.local
+output/
+tmp/

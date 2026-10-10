@@ -1,0 +1,278 @@
+{
+  "schemaVersion": "banking.customer-decision-trigger-policy-fixture.v1",
+  "scheduledForEpochMs": 1777000000000,
+  "events": [
+    {
+      "eventType": "remote_domain_credit_card_statement_closed",
+      "occurrenceKey": "statement-1",
+      "accountId": "acct-1",
+      "minimumAmountDue": 45
+    },
+    {
+      "eventType": "remote_domain_payment_due",
+      "occurrenceKey": "payment-due-1",
+      "accountId": "acct-1",
+      "outstandingAmount": 45
+    },
+    {
+      "eventType": "remote_domain_payment_missed",
+      "occurrenceKey": "payment-missed-1",
+      "accountId": "acct-1",
+      "outstandingAmount": 45
+    },
+    {
+      "eventType": "remote_domain_credit_card_interest_charged",
+      "occurrenceKey": "interest-1",
+      "accountId": "acct-1",
+      "interestAmount": 30
+    },
+    {
+      "eventType": "remote_domain_fee_charged",
+      "occurrenceKey": "fee-1",
+      "accountId": "acct-1",
+      "feeAmount": 15
+    },
+    {
+      "eventType": "remote_domain_credit_limit_changed",
+      "occurrenceKey": "limit-1",
+      "accountId": "acct-1",
+      "newCreditLimit": 3500
+    },
+    {
+      "eventType": "remote_domain_policy_changed",
+      "occurrenceKey": "policy-1",
+      "accountId": "acct-1",
+      "policyId": "policy-v2"
+    },
+    {
+      "eventType": "remote_domain_hardship_threshold_crossed",
+      "occurrenceKey": "hardship-1",
+      "accountId": "acct-1",
+      "threshold": 500
+    },
+    {
+      "eventType": "remote_domain_liquidity_threshold_crossed",
+      "occurrenceKey": "liquidity-1",
+      "accountId": "acct-1",
+      "currentBalance": 100
+    },
+    {
+      "eventType": "remote_domain_credit_card_statement_closed",
+      "occurrenceKey": "statement-precise-decimal",
+      "accountId": "acct-1",
+      "minimumAmountDue": "0.12345678901234567890123456789012345678"
+    },
+    {
+      "eventType": "remote_domain_credit_limit_changed",
+      "occurrenceKey": "limit-unsafe-ijson-integer",
+      "accountId": "acct-1",
+      "newCreditLimit": 9007199254740993
+    }
+  ],
+  "expected": [
+    {
+      "triggerType": "statement_close",
+      "priority": "NORMAL",
+      "reason": "Credit card statement closed",
+      "payload": {
+        "policyVersion": "banking.customer-decision-trigger-policy.v1",
+        "numericEncoding": "canonical_decimal_string.v1",
+        "normalizedEventType": "statement_close",
+        "sourceEventType": "remote_domain_credit_card_statement_closed",
+        "eventType": "remote_domain_credit_card_statement_closed",
+        "occurrenceKey": "statement-1",
+        "accountId": "acct-1",
+        "minimumAmountDue": "45"
+      }
+    },
+    {
+      "triggerType": "payment_due",
+      "priority": "NORMAL",
+      "reason": "Payment is due",
+      "payload": {
+        "policyVersion": "banking.customer-decision-trigger-policy.v1",
+        "numericEncoding": "canonical_decimal_string.v1",
+        "normalizedEventType": "payment_due",
+        "sourceEventType": "remote_domain_payment_due",
+        "eventType": "remote_domain_payment_due",
+        "occurrenceKey": "payment-due-1",
+        "accountId": "acct-1",
+        "outstandingAmount": "45"
+      }
+    },
+    {
+      "triggerType": "payment_missed",
+      "priority": "HIGH",
+      "reason": "Payment was missed",
+      "payload": {
+        "policyVersion": "banking.customer-decision-trigger-policy.v1",
+        "numericEncoding": "canonical_decimal_string.v1",
+        "normalizedEventType": "payment_missed",
+        "sourceEventType": "remote_domain_payment_missed",
+        "eventType": "remote_domain_payment_missed",
+        "occurrenceKey": "payment-missed-1",
+        "accountId": "acct-1",
+        "outstandingAmount": "45"
+      }
+    },
+    {
+      "triggerType": "interest_charged",
+      "priority": "NORMAL",
+      "reason": "Material interest was charged",
+      "payload": {
+        "policyVersion": "banking.customer-decision-trigger-policy.v1",
+        "numericEncoding": "canonical_decimal_string.v1",
+        "normalizedEventType": "interest_charged",
+        "sourceEventType": "remote_domain_credit_card_interest_charged",
+        "eventType": "remote_domain_credit_card_interest_charged",
+        "occurrenceKey": "interest-1",
+        "accountId": "acct-1",
+        "interestAmount": "30"
+      }
+    },
+    {
+      "triggerType": "fee_charged",
+      "priority": "NORMAL",
+      "reason": "Material fee was charged",
+      "payload": {
+        "policyVersion": "banking.customer-decision-trigger-policy.v1",
+        "numericEncoding": "canonical_decimal_string.v1",
+        "normalizedEventType": "fee_charged",
+        "sourceEventType": "remote_domain_fee_charged",
+        "eventType": "remote_domain_fee_charged",
+        "occurrenceKey": "fee-1",
+        "accountId": "acct-1",
+        "feeAmount": "15"
+      }
+    },
+    {
+      "triggerType": "credit_limit_change",
+      "priority": "NORMAL",
+      "reason": "Credit limit changed",
+      "payload": {
+        "policyVersion": "banking.customer-decision-trigger-policy.v1",
+        "numericEncoding": "canonical_decimal_string.v1",
+        "normalizedEventType": "credit_limit_change",
+        "sourceEventType": "remote_domain_credit_limit_changed",
+        "eventType": "remote_domain_credit_limit_changed",
+        "occurrenceKey": "limit-1",
+        "accountId": "acct-1",
+        "newCreditLimit": "3500"
+      }
+    },
+    {
+      "triggerType": "rate_or_policy_change",
+      "priority": "NORMAL",
+      "reason": "Rate or policy changed",
+      "payload": {
+        "policyVersion": "banking.customer-decision-trigger-policy.v1",
+        "numericEncoding": "canonical_decimal_string.v1",
+        "normalizedEventType": "rate_or_policy_change",
+        "sourceEventType": "remote_domain_policy_changed",
+        "eventType": "remote_domain_policy_changed",
+        "occurrenceKey": "policy-1",
+        "accountId": "acct-1",
+        "policyId": "policy-v2"
+      }
+    },
+    {
+      "triggerType": "hardship_threshold_crossed",
+      "priority": "HIGH",
+      "reason": "Hardship threshold crossed",
+      "payload": {
+        "policyVersion": "banking.customer-decision-trigger-policy.v1",
+        "numericEncoding": "canonical_decimal_string.v1",
+        "normalizedEventType": "hardship_threshold_crossed",
+        "sourceEventType": "remote_domain_hardship_threshold_crossed",
+        "eventType": "remote_domain_hardship_threshold_crossed",
+        "occurrenceKey": "hardship-1",
+        "accountId": "acct-1",
+        "threshold": "500"
+      }
+    },
+    {
+      "triggerType": "liquidity_signal",
+      "priority": "HIGH",
+      "reason": "Liquidity threshold crossed",
+      "payload": {
+        "policyVersion": "banking.customer-decision-trigger-policy.v1",
+        "numericEncoding": "canonical_decimal_string.v1",
+        "normalizedEventType": "liquidity_signal",
+        "sourceEventType": "remote_domain_liquidity_threshold_crossed",
+        "eventType": "remote_domain_liquidity_threshold_crossed",
+        "occurrenceKey": "liquidity-1",
+        "accountId": "acct-1",
+        "currentBalance": "100"
+      }
+    },
+    {
+      "triggerType": "statement_close",
+      "priority": "NORMAL",
+      "reason": "Credit card statement closed",
+      "payload": {
+        "policyVersion": "banking.customer-decision-trigger-policy.v1",
+        "numericEncoding": "canonical_decimal_string.v1",
+        "normalizedEventType": "statement_close",
+        "sourceEventType": "remote_domain_credit_card_statement_closed",
+        "eventType": "remote_domain_credit_card_statement_closed",
+        "occurrenceKey": "statement-precise-decimal",
+        "accountId": "acct-1",
+        "minimumAmountDue": "0.12345678901234567890123456789012345678"
+      }
+    },
+    {
+      "triggerType": "credit_limit_change",
+      "priority": "NORMAL",
+      "reason": "Credit limit changed",
+      "payload": {
+        "policyVersion": "banking.customer-decision-trigger-policy.v1",
+        "numericEncoding": "canonical_decimal_string.v1",
+        "normalizedEventType": "credit_limit_change",
+        "sourceEventType": "remote_domain_credit_limit_changed",
+        "eventType": "remote_domain_credit_limit_changed",
+        "occurrenceKey": "limit-unsafe-ijson-integer",
+        "accountId": "acct-1",
+        "newCreditLimit": "9007199254740993"
+      }
+    }
+  ],
+  "invalidEvents": [
+    {
+      "expectedMessage": "forbidden field 'chainOfThought'",
+      "event": {
+        "eventType": "remote_domain_credit_card_statement_closed",
+        "occurrenceKey": "statement-invalid-prompt",
+        "accountId": "acct-1",
+        "minimumAmountDue": 45,
+        "metadata": {"chainOfThought": "must not escape"}
+      }
+    },
+    {
+      "expectedMessage": "accountId",
+      "event": {
+        "eventType": "remote_domain_credit_card_statement_closed",
+        "occurrenceKey": "statement-invalid-account",
+        "accountId": {"metadata": "acct-1"},
+        "minimumAmountDue": 45
+      }
+    },
+    {
+      "expectedMessage": "minimumAmountDue",
+      "event": {
+        "eventType": "remote_domain_credit_card_statement_closed",
+        "occurrenceKey": "statement-invalid-amount",
+        "accountId": "acct-1",
+        "minimumAmountDue": {"value": 45}
+      }
+    },
+    {
+      "expectedMessage": "supported numeric bounds",
+      "event": {
+        "eventType": "remote_domain_credit_card_statement_closed",
+        "occurrenceKey": "statement-underflow",
+        "accountId": "acct-1",
+        "minimumAmountDue": "1e-1000"
+      }
+    }
+  ]
+}

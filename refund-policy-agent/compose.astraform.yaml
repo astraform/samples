@@ -1,0 +1,8 @@
+# Add this file to a partner-evaluation bundle's Compose project after building
+# the sample image. It shares the runtime network and publishes no host port.
+services:
+  refund-agent:
+    image: astraform/refund-policy-agent:local
+    environment:
+      REFUND_AGENT_URL: http://refund-agent:8095
+    restart: unless-stopped

@@ -1,0 +1,17 @@
+.git
+.github
+**/target/
+**/build/
+**/dist/
+**/.venv/
+**/.pytest_cache/
+**/__pycache__/
+*.pyc
+*.log
+.env
+.env.*
+**/.env
+**/.env.*
+.DS_Store
+output/
+tmp/

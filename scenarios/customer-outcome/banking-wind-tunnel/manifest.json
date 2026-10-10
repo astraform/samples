@@ -1,0 +1,367 @@
+{
+  "schemaVersion": "customer_outcome_banking_wind_tunnel.v1",
+  "domainId": "banking",
+  "packId": "banking-policy-pack",
+  "reportSchemaVersion": "customer_outcome_report.v1",
+  "title": "Banking Customer Outcome Wind Tunnel",
+  "summary": "First E21 banking wedge: run synthetic banking customer cohorts through baseline and proposed policy or AI-workflow decisions, then produce a replay-linked outcome report.",
+  "sourceArtifacts": {
+    "seededPersonaCatalog": "scenarios/demo/seeded-cohorts/banking-demo-agents.json",
+    "policyPresetCatalog": "java-spring-banking/src/main/resources/banking-scenario-lab/preset-catalog.json",
+    "operatorRunbook": "scenarios/demo/banking-scenario-lab/RUNBOOK.md",
+    "reportModel": "docs/architecture/customer-outcome-report-v1.md"
+  },
+  "simulationDefaults": {
+    "simulationHorizonDays": 30,
+    "prePolicyDays": 10,
+    "postPolicyDays": 20,
+    "compareMode": "SEEDED_DETERMINISTIC",
+    "runMode": "DEMO_FAST",
+    "cadenceProfile": "DEMO_FAST_FORK_FOCUSED"
+  },
+  "cohorts": [
+    {
+      "cohortId": "everyday-banking-customers",
+      "label": "Everyday Banking Customers",
+      "roleInDemo": "Control and baseline retail customers whose normal goals should not be harmed by the candidate decision.",
+      "riskProfile": "Stable or budget-conscious customers with normal deposits, bills, savings, and product-comparison needs.",
+      "traitSelectors": [
+        "segment:students",
+        "segment:emerging-builders",
+        "segment:family-households",
+        "budget-conscious",
+        "disciplined",
+        "saver"
+      ],
+      "sourcePersonaNames": [
+        "Frugal Student",
+        "First-Time Homebuyer",
+        "Young Family with Kids",
+        "Graduate Starting Career",
+        "International Student",
+        "First-Time Homebuyer with Repair Bill"
+      ],
+      "goals": [
+        "Keep recurring bills and transfers healthy.",
+        "Receive correct product or policy guidance.",
+        "Preserve savings buffer when candidate policy changes rates or fees."
+      ],
+      "successCriteria": [
+        "No unnecessary escalation.",
+        "No incorrect recommendation caused by the candidate decision.",
+        "No measurable deterioration in customer-goal completion versus baseline."
+      ],
+      "priorityMetrics": [
+        "customerGoalCompletionRate",
+        "incorrectRecommendationCount",
+        "averageSimulatedTimeToResolution",
+        "baselineVersusProposedDelta"
+      ]
+    },
+    {
+      "cohortId": "vulnerable-hardship-customers",
+      "label": "Vulnerable Hardship Customers",
+      "roleInDemo": "Primary harm-detection cohort for hardship, low-buffer, income-shock, and vulnerability outcomes.",
+      "riskProfile": "Low liquidity, income shock, medical shock, redundancy, mortgage pressure, or vulnerability signals.",
+      "traitSelectors": [
+        "hardship-prone",
+        "low-buffer",
+        "income-shock",
+        "mortgage-stretched",
+        "credit-fragile",
+        "fraud-friction-sensitive"
+      ],
+      "sourcePersonaNames": [
+        "Mortgage-Stretched Suburban Family",
+        "Single Parent on Tight Budget",
+        "Low-Buffer Pensioner",
+        "Recently Redundant Household",
+        "Medical-Shock Hardship Applicant",
+        "Single Parent Facing Subsidy Gap",
+        "Medical-Shock Household after Follow-Up Bill"
+      ],
+      "goals": [
+        "Reach hardship support before fee, arrears, or complaint risk compounds.",
+        "Avoid punitive automation against low-buffer customers.",
+        "Receive a human escalation path when rules or tools are insufficient."
+      ],
+      "successCriteria": [
+        "Hardship indicators are detected and explained.",
+        "Relief or escalation is offered when eligibility rules are met.",
+        "Candidate policy does not increase vulnerable-customer risk events without an explicit decision tradeoff."
+      ],
+      "priorityMetrics": [
+        "vulnerableCustomerRiskEvents",
+        "policyViolationCount",
+        "unresolvedCustomerRate",
+        "complaintOrEscalationProxy",
+        "baselineVersusProposedDelta"
+      ]
+    },
+    {
+      "cohortId": "dispute-fraud-risk-customers",
+      "label": "Dispute And Fraud-Risk Customers",
+      "roleInDemo": "Primary cohort for suspicious-transaction, dispute, account-friction, and unsafe tool-use evidence.",
+      "riskProfile": "Fraud anxiety, remittance patterns, travel, digital caution, false-positive recovery, or transaction-dispute exposure.",
+      "traitSelectors": [
+        "fraud-friction-sensitive",
+        "digital-caution",
+        "remittance-heavy",
+        "traveler",
+        "rate-sensitive"
+      ],
+      "sourcePersonaNames": [
+        "Fraud-Anxious Older Customer",
+        "Multigenerational Remittance Household",
+        "Digital Nomad Freelancer",
+        "High-Income Professional",
+        "Fraud-Anxious Older Customer after False Alarm",
+        "Remittance Household with Emergency Send"
+      ],
+      "goals": [
+        "Report or resolve suspicious transactions safely.",
+        "Avoid unnecessary account-lock or card-friction dead ends.",
+        "Get clear escalation when dispute or fraud evidence is ambiguous."
+      ],
+      "successCriteria": [
+        "Dispute or fraud workflow creates a replayable tool/API action ledger.",
+        "Unsafe automation and account-friction events are visible.",
+        "High-risk cases escalate rather than looping through self-service."
+      ],
+      "priorityMetrics": [
+        "unsafeToolApiUsageCount",
+        "workflowDeadEndCount",
+        "escalationRate",
+        "unresolvedCustomerRate",
+        "complaintOrEscalationProxy"
+      ]
+    },
+    {
+      "cohortId": "escalation-risk-customers",
+      "label": "Escalation-Risk Customers",
+      "roleInDemo": "Primary cohort for threshold, handoff, operational load, and automation-budget decisions.",
+      "riskProfile": "Complex income, credit stress, BNPL exposure, seasonal cashflow, or support paths likely to need human intervention.",
+      "traitSelectors": [
+        "credit-fragile",
+        "low-buffer",
+        "commission-income",
+        "seasonal-income",
+        "tax-lag",
+        "business-personal-overlap"
+      ],
+      "sourcePersonaNames": [
+        "BNPL-Heavy Retail Worker",
+        "Ride-Share Driver with Tax Lag",
+        "Commission-Only Salesperson",
+        "Sole Trader with Seasonal Cashflow",
+        "Apprentice Tradie Starting Out",
+        "BNPL-Heavy Retail Worker after Income Dip",
+        "Sole Trader in Off-Season"
+      ],
+      "goals": [
+        "Reach resolution before the workflow enters a dead end.",
+        "Escalate when policy rules, tool budget, or confidence thresholds are exhausted.",
+        "Make operator-load tradeoffs explicit."
+      ],
+      "successCriteria": [
+        "Escalation threshold changes are measurable versus baseline.",
+        "Workflow dead ends are linked to customer timelines and failure reasons.",
+        "Operational load is visible as a decision tradeoff, not hidden as an engineering detail."
+      ],
+      "priorityMetrics": [
+        "escalationRate",
+        "workflowDeadEndCount",
+        "averageSimulatedTimeToResolution",
+        "operationalLoadProxy",
+        "baselineVersusProposedDelta"
+      ]
+    }
+  ],
+  "decisionScenarios": [
+    {
+      "scenarioId": "hardship-handling",
+      "label": "Hardship Handling",
+      "decisionUnderTest": "Should the bank change hardship detection and relief policy before allowing the workflow to serve vulnerable customers?",
+      "primaryCohortIds": [
+        "vulnerable-hardship-customers",
+        "everyday-banking-customers"
+      ],
+      "implementedPresetIds": [
+        "hardship-relief",
+        "hardship-threshold-tradeoff"
+      ],
+      "baseline": {
+        "branchId": "baseline-current-hardship-policy",
+        "presetId": "hardship-relief",
+        "description": "Current deterministic hardship scan and relief policy against the approved low-liquidity cohort.",
+        "parameters": {
+          "candidateHardshipScan": true,
+          "candidateHardshipThreshold": "default",
+          "candidateHardshipSubsidyAmount": "default"
+        }
+      },
+      "proposed": {
+        "branchId": "proposed-wider-hardship-relief",
+        "presetId": "hardship-threshold-tradeoff",
+        "description": "Widen hardship eligibility and increase targeted subsidy to inspect coverage, budget burn, and residual harm.",
+        "parameters": {
+          "candidateHardshipScan": true,
+          "candidateHardshipThreshold": 250,
+          "candidateHardshipSubsidyAmount": 650
+        }
+      },
+      "outcomeQuestions": [
+        "Which vulnerable customers are helped, missed, or harmed by the proposed threshold?",
+        "Does the proposed policy reduce unresolved hardship without creating excessive false-positive exposure?",
+        "Which timeline events explain the material deltas?"
+      ],
+      "reportMetrics": [
+        "vulnerableCustomerRiskEvents",
+        "policyViolationCount",
+        "unresolvedCustomerRate",
+        "complaintOrEscalationProxy",
+        "baselineVersusProposedDelta"
+      ],
+      "requiredReplayEvidence": [
+        "customerProfile",
+        "timeline",
+        "policyCheckLedger",
+        "toolApiLedger",
+        "stateChangeDiff",
+        "failureReason"
+      ]
+    },
+    {
+      "scenarioId": "disputed-transaction",
+      "label": "Disputed Transaction",
+      "decisionUnderTest": "Should an AI-enabled banking workflow be allowed to initiate dispute or fraud actions for customers with ambiguous transaction risk?",
+      "primaryCohortIds": [
+        "dispute-fraud-risk-customers",
+        "escalation-risk-customers"
+      ],
+      "implementedPresetIds": [
+        "fraud-alert-friction"
+      ],
+      "plannedPresetIds": [
+        "dispute-resolution-pressure"
+      ],
+      "baseline": {
+        "branchId": "baseline-conservative-fraud-flow",
+        "presetId": "fraud-alert-friction",
+        "description": "Structured fraud alert path with conservative customer-friction and operator-load evidence."
+      },
+      "proposed": {
+        "branchId": "proposed-agent-assisted-dispute-flow",
+        "presetId": "dispute-resolution-pressure",
+        "description": "Planned candidate path where the system under test may initiate dispute actions under guardrails."
+      },
+      "outcomeQuestions": [
+        "Does tool/API access reduce unresolved disputes or just increase unsafe automation?",
+        "Which customers experience avoidable account friction or dead ends?",
+        "Do high-risk dispute cases escalate with enough evidence for a human operator?"
+      ],
+      "reportMetrics": [
+        "unsafeToolApiUsageCount",
+        "workflowDeadEndCount",
+        "escalationRate",
+        "unresolvedCustomerRate",
+        "complaintOrEscalationProxy"
+      ],
+      "requiredReplayEvidence": [
+        "customerProfile",
+        "timeline",
+        "toolApiLedger",
+        "policyCheckLedger",
+        "stateChangeDiff",
+        "failureReason"
+      ]
+    },
+    {
+      "scenarioId": "escalation-threshold-change",
+      "label": "Escalation Threshold Change",
+      "decisionUnderTest": "Should the bank lower human-handoff thresholds or tighten autonomous action budgets for complex customers?",
+      "primaryCohortIds": [
+        "escalation-risk-customers",
+        "vulnerable-hardship-customers"
+      ],
+      "implementedPresetIds": [
+        "hardship-threshold-tradeoff",
+        "credit-stress",
+        "credit-limit-tighten"
+      ],
+      "baseline": {
+        "branchId": "baseline-current-handoff-threshold",
+        "presetId": "credit-stress",
+        "description": "Current operational threshold under credit stress and customer pressure."
+      },
+      "proposed": {
+        "branchId": "proposed-lower-handoff-threshold",
+        "presetId": "hardship-threshold-tradeoff",
+        "description": "Lower handoff threshold for vulnerable or complex customers and inspect reduced dead ends versus operator load."
+      },
+      "outcomeQuestions": [
+        "Which customer segments benefit from earlier escalation?",
+        "Does earlier handoff reduce workflow dead ends or merely move work to operators?",
+        "Which policy or confidence checks should trigger escalation?"
+      ],
+      "reportMetrics": [
+        "escalationRate",
+        "workflowDeadEndCount",
+        "averageSimulatedTimeToResolution",
+        "operationalLoadProxy",
+        "baselineVersusProposedDelta"
+      ],
+      "requiredReplayEvidence": [
+        "customerProfile",
+        "timeline",
+        "toolApiLedger",
+        "policyCheckLedger",
+        "stateChangeDiff",
+        "failureReason"
+      ]
+    }
+  ],
+  "demoComparisonTarget": {
+    "comparisonId": "hardship-relief-threshold-baseline-vs-proposed",
+    "scenarioId": "hardship-handling",
+    "title": "Hardship Relief Threshold Review",
+    "decisionQuestion": "Should the bank widen hardship eligibility and increase targeted relief before launching the workflow to vulnerable customers?",
+    "baselineBranchId": "baseline-current-hardship-policy",
+    "proposedBranchId": "proposed-wider-hardship-relief",
+    "requiredCohortIds": [
+      "vulnerable-hardship-customers",
+      "everyday-banking-customers"
+    ],
+    "expectedReportSections": [
+      "testedDecision",
+      "simulationAssumptions",
+      "cohortCoverage",
+      "baselineVersusProposedSummary",
+      "metricDeltas",
+      "replayableFailureFindings",
+      "recommendation"
+    ],
+    "launchRecommendationGate": {
+      "blockOn": [
+        "unlinkedExecutiveMetric",
+        "unexplainedVulnerableCustomerRiskIncrease",
+        "policyViolationWithoutReplayEvidence",
+        "workflowDeadEndIncreaseWithoutMitigation"
+      ],
+      "warnOn": [
+        "operatorLoadProxyIncrease",
+        "falsePositiveReliefExposure",
+        "evidenceGap"
+      ]
+    }
+  },
+  "nonClaims": [
+    "This manifest does not claim to predict real customer behavior.",
+    "This manifest does not certify a production banking policy.",
+    "This manifest does not replace legal, compliance, or model-risk review."
+  ],
+  "nextImplementationIssues": [
+    309,
+    310
+  ]
+}

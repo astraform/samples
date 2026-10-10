@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Bank-backed statement advice request v1",
+  "description": "Read-only advice from partner-owned bank records. The customer supplies schemaVersion, customerMessage and optionally statementPeriod to select a closing month. Without statementPeriod, advice uses the latest issued statement; dates in customerMessage do not select a period. An unavailable requested month returns need_information, never a different month's statement. Astraform adds trusted customer references after the model decision; supplied statement facts are not part of this mode.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "customerMessage"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "banking.statement-advice.request.v1"
+    },
+    "customerMessage": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384,
+      "pattern": "\\S"
+    },
+    "statementPeriod": {
+      "type": "string",
+      "minLength": 7,
+      "maxLength": 7,
+      "pattern": "^(?!0000)[0-9]{4}-(0[1-9]|1[0-2])$",
+      "description": "Optional closing month YYYY-MM (year 0001-9999) requested by the customer, not an assertion that a statement exists. Selects by the bank statement's statementEndDate, not its issue date or payment due date. If several statements match, advice uses the latest statementEndDate then billId within this month. Omit to request the latest issued statement."
+    },
+    "astraformCustomerContexts": {
+      "type": "array",
+      "maxItems": 8,
+      "description": "Reserved host-supplied references from the accepted launch. The model must not choose identities or read guards; Astraform overwrites this field before dispatch. Reference-state simulations include the accepted bank context, version and logical time in readContext. Backend mode requires a reference for its configured binding.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bindingKey",
+          "contextRef",
+          "subjectRef"
+        ],
+        "properties": {
+          "bindingKey": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+          },
+          "contextRef": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+          },
+          "subjectRef": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+          },
+          "readContext": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Trusted simulation read guard, supplied by Astraform after accepting the domain checkpoint; never model-authored.",
+            "required": [
+              "contextId",
+              "resourceVersion",
+              "logicalTimeEpochMs"
+            ],
+            "properties": {
+              "contextId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "resourceVersion": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "logicalTimeEpochMs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 253402300799998
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

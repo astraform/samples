@@ -1,0 +1,167 @@
+{
+  "bankCustomerSeed": {
+    "logicalTimeEpochMs": 1770249600000,
+    "accounts": [
+      {
+        "accountId": "customer-a-credit",
+        "name": "Everyday credit",
+        "productCode": "CC001",
+        "balance": "-1200",
+        "currency": "AUD",
+        "limit": "3000",
+        "currentMinPayment": "48"
+      }
+    ],
+    "statements": [
+      {
+        "billId": "customer-a-credit-2026-01",
+        "accountId": "customer-a-credit",
+        "closingAmount": "-1200",
+        "minimumAmountDue": "48",
+        "currency": "AUD",
+        "statementStartDate": "2026-01-01",
+        "statementEndDate": "2026-01-31",
+        "dueDate": "2026-02-14"
+      }
+    ]
+  },
+  "catalogDraftRequest": {
+    "requestId": "<NEW_CATALOG_CREATE_REQUEST_UUID>",
+    "agentKey": "banking-advice-customer-<UNIQUE_LOWERCASE_SUFFIX>",
+    "displayName": "Avery — issued-statement repayment question",
+    "description": "A budget-conscious customer asks the bank about an already-issued January statement and a personal AU$100 payment budget.",
+    "draft": {
+      "role": "Avery, a practical and budget-conscious credit-card customer",
+      "purpose": "Understand the repayment obligation on your issued January 2026 credit-card statement and how it fits the AU$100 you have available for payment.",
+      "goals": [
+        "Understand what you must pay and by when for your issued January 2026 credit-card statement, and whether your AU$100 budget meets the minimum payment and repays the whole balance."
+      ],
+      "constraints": [
+        "Base what you know about your account on information you have actually received from your bank. Treat missing information as unknown. Do not invent account balances, statements, amounts, dates, service replies or payments.",
+        "The account information and banking advice services let you view information and ask questions; they cannot make or schedule payments. Do not claim a payment has been made or scheduled.",
+        "Choose your own actions and messages. Avoid repeating a request already answered."
+      ],
+      "additionalInstructions": "You have received your January credit-card statement and have AU$100 available for payment. You want to understand the bank’s figures before deciding what you can afford. You can view your own account and statement information and ask the banking advice service to explain it. Remember useful information you have actually received. Decide for yourself what to ask, whether clarification is needed and when you have enough information. If the bank cannot answer part of your question, keep that uncertainty clear.",
+      "execution": {
+        "mode": "MODEL",
+        "modelBindingKey": "local-customer"
+      },
+      "tools": [
+        {
+          "kind": "MCP",
+          "bindingKey": "banking",
+          "bindingRevision": "<BINDINGREVISION_FROM_MCP_CAPABILITIES>",
+          "bindingDigest": "<BINDINGDIGEST_FROM_MCP_CAPABILITIES>",
+          "toolName": "get_customer_accounts",
+          "descriptorDigest": "<DESCRIPTOR_DIGEST_FROM_TOOL_DESCRIPTOR>",
+          "inputSchemaDigest": "<INPUT_SCHEMA_DIGEST_FROM_TOOL_DESCRIPTOR>",
+          "outputSchemaDigest": "<OUTPUT_SCHEMA_DIGEST_FROM_TOOL_DESCRIPTOR>",
+          "effectClass": "READ_ONLY",
+          "scope": "CUSTOMER_CONTEXT",
+          "maxCalls": 2
+        }
+      ]
+    }
+  },
+  "launchRequestTemplate": {
+    "catalogAgentId": "<CATALOG_AGENT_ID_FROM_CREATE>",
+    "catalogRevisionId": "<CATALOG_REVISION_ID_FROM_PUBLISH>",
+    "catalogDefinitionDigest": "<CATALOG_DEFINITION_DIGEST_FROM_PUBLISH>",
+    "requestId": "<NEW_SIMULATION_REQUEST_UUID>",
+    "instruction": "Consider your current situation and available observations, then decide your next action.",
+    "facts": {
+      "source": "customer-context",
+      "customerName": "Avery",
+      "personalPaymentBudget": {
+        "amount": "100",
+        "currency": "AUD"
+      }
+    },
+    "initialAgentState": {
+      "preferences": {
+        "tone": "practical and polite"
+      }
+    },
+    "logicalTimeEpochMs": 1770249600000,
+    "partnerTargetAgentKey": "banking-advice",
+    "maxPartnerInteractions": 4,
+    "toolContexts": [
+      {
+        "bindingKey": "banking",
+        "contextRef": "<FRESH_BANK_CONTEXT_FOR_THIS_RUN>",
+        "subjectRef": "customer-a"
+      }
+    ],
+    "logicalHorizonEpochMs": 1770249600000,
+    "completionPolicy": {
+      "mode": "GOAL",
+      "goalIndex": 0,
+      "partnerResponseConditions": [
+        {
+          "pointer": "/schemaVersion",
+          "oneOf": [
+            "banking.statement-advice.response.v1"
+          ]
+        },
+        {
+          "pointer": "/decision",
+          "oneOf": [
+            "payment_due"
+          ]
+        },
+        {
+          "pointer": "/bankingContext/subjectRef",
+          "oneOf": [
+            "customer-a"
+          ]
+        },
+        {
+          "pointer": "/statement/accountId",
+          "oneOf": [
+            "customer-a-credit"
+          ]
+        },
+        {
+          "pointer": "/statement/billId",
+          "oneOf": [
+            "customer-a-credit-2026-01"
+          ]
+        },
+        {
+          "pointer": "/statement/statementEndDate",
+          "oneOf": [
+            "2026-01-31"
+          ]
+        },
+        {
+          "pointer": "/statement/minimumAmountDue",
+          "oneOf": [
+            "48"
+          ]
+        },
+        {
+          "pointer": "/statement/currency",
+          "oneOf": [
+            "AUD"
+          ]
+        },
+        {
+          "pointer": "/statement/dueDate",
+          "oneOf": [
+            "2026-02-14"
+          ]
+        },
+        {
+          "pointer": "/statement/closingAmount",
+          "oneOf": [
+            "-1200"
+          ]
+        }
+      ],
+      "maxCustomerDecisions": 10,
+      "maxWallTimeMs": 600000,
+      "maxRepeatedExchanges": 3,
+      "requestFactBindings": []
+    }
+  }
+}

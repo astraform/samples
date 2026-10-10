@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Observed marketing campaign enquiry",
+  "description": "Facts accompanying the customer's own message. Astraform binds campaignKey, queueState and reviewSummary to the latest accepted provider observation for this single-approval scenario. Before the review, reviewSummary is the pending task description; only after due work runs does it contain the actual finding. Invented or rewritten bound facts are rejected before A2A dispatch.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "scenario": {
+      "const": "launch-blocker"
+    },
+    "domainId": {
+      "const": "marketing-ops"
+    },
+    "campaignKey": {
+      "type": "string",
+      "minLength": 1
+    },
+    "queueState": {
+      "enum": [
+        "review_pending",
+        "blocked",
+        "active",
+        "clear"
+      ]
+    },
+    "reviewSummary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1200,
+      "description": "Verbatim summary of the current provider review record, taken from the latest observed pendingApprovals[0].summary. Do not invent or paraphrase this bound fact."
+    }
+  },
+  "required": [
+    "scenario",
+    "campaignKey",
+    "queueState",
+    "reviewSummary"
+  ]
+}

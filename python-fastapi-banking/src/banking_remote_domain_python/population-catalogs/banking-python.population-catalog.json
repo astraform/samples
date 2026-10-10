@@ -1,0 +1,199 @@
+{
+  "schemaVersion": "domain_population_catalog.v1",
+  "domainId": "banking-python",
+  "domainFamily": "banking",
+  "label": "Python Banking",
+  "description": "Provider-published population archetypes and deterministic recipes for Python banking policy simulations.",
+  "catalogVersion": "banking-python.population-catalog.v1",
+  "archetypeCatalog": {
+    "schemaVersion": "domain_archetype_catalog.v1",
+    "domainId": "banking-python",
+    "archetypes": [
+      {
+        "archetypeId": "rate-sensitive-saver",
+        "title": "Rate-Sensitive Saver",
+        "narrative": "Customer who compares deposit yield, notices repricing quickly, and may move balances when value is unclear.",
+        "segmentIds": ["deposit-savers"],
+        "traits": ["rate-sensitive", "deposit-focused", "balance-aware"]
+      },
+      {
+        "archetypeId": "liquidity-buffer-holder",
+        "title": "Liquidity Buffer Holder",
+        "narrative": "Customer maintaining a transaction buffer and judging policy changes through day-to-day cash availability.",
+        "segmentIds": ["deposit-savers"],
+        "traits": ["liquidity-buffer", "cashflow-aware", "transactional"]
+      },
+      {
+        "archetypeId": "revolving-credit-user",
+        "title": "Revolving Credit User",
+        "narrative": "Customer carrying card balances who is sensitive to APR movement, repayment pressure, and limit changes.",
+        "segmentIds": ["credit-cardholders"],
+        "traits": ["credit-revolver", "apr-sensitive", "repayment-aware"]
+      },
+      {
+        "archetypeId": "limit-sensitive-cardholder",
+        "title": "Limit-Sensitive Cardholder",
+        "narrative": "Customer using credit limits for spending flexibility and reacting strongly to affordability or limit policy shifts.",
+        "segmentIds": ["credit-cardholders"],
+        "traits": ["limit-sensitive", "cardholder", "affordability-aware"]
+      },
+      {
+        "archetypeId": "payment-stressed-household",
+        "title": "Payment-Stressed Household",
+        "narrative": "Customer showing payment stress signals and requiring careful treatment around hardship and relief policy.",
+        "segmentIds": ["hardship-risk"],
+        "traits": ["payment-stressed", "hardship-risk", "relief-sensitive"]
+      },
+      {
+        "archetypeId": "fraud-alert-sensitive",
+        "title": "Fraud-Alert Sensitive Customer",
+        "narrative": "Customer who values fraud protection but may experience friction when alerts or controls interrupt access.",
+        "segmentIds": ["fraud-friction"],
+        "traits": ["fraud-alert-sensitive", "friction-aware", "trust-sensitive"]
+      }
+    ]
+  },
+  "populationRecipes": {
+    "schemaVersion": "synthetic_cohort_recipe.v1",
+    "domainId": "banking-python",
+    "recipes": [
+      {
+        "recipeId": "banking-python-policy-100",
+        "title": "Python Banking Policy 100",
+        "description": "A 100-member Python banking policy population spanning deposit savers, credit cardholders, hardship risk, and fraud-friction paths.",
+        "defaultTargetSize": 100,
+        "segmentMix": [
+          {
+            "segmentId": "deposit-savers",
+            "label": "Deposit savers",
+            "weight": 35,
+            "archetypeIds": ["rate-sensitive-saver", "liquidity-buffer-holder"],
+            "memberTemplate": {
+              "domainConfig": {
+                "productCode": "TS001",
+                "riskBand": "LOW",
+                "channelPreference": "DIGITAL",
+                "policyFocus": "deposit-repricing"
+              },
+              "initialAccounts": [
+                {
+                  "accountId": "acct-{segmentCode}-{customerIndexPadded}",
+                  "name": "Everyday Saver",
+                  "productCode": "TS001",
+                  "productCategory": "TRANS_AND_SAVINGS_ACCOUNTS",
+                  "balance": 2500,
+                  "limit": 0,
+                  "currency": "AUD"
+                }
+              ],
+              "scheduledWork": []
+            }
+          },
+          {
+            "segmentId": "credit-cardholders",
+            "label": "Credit cardholders",
+            "weight": 30,
+            "archetypeIds": ["revolving-credit-user", "limit-sensitive-cardholder"],
+            "memberTemplate": {
+              "domainConfig": {
+                "productCode": "CC001",
+                "riskBand": "MEDIUM",
+                "channelPreference": "DIGITAL",
+                "policyFocus": "credit-apr"
+              },
+              "initialAccounts": [
+                {
+                  "accountId": "acct-{segmentCode}-{customerIndexPadded}",
+                  "name": "Rewards Card",
+                  "productCode": "CC001",
+                  "productCategory": "CRED_AND_CHRG_CARDS",
+                  "balance": -1200,
+                  "limit": 5000,
+                  "currency": "AUD"
+                }
+              ],
+              "scheduledWork": []
+            }
+          },
+          {
+            "segmentId": "hardship-risk",
+            "label": "Hardship risk",
+            "weight": 20,
+            "archetypeIds": ["payment-stressed-household"],
+            "memberTemplate": {
+              "domainConfig": {
+                "productCode": "TS001",
+                "riskBand": "HIGH",
+                "channelPreference": "ASSISTED",
+                "policyFocus": "hardship-relief"
+              },
+              "initialAccounts": [
+                {
+                  "accountId": "acct-{segmentCode}-{customerIndexPadded}",
+                  "name": "Everyday Account",
+                  "productCode": "TS001",
+                  "productCategory": "TRANS_AND_SAVINGS_ACCOUNTS",
+                  "balance": 250,
+                  "limit": 0,
+                  "currency": "AUD"
+                }
+              ],
+              "scheduledWork": []
+            }
+          },
+          {
+            "segmentId": "fraud-friction",
+            "label": "Fraud friction",
+            "weight": 15,
+            "archetypeIds": ["fraud-alert-sensitive"],
+            "memberTemplate": {
+              "domainConfig": {
+                "productCode": "CC001",
+                "riskBand": "MEDIUM",
+                "channelPreference": "MOBILE",
+                "policyFocus": "fraud-alert"
+              },
+              "initialAccounts": [
+                {
+                  "accountId": "acct-{segmentCode}-{customerIndexPadded}",
+                  "name": "Mobile Credit Card",
+                  "productCode": "CC001",
+                  "productCategory": "CRED_AND_CHRG_CARDS",
+                  "balance": -600,
+                  "limit": 3000,
+                  "currency": "AUD"
+                }
+              ],
+              "scheduledWork": []
+            }
+          }
+        ],
+        "memberValidation": {
+          "requiredDomainConfigFields": ["productCode", "riskBand", "channelPreference", "policyFocus"],
+          "allowedDomainConfigValues": {
+            "productCode": ["TS001", "CC001"],
+            "riskBand": ["LOW", "MEDIUM", "HIGH"],
+            "channelPreference": ["DIGITAL", "ASSISTED", "MOBILE"],
+            "policyFocus": ["deposit-repricing", "credit-apr", "hardship-relief", "fraud-alert"]
+          },
+          "initialAccountsRequired": true,
+          "scheduledWorkRequired": false,
+          "allowedScheduledWorkKinds": []
+        },
+        "tags": ["banking", "python", "policy", "population-builder"]
+      }
+    ]
+  },
+  "runPathEligibility": {
+    "schemaVersion": "synthetic_population_run_path_eligibility.v1",
+    "status": "SCENARIO_READY",
+    "prepareValid": true,
+    "windTunnelReady": true,
+    "packDebugReady": true,
+    "windTunnelConsumesPopulation": true,
+    "windTunnelReadyMaxTargetSize": 100,
+    "packDebugReadyMaxTargetSize": 250,
+    "exportOnlyAboveTargetSize": 100,
+    "message": "Python Banking Wind Tunnel consumes generated population bundles by cohortId and loads generated members from the shared population artifact store."
+  }
+}

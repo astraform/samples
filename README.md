@@ -1,0 +1,136 @@
+# Astraform Samples
+
+Build and adapt partner services that Astraform customer agents can exercise.
+The samples use published Java/Python SDKs and communicate with Astraform over
+HTTP, A2A and MCP. Astraform itself runs from its released container images;
+you do not need its source repository or a locally built SDK.
+
+Clone the examples to build and adapt them:
+
+```sh
+git clone https://github.com/astraform/samples.git
+cd samples
+```
+
+## Choose your first simulation
+
+| Start here | What it runs |
+| --- | --- |
+| [Python banking starter](deploy/banking-starter/README.md) | An image-only deployment with a separate bank database, an LLM banking partner and one customer asking about an issued statement. The starter archive is prepared; public release is still pending. |
+| [Banking from sample source](banking-advice-agent/README.md) | Build either the Java or Python bank, configure the shared LLM banking partner and run the customer through the published SDK. Includes fixed-statement and monthly-statement configurations. |
+| [Marketing from sample source](integration/marketing-ops-a2a/README.md#native-customer-simulation) | Build the Marketing Ops provider and LLM Creative Agency, configure their connections and launch a customer seeking campaign advice. |
+
+For all three paths, first download the archive and checksum from the public
+[Astraform Platform v0.2.0 release](https://github.com/astraform/releases/releases/tag/v0.2.0).
+Follow its included README to verify, extract and initialize the bundle, select
+Gemini or Ollama for customer agents, and start the platform. The platform bundle
+and editable sample source are separate: the samples do not build or import
+Astraform runtime modules.
+
+The public [deployment guide](https://astraform.ai/deploy/) explains the platform
+installation. The selected sample guide explains its own services and scenario.
+A healthy platform is only the starting point; launch a simulation to observe
+actual model calls, tool access and conversations.
+
+## Configure the platform, customer and partner
+
+| Configuration | Where it belongs |
+| --- | --- |
+| Astraform customer model and memory | The extracted platform bundle's `private/model.env` |
+| Partner A2A endpoint, customer MCP endpoint and optional domain provider | The bundle's `private/runtime.properties` |
+| Customer persona, goals, permitted tools, scenario facts and stop limits | The sample scenario JSON, submitted through the SDK |
+| Partner-agent model, prompt, credentials and history | The partner service's own configuration |
+| Bank accounts or campaign state | The partner service/database |
+
+Use `http://localhost:8084` as the SDK API base for the bundle's default port;
+choose the actual configured port if different. Generated clients add `/api/...`.
+The bundle's `local-customer` model binding works with either supplied model
+profile. Changing the platform customer model does not change the partner model.
+
+Runtime connects to partner URLs from inside a container. For host-run services,
+the sample guides use `host.docker.internal`; Linux host services must listen on
+an interface reachable from the Docker bridge. `localhost` inside Runtime refers
+to Runtime itself. Keep these evaluation services on a trusted local/private
+network; the sample banking routes do not implement public-facing authentication.
+
+After changing connections, recreate `agent-runtime` from the extracted platform
+bundle directory:
+
+```sh
+./astraform.sh up -d --wait --force-recreate agent-runtime
+```
+
+Update the affected binding revision and start a fresh run after configuration
+changes. The SDK creates and publishes a customer definition, then launches an
+Agent Journey. Astraform owns subsequent customer execution. Preserve the returned
+run ID and inspect/export that run instead of launching again after a timeout.
+Customer choices, partner mistakes and failed goals remain in the evidence; a
+completed execution does not by itself mean the customer achieved its goal.
+
+## Sample services
+
+| Component | Role |
+| --- | --- |
+| [Java banking](java-spring-banking/README.md) | Java/Spring bank, customer-scoped MCP access and optional monthly statement work |
+| [Python banking](python-fastapi-banking/README.md) | Python/FastAPI bank using the same public contracts and shared banking scenarios |
+| [Banking Advice](banking-advice-agent/README.md) | LLM partner agent that answers using the selected bank's records over A2A |
+| [Marketing Ops](marketing-ops-remote/README.md) | Java/Spring campaign-state provider and scheduled domain work |
+| [Creative Agency](marketing-ops-creative-agency/README.md) | LLM marketing partner agent over A2A |
+| [Refund Policy](refund-policy-agent/README.md) | Small A2A refund example with explicit deterministic and Ollama modes |
+
+Banking partner records live separately from Astraform state and evidence.
+Customers receive only their configured tool grants and account context. An A2A
+conversation alone does not advance partner business data; monthly statements
+and other scheduled changes require the optional native domain integration.
+The banking and marketing guides describe those bindings and their limitations.
+
+## SDK development
+
+Each author kit includes both integration directions: domain interfaces for
+Astraform to call your provider, and a platform client for configuring customers,
+launching simulations and retrieving results. Use:
+
+- Java: [`ai.astraform:remote-domain-author-kit-java:0.4.1`](https://central.sonatype.com/artifact/ai.astraform/remote-domain-author-kit-java/0.4.1), with Java 21 and Maven 3.9+ for these samples.
+- Python: [`astraform-remote-domain-author-kit==0.3.1`](https://pypi.org/project/astraform-remote-domain-author-kit/0.3.1/), with Python 3.12+ and the module's committed `uv.lock`.
+- Public [contracts 1.2.0](https://github.com/astraform/remote-domain-contracts/releases/tag/v1.2.0), covering both platform and domain-provider APIs.
+
+The Java modules resolve the SDK from Maven Central; Python resolves it from
+PyPI. Conformance packages remain separate validation tools. No SDK checkout,
+private build parent, platform source path or standalone platform-client package
+is required. See each module README for its local build, database and test commands.
+
+The root `compose.yaml` builds sample services from this repository; it does not
+start Astraform. Select the services required by your chosen guide and supply
+their model settings before startup. Use the public platform bundle alongside
+it. [Deployment and ownership](docs/PLATFORM_PACKAGING.md) explains the connection
+model and how to replace a sample with your own agent or domain service.
+
+## Releases
+
+The [public releases repository](https://github.com/astraform/releases/releases)
+contains published deployment downloads. Only treat an archive or image as
+available after its release has been published; a prepared workflow or passing
+CI is not a download. The first Python banking starter targets platform v0.2.0
+and Python SDK 0.3.1. A downloadable Java or marketing starter is not included
+in that first banking archive; their source guides remain separate.
+
+Maintainers can use the [publication instructions](docs/PUBLICATION_CHECKLIST.md).
+A source tag runs verification; image publication is a separate manual workflow
+with explicit image selections.
+
+## Example data
+
+The [seeded banking personas](scenarios/demo/seeded-cohorts/README.md) are
+entirely invented/generated demo data, including their names, dates of birth and
+account scenarios. They were not copied from real customers. Keep real partner
+records and simulation exports out of this repository.
+
+## License
+
+All Astraform-authored code, configuration and documentation in this repository,
+including the Java, Python, banking, marketing and refund examples, is licensed
+under [Apache License 2.0](LICENSE); see [NOTICE](NOTICE). Partners may use,
+modify and redistribute these examples under that license. Component-level
+LICENSE/NOTICE copies are retained for standalone images and starter archives.
+Third-party dependencies retain their own terms. This grant does not license
+the separately distributed Astraform platform or its private source.

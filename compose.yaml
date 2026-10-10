@@ -1,0 +1,94 @@
+name: astraform-remote-domain-samples
+
+services:
+  java-spring-banking:
+    build:
+      context: .
+      dockerfile: java-spring-banking/Dockerfile
+    image: ${JAVA_SPRING_BANKING_IMAGE:-astraform/java-spring-banking:local}
+    ports:
+      - "${JAVA_SPRING_BANKING_HOST_PORT:-8094}:8094"
+    environment:
+      BANKING_PRODUCT_ENDPOINT_URL: ${BANKING_PRODUCT_ENDPOINT_URL:-http://java-spring-banking:8094}
+
+  python-fastapi-banking:
+    build:
+      context: .
+      dockerfile: python-fastapi-banking/Dockerfile
+    image: ${PYTHON_FASTAPI_BANKING_IMAGE:-astraform/python-fastapi-banking:local}
+    depends_on:
+      python-banking-db:
+        condition: service_healthy
+    environment:
+      BANKING_BACKEND_ENABLED: "true"
+      BANKING_BACKEND_DATABASE_URL: postgresql://banking:banking@python-banking-db:5432/banking_python
+      BANKING_BACKEND_MAX_POOL_SIZE: ${PYTHON_BANKING_DB_MAX_POOL_SIZE:-8}
+      ASTRAFORM_NATIVE_SIMULATION_ENABLED: "true"
+      ASTRAFORM_NATIVE_SIMULATION_PROFILE: remote-domain.native-reference-state.v1
+    ports:
+      - "${PYTHON_FASTAPI_BANKING_HOST_PORT:-8092}:8092"
+
+  python-banking-db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: banking_python
+      POSTGRES_USER: banking
+      POSTGRES_PASSWORD: banking
+    volumes:
+      - python-banking-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U banking -d banking_python"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  marketing-ops-remote:
+    build:
+      context: .
+      dockerfile: marketing-ops-remote/Dockerfile
+    image: ${MARKETING_OPS_REMOTE_IMAGE:-astraform/marketing-ops-remote:local}
+    ports:
+      - "${MARKETING_OPS_REMOTE_HOST_PORT:-8090}:8090"
+    environment:
+      SERVER_PORT: 8090
+
+  marketing-ops-creative-agency:
+    build:
+      context: .
+      dockerfile: marketing-ops-creative-agency/Dockerfile
+    image: ${MARKETING_OPS_CREATIVE_AGENCY_IMAGE:-astraform/marketing-ops-creative-agency:local}
+    ports:
+      - "${MARKETING_OPS_CREATIVE_AGENCY_BIND_ADDRESS:-127.0.0.1}:${MARKETING_OPS_CREATIVE_AGENCY_HOST_PORT:-8091}:8091"
+    environment:
+      SERVER_PORT: 8091
+      # The published Agent Card is protocol 1.0-only. This URL must be
+      # reachable by Compose clients; callers still send A2A-Version: 1.0.
+      MARKETING_OPS_CREATIVE_AGENCY_BASE_URL: ${MARKETING_OPS_CREATIVE_AGENCY_BASE_URL:-http://marketing-ops-creative-agency:8091}
+      CREATIVE_AGENCY_GENERATION_MODE: ${CREATIVE_AGENCY_GENERATION_MODE:-llm}
+      CREATIVE_AGENCY_A2A_TOKEN: ${CREATIVE_AGENCY_A2A_TOKEN:-}
+      CREATIVE_AGENCY_A2A_RESPONSE_FORMAT: ${CREATIVE_AGENCY_A2A_RESPONSE_FORMAT:-text}
+      CREATIVE_AGENCY_LLM_PROVIDER_ID: ${CREATIVE_AGENCY_LLM_PROVIDER_ID:-}
+      CREATIVE_AGENCY_LLM_BASE_URL: ${CREATIVE_AGENCY_LLM_BASE_URL:-}
+      CREATIVE_AGENCY_LLM_AUTH_TYPE: ${CREATIVE_AGENCY_LLM_AUTH_TYPE:-bearer}
+      CREATIVE_AGENCY_LLM_API_KEY: ${CREATIVE_AGENCY_LLM_API_KEY:-}
+      CREATIVE_AGENCY_LLM_MODEL: ${CREATIVE_AGENCY_LLM_MODEL:-}
+      CREATIVE_AGENCY_LLM_BINDING_REVISION: ${CREATIVE_AGENCY_LLM_BINDING_REVISION:-}
+      CREATIVE_AGENCY_LLM_ALLOW_INSECURE_HTTP: ${CREATIVE_AGENCY_LLM_ALLOW_INSECURE_HTTP:-false}
+      CREATIVE_AGENCY_LLM_STRUCTURED_OUTPUT_MODE: ${CREATIVE_AGENCY_LLM_STRUCTURED_OUTPUT_MODE:-json-schema}
+      CREATIVE_AGENCY_LLM_TOKEN_LIMIT_PARAMETER: ${CREATIVE_AGENCY_LLM_TOKEN_LIMIT_PARAMETER:-max-tokens}
+      CREATIVE_AGENCY_LLM_REASONING_EFFORT: ${CREATIVE_AGENCY_LLM_REASONING_EFFORT:-}
+      CREATIVE_AGENCY_LLM_CONNECT_TIMEOUT: ${CREATIVE_AGENCY_LLM_CONNECT_TIMEOUT:-2s}
+      CREATIVE_AGENCY_LLM_READ_TIMEOUT: ${CREATIVE_AGENCY_LLM_READ_TIMEOUT:-15s}
+      CREATIVE_AGENCY_LLM_MAX_ATTEMPTS: ${CREATIVE_AGENCY_LLM_MAX_ATTEMPTS:-1}
+      CREATIVE_AGENCY_LLM_RETRY_BACKOFF: ${CREATIVE_AGENCY_LLM_RETRY_BACKOFF:-250ms}
+      CREATIVE_AGENCY_LLM_MAX_CONCURRENCY: ${CREATIVE_AGENCY_LLM_MAX_CONCURRENCY:-4}
+      CREATIVE_AGENCY_LLM_MAX_REQUESTS_PER_MINUTE: ${CREATIVE_AGENCY_LLM_MAX_REQUESTS_PER_MINUTE:-60}
+      CREATIVE_AGENCY_LLM_MAX_OUTPUT_TOKENS: ${CREATIVE_AGENCY_LLM_MAX_OUTPUT_TOKENS:-800}
+      CREATIVE_AGENCY_LLM_MAX_RESPONSE_BYTES: ${CREATIVE_AGENCY_LLM_MAX_RESPONSE_BYTES:-131072}
+      CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS: ${CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS:-28}
+      CREATIVE_AGENCY_A2A_CONSUMPTION_TIMEOUT_SECONDS: ${CREATIVE_AGENCY_A2A_CONSUMPTION_TIMEOUT_SECONDS:-5}
+      CREATIVE_AGENCY_A2A_RECONCILIATION_TIMEOUT_SECONDS: ${CREATIVE_AGENCY_A2A_RECONCILIATION_TIMEOUT_SECONDS:-2}
+      CREATIVE_AGENCY_A2A_MAX_CONCURRENT_REQUESTS: ${CREATIVE_AGENCY_A2A_MAX_CONCURRENT_REQUESTS:-8}
+
+volumes:
+  python-banking-data:

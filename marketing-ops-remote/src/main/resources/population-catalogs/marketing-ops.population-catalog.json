@@ -1,0 +1,222 @@
+{
+  "schemaVersion": "domain_population_catalog.v1",
+  "domainId": "marketing-ops",
+  "domainFamily": "marketing-ops",
+  "label": "Marketing Ops",
+  "description": "Provider-published population archetypes and recipes for marketing operations.",
+  "catalogVersion": "marketing-ops.population-catalog.v1",
+  "archetypeCatalog": {
+    "schemaVersion": "domain_archetype_catalog.v1",
+    "domainId": "marketing-ops",
+    "archetypes": [
+      {
+        "archetypeId": "new-category-evaluator",
+        "title": "New Category Evaluator",
+        "narrative": "Persona comparing a new offer against existing habits before deciding whether to engage.",
+        "segmentIds": ["launch-audience"],
+        "traits": ["category-evaluator", "launch-curious", "comparison-driven"]
+      },
+      {
+        "archetypeId": "channel-first-researcher",
+        "title": "Channel-First Researcher",
+        "narrative": "Persona that moves between email, web, and assisted channels before trusting a campaign.",
+        "segmentIds": ["launch-audience"],
+        "traits": ["multi-channel", "research-heavy", "trust-building"]
+      },
+      {
+        "archetypeId": "quiet-churn-signal",
+        "title": "Quiet Churn Signal",
+        "narrative": "Persona with lower recent engagement and high risk of ignoring generic outreach.",
+        "segmentIds": ["retention-risk"],
+        "traits": ["retention-risk", "low-engagement", "needs-relevance"]
+      },
+      {
+        "archetypeId": "price-sensitive-renewer",
+        "title": "Price-Sensitive Renewer",
+        "narrative": "Persona comparing renewal value and likely to disengage if pricing or timing feels off.",
+        "segmentIds": ["retention-risk"],
+        "traits": ["renewal-sensitive", "price-aware", "timing-sensitive"]
+      },
+      {
+        "archetypeId": "ready-to-convert-buyer",
+        "title": "Ready-to-Convert Buyer",
+        "narrative": "Persona showing strong intent but requiring a clear next step and low-friction handoff.",
+        "segmentIds": ["high-intent"],
+        "traits": ["high-intent", "handoff-sensitive", "conversion-ready"]
+      },
+      {
+        "archetypeId": "stakeholder-reviewer",
+        "title": "Stakeholder Reviewer",
+        "narrative": "Persona that needs decision support because another stakeholder influences the final action.",
+        "segmentIds": ["high-intent"],
+        "traits": ["stakeholder-influenced", "review-needed", "high-intent"]
+      },
+      {
+        "archetypeId": "needs-human-reassurance",
+        "title": "Needs Human Reassurance",
+        "narrative": "Persona likely to convert only when support language and escalation routes are clear.",
+        "segmentIds": ["support-sensitive"],
+        "traits": ["support-sensitive", "confidence-gap", "human-handoff"]
+      },
+      {
+        "archetypeId": "friction-intolerant-user",
+        "title": "Friction-Intolerant User",
+        "narrative": "Persona that abandons quickly when forms, timing, or channel transitions feel heavy.",
+        "segmentIds": ["support-sensitive"],
+        "traits": ["friction-sensitive", "abandonment-risk", "support-sensitive"]
+      }
+    ]
+  },
+  "populationRecipes": {
+    "schemaVersion": "synthetic_cohort_recipe.v1",
+    "domainId": "marketing-ops",
+    "recipes": [
+      {
+        "recipeId": "campaign-readiness-100",
+        "title": "Campaign Readiness 100",
+        "description": "A marketing-operations population for launch audiences, retention risk, high-intent prospects, and support-sensitive paths.",
+        "defaultTargetSize": 100,
+        "segmentMix": [
+          {
+            "segmentId": "launch-audience",
+            "label": "Launch audience",
+            "weight": 35,
+            "archetypeIds": ["new-category-evaluator", "channel-first-researcher"],
+            "memberTemplate": {
+              "domainConfig": {
+                "campaignKey": "pb-{cohortId}-{segmentCode}-{customerIndex}",
+                "focusArea": "launch-ops",
+                "queueMode": "readiness",
+                "seedApprovalCount": 2
+              },
+              "scheduledWork": [
+                {
+                  "workId": "{workId}",
+                  "description": "Campaign readiness review for {segmentLabel}",
+                  "kind": "task",
+                  "frequency": "{frequency}",
+                  "time": "{time}",
+                  "payload": {
+                    "actionType": "DETERMINISTIC_TURN",
+                    "applyTimeJitter": false,
+                    "segmentId": "{segmentId}",
+                    "priority": "{priority}"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "segmentId": "retention-risk",
+            "label": "Retention risk",
+            "weight": 25,
+            "archetypeIds": ["quiet-churn-signal", "price-sensitive-renewer"],
+            "memberTemplate": {
+              "domainConfig": {
+                "campaignKey": "pb-{cohortId}-{segmentCode}-{customerIndex}",
+                "focusArea": "campaign-ops",
+                "queueMode": "reviewer",
+                "seedApprovalCount": 2
+              },
+              "scheduledWork": [
+                {
+                  "workId": "{workId}",
+                  "description": "Campaign readiness review for {segmentLabel}",
+                  "kind": "task",
+                  "frequency": "{frequency}",
+                  "time": "{time}",
+                  "payload": {
+                    "actionType": "DETERMINISTIC_TURN",
+                    "applyTimeJitter": false,
+                    "segmentId": "{segmentId}",
+                    "priority": "{priority}"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "segmentId": "high-intent",
+            "label": "High intent",
+            "weight": 25,
+            "archetypeIds": ["ready-to-convert-buyer", "stakeholder-reviewer"],
+            "memberTemplate": {
+              "domainConfig": {
+                "campaignKey": "pb-{cohortId}-{segmentCode}-{customerIndex}",
+                "focusArea": "launch-ops",
+                "queueMode": "readiness",
+                "seedApprovalCount": 2
+              },
+              "scheduledWork": [
+                {
+                  "workId": "{workId}",
+                  "description": "Campaign readiness review for {segmentLabel}",
+                  "kind": "task",
+                  "frequency": "{frequency}",
+                  "time": "{time}",
+                  "payload": {
+                    "actionType": "DETERMINISTIC_TURN",
+                    "applyTimeJitter": false,
+                    "segmentId": "{segmentId}",
+                    "priority": "{priority}"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "segmentId": "support-sensitive",
+            "label": "Support sensitive",
+            "weight": 15,
+            "archetypeIds": ["needs-human-reassurance", "friction-intolerant-user"],
+            "memberTemplate": {
+              "domainConfig": {
+                "campaignKey": "pb-{cohortId}-{segmentCode}-{customerIndex}",
+                "focusArea": "creative-review",
+                "queueMode": "escalation",
+                "seedApprovalCount": 2
+              },
+              "scheduledWork": [
+                {
+                  "workId": "{workId}",
+                  "description": "Campaign readiness review for {segmentLabel}",
+                  "kind": "task",
+                  "frequency": "{frequency}",
+                  "time": "{time}",
+                  "payload": {
+                    "actionType": "DETERMINISTIC_TURN",
+                    "applyTimeJitter": false,
+                    "segmentId": "{segmentId}",
+                    "priority": "{priority}"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "memberValidation": {
+          "requiredDomainConfigFields": ["campaignKey", "focusArea", "queueMode", "seedApprovalCount"],
+          "allowedDomainConfigValues": {
+            "focusArea": ["campaign-ops", "creative-review", "launch-ops"],
+            "queueMode": ["readiness", "reviewer", "escalation"]
+          },
+          "scheduledWorkRequired": true,
+          "allowedScheduledWorkKinds": ["task", "action"]
+        },
+        "tags": ["campaign", "launch", "marketing-ops"]
+      }
+    ]
+  },
+  "runPathEligibility": {
+    "schemaVersion": "synthetic_population_run_path_eligibility.v1",
+    "status": "SCENARIO_READY",
+    "prepareValid": true,
+    "windTunnelReady": true,
+    "packDebugReady": true,
+    "windTunnelConsumesPopulation": true,
+    "windTunnelReadyMaxTargetSize": 100,
+    "packDebugReadyMaxTargetSize": 250,
+    "exportOnlyAboveTargetSize": 100,
+    "message": "Marketing Ops Wind Tunnel consumes generated population lineage, segment mix, and target size for launch-readiness scoring."
+  }
+}

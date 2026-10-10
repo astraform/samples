@@ -1,0 +1,121 @@
+{
+  "bankCustomerSeed": {
+    "logicalTimeEpochMs": 1768435200000,
+    "accounts": [
+      {
+        "accountId": "customer-a-credit",
+        "name": "Everyday credit",
+        "productCode": "CC001",
+        "balance": "-1200",
+        "currency": "AUD",
+        "limit": "3000"
+      }
+    ],
+    "statements": []
+  },
+  "catalogDraftRequest": {
+    "requestId": "<NEW_CATALOG_CREATE_REQUEST_UUID>",
+    "agentKey": "banking-advice-customer-<UNIQUE_LOWERCASE_SUFFIX>",
+    "displayName": "Avery — bank-backed customer",
+    "description": "Local Ollama customer with scoped MCP access to partner-owned banking records and native monthly statement events, plus A2A access to bank advice.",
+    "draft": {
+      "role": "Avery, a practical and budget-conscious credit-card customer",
+      "purpose": "Understand the repayment obligation for your upcoming credit-card statement and your available credit limit, using the banking services available to you.",
+      "goals": [
+        "Obtain a clear answer from the banking advice service about the minimum payment and due date for your upcoming credit-card statement when it is issued.",
+        "Learn your actual credit-card limit from your own account records."
+      ],
+      "constraints": [
+        "Base what you know about your account on information you have actually received from your bank. Treat missing information as unknown. Do not invent account balances, statements, amounts, dates, service replies or payments.",
+        "The account information and banking advice services let you view information and ask questions; they cannot make or schedule payments. Do not claim a payment has been made or scheduled.",
+        "Choose your own actions and messages. Avoid repeating a request already answered."
+      ],
+      "additionalInstructions": "You can view your own account information and issued statements and ask the banking advice service about repayment. Both services refer to your records at the same bank. Your bank issues monthly credit-card statements and may notify you when new information is available. Remember useful information you have actually received. Decide for yourself how to pursue your goals and when you have enough information. A statement that has not been issued, or a reply saying that information is unavailable, does not answer your repayment question.",
+      "execution": {
+        "mode": "MODEL",
+        "modelBindingKey": "local-customer"
+      },
+      "tools": [
+        {
+          "kind": "MCP",
+          "bindingKey": "banking",
+          "bindingRevision": "<BINDINGREVISION_FROM_MCP_CAPABILITIES>",
+          "bindingDigest": "<BINDINGDIGEST_FROM_MCP_CAPABILITIES>",
+          "toolName": "get_customer_accounts",
+          "descriptorDigest": "<DESCRIPTOR_DIGEST_FROM_TOOL_DESCRIPTOR>",
+          "inputSchemaDigest": "<INPUT_SCHEMA_DIGEST_FROM_TOOL_DESCRIPTOR>",
+          "outputSchemaDigest": "<OUTPUT_SCHEMA_DIGEST_FROM_TOOL_DESCRIPTOR>",
+          "effectClass": "READ_ONLY",
+          "scope": "CUSTOMER_CONTEXT",
+          "maxCalls": 2
+        }
+      ]
+    }
+  },
+  "launchRequestTemplate": {
+    "catalogAgentId": "<CATALOG_AGENT_ID_FROM_CREATE>",
+    "catalogRevisionId": "<CATALOG_REVISION_ID_FROM_PUBLISH>",
+    "catalogDefinitionDigest": "<CATALOG_DEFINITION_DIGEST_FROM_PUBLISH>",
+    "requestId": "<NEW_SIMULATION_REQUEST_UUID>",
+    "instruction": "Consider your current situation and available observations, then decide your next action.",
+    "facts": {
+      "source": "customer-context",
+      "customerName": "Avery"
+    },
+    "initialAgentState": {
+      "preferences": {
+        "tone": "practical and polite"
+      }
+    },
+    "logicalTimeEpochMs": 1768435200000,
+    "logicalHorizonEpochMs": 1773532800000,
+    "partnerTargetAgentKey": "banking-advice",
+    "maxPartnerInteractions": 4,
+    "completionPolicy": {
+      "mode": "GOAL",
+      "goalIndex": 0,
+      "partnerResponseConditions": [
+        {
+          "pointer": "/schemaVersion",
+          "oneOf": [
+            "banking.statement-advice.response.v1"
+          ]
+        },
+        {
+          "pointer": "/decision",
+          "oneOf": [
+            "payment_due",
+            "no_payment_due"
+          ]
+        },
+        {
+          "pointer": "/bankingContext/subjectRef",
+          "oneOf": [
+            "customer-a"
+          ]
+        }
+      ],
+      "maxCustomerDecisions": 10,
+      "maxWallTimeMs": 600000,
+      "maxRepeatedExchanges": 3,
+      "requestFactBindings": []
+    },
+    "toolContexts": [
+      {
+        "bindingKey": "banking",
+        "contextRef": "<FRESH_BANK_CONTEXT_FOR_THIS_RUN>",
+        "subjectRef": "customer-a"
+      }
+    ],
+    "domain": {
+      "bindingKey": "banking-reference",
+      "toolContextBindingKey": "banking",
+      "personaConfiguration": {},
+      "workKinds": [
+        "credit_card_statement_close"
+      ],
+      "maxOperations": 16,
+      "seed": 42
+    }
+  }
+}

@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Banking statement advice response v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "decision",
+    "readOnly",
+    "message",
+    "missingFields",
+    "statement"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "banking.statement-advice.response.v1"
+    },
+    "decision": {
+      "type": "string",
+      "enum": [
+        "need_information",
+        "payment_due",
+        "no_payment_due"
+      ],
+      "description": "Classification derived from source statement availability and minimum payment, not a model-authored decision or an answer-quality assessment."
+    },
+    "readOnly": {
+      "type": "boolean",
+      "const": true
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "description": "Actual model-authored answer to the customer question using the provided bank records (or supplied legacy fields), returned without prose repair. A successful receipt does not prove the answer is factually correct."
+    },
+    "statementPeriod": {
+      "type": "string",
+      "minLength": 7,
+      "maxLength": 7,
+      "pattern": "^(?!0000)[0-9]{4}-(0[1-9]|1[0-2])$",
+      "description": "The requested closing month, echoed only for a bank-backed period selection. A returned statement must have statementEndDate in this month. need_information with an empty statement means no issued statement for the requested month was returned by the guarded bank lookup; it does not establish that the month is in the future."
+    },
+    "missingFields": {
+      "type": "array",
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "minimumAmountDue",
+          "currency",
+          "statementEndDate",
+          "dueDate"
+        ]
+      }
+    },
+    "statement": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The selected bank statement in backend mode, or supplied fields in legacy mode; no statement values are synthesized.",
+      "properties": {
+        "billId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "\\S"
+        },
+        "accountId": {
+          "type": [
+            "string",
+            "integer"
+          ],
+          "description": "Numeric IDs must fit I-JSON's exact integer range; larger identifiers are preserved as strings.",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "\\S",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "closingAmount": {
+          "type": [
+            "string",
+            "number"
+          ],
+          "maxLength": 40,
+          "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "minimumAmountDue": {
+          "type": [
+            "string",
+            "number"
+          ],
+          "maxLength": 40,
+          "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$"
+        },
+        "statementEndDate": {
+          "type": "string",
+          "format": "date",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "dueDate": {
+          "type": "string",
+          "format": "date",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        }
+      }
+    },
+    "bankingContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contextRef",
+        "subjectRef",
+        "version",
+        "logicalTimeEpochMs"
+      ],
+      "description": "Bank-owned state identity returned by the successful backend lookup. Absent in legacy supplied-statement mode.",
+      "properties": {
+        "contextRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+        },
+        "subjectRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "logicalTimeEpochMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 253402300799998
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "const": "need_information"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "missingFields": {
+            "minItems": 1
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "missingFields": {
+            "maxItems": 0
+          },
+          "statement": {
+            "required": [
+              "minimumAmountDue",
+              "currency",
+              "statementEndDate",
+              "dueDate"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

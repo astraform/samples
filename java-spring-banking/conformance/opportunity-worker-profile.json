@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "remote_domain_opportunity_worker_conformance_profile.v1",
+  "toolEffects": {
+    "get_product_list": "READ_ONLY",
+    "post_double_entry_transaction": "MUTATING"
+  },
+  "toolProbes": [
+    {
+      "toolName": "get_product_list",
+      "arguments": {}
+    },
+    {
+      "toolName": "post_double_entry_transaction",
+      "arguments": {
+        "debits": [
+          {
+            "accountName": "Everyday Saver",
+            "amount": 25
+          }
+        ],
+        "credits": [
+          {
+            "accountName": "Everyday Saver",
+            "amount": 25
+          }
+        ]
+      }
+    }
+  ],
+  "personaConfiguration": {
+    "initialAccounts": [
+      {
+        "accountId": "conformance-everyday-saver",
+        "name": "Everyday Saver",
+        "productCode": "TS001",
+        "productCategory": "TRANS_AND_SAVINGS_ACCOUNTS",
+        "balance": 1000,
+        "currency": "AUD"
+      }
+    ]
+  }
+}
