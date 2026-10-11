@@ -2,7 +2,7 @@
 
 This starter connects a real LLM customer in Astraform to a real LLM banking agent over A2A 1.0 JSON-RPC. The customer reads its own bank account through MCP; the partner agent reads the same bank backend through its banking API. Bank records live in this starter's separate PostgreSQL database. Astraform stores simulation state and evidence in its own database.
 
-This guide targets **Astraform Platform v0.2.0** and the **Python SDK 0.3.1** included in the agent image. You need the platform and starter archives, Docker and your model configuration; no private source checkout or host SDK installation is required. A package marked `localVerificationOnly` requires the recorded locally installed images and is an engineering rehearsal, not a public starter release.
+This guide targets **Astraform Platform v0.2.0** and the **Python SDK 0.3.2** included in the agent image. You need the platform and starter archives, Docker and your model configuration; no private source checkout or host SDK installation is required. A package marked `localVerificationOnly` requires the recorded locally installed images and is an engineering rehearsal, not a public starter release.
 
 ## What you will run
 
@@ -10,11 +10,11 @@ Avery has an already-issued January statement and a budget of AUD 100. The goal 
 
 `scenario.json` contains the persona, goal, initial bank seed, MCP tool allowance, completion conditions and execution limits. It is copied from the existing issued-statement example. Defaults permit four partner interactions, ten customer decisions, three repeated exchanges and ten minutes of wall time. The January statement is seeded before the customer is created; customer identities and tool access are bound by the SDK launch, not chosen by the LLM.
 
-Three prebuilt images run the bank, its PostgreSQL database and the banking agent. The agent image also contains the published Python SDK 0.3.1 and the launch/inspect/export helper. This is an evaluation sample; the banking agent reads current bank records per request and does not claim persistent conversation memory or implement real payment execution.
+Three prebuilt images run the bank, its PostgreSQL database and the banking agent. The agent image also contains the published Python SDK 0.3.2 and the launch/inspect/export helper. This is an evaluation sample; the banking agent reads current bank records per request and does not claim persistent conversation memory or implement real payment execution.
 
 ## Download and extract
 
-Use the starter archive and checksum supplied together for your selected release. Check before extracting:
+Select a published [Astraform Samples release](https://github.com/astraform/samples/releases) and download its banking starter archive and matching checksum. Samples share one repository version; each prepared starter is a separate asset, so you do not need to install the other examples. Check before extracting:
 
 ```sh
 shasum -a 256 -c astraform-banking-starter-VERSION.tar.gz.sha256
@@ -22,7 +22,7 @@ tar -xzf astraform-banking-starter-VERSION.tar.gz
 cd astraform-banking-starter-VERSION
 ```
 
-Replace `VERSION` with the downloaded starter version. On Linux, use `sha256sum -c` instead of `shasum -a 256 -c`. Keep `bundle-manifest.json`, `image-lock.json` and `release.env` with the extracted files: they identify the package contents and exact container images. The starter and platform are separate downloads and can have different version numbers.
+Replace `VERSION` with the version in the downloaded asset name (for example, `v0.1.0`). On Linux, use `sha256sum -c` instead of `shasum -a 256 -c`. Keep `bundle-manifest.json`, `image-lock.json` and `release.env` with the extracted files: they identify the package contents and exact container images. The starter and platform are separate downloads and can have different version numbers.
 
 Get the platform bundle from the [public v0.2.0 release](https://github.com/astraform/releases/releases/tag/v0.2.0) and follow its included guide to initialize it. Configure its customer model before continuing below.
 

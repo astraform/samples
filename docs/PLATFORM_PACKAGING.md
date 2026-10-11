@@ -34,8 +34,8 @@ per-user authentication, high availability or a production certification.
 
 - [Image-only Python banking starter](../deploy/banking-starter/README.md): a
   prepared starter archive with a separate bank database, LLM banking partner
-  and one customer scenario. Public publication is pending; use only assets
-  that appear on an actual release.
+  and one customer scenario. It is planned for the shared samples v0.1.0
+  release; use only assets that appear on an actual published release.
 - [Banking source guide](../banking-advice-agent/README.md): build the Java or
   Python bank and use the shared Banking Advice partner and SDK launcher.
 - [Marketing source guide](../integration/marketing-ops-a2a/README.md#native-customer-simulation):
@@ -150,13 +150,17 @@ it does not import your provider code or access its storage directly.
 
 ## Distribution and licenses
 
-The platform bundle is versioned independently from sample source and starter
-archives. The first banking starter targets platform **v0.2.0**, Python SDK
-**0.3.1** and contracts **1.2.0**. Java/marketing source examples are separate
-from that first downloadable archive. A locally prepared archive is not proof
-of public image access. Download sample starters from the
-[samples release list](https://github.com/astraform/samples/releases) and platform
-bundles from the separate [platform release list](https://github.com/astraform/releases/releases).
+All samples use one repository release version. A shared release contains the
+source for every example and separate starter archives for the examples packaged
+for deployment. Adding a language or framework does not create another release
+stream, and downloading one starter does not install the others.
+
+The first samples release, **v0.1.0**, includes a Python banking starter targeting
+platform **v0.2.0**, Python SDK **0.3.2** and contracts **1.2.0**. Java and marketing
+remain source examples in that release; they do not yet have starter archives.
+Download published starters from the [samples release list](https://github.com/astraform/samples/releases).
+The platform and SDKs are versioned independently; platform bundles are on the
+separate [platform release list](https://github.com/astraform/releases/releases).
 
 All Astraform-authored examples, configuration and documentation in this
 repository use [Apache License 2.0](../LICENSE); see [NOTICE](../NOTICE). The

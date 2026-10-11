@@ -19,11 +19,10 @@ FILES = {
         "compose.yaml", "init.py", "starter.sh", "README.md", "LICENSE", "NOTICE",
         "models/gemini.env.example", "models/ollama.env.example",
     )},
-    "RELEASE-NOTES.md": "docs/releases/banking-starter-v0.1.0.md",
     "bank-backend.input.schema.json": "banking-advice-agent/bank-backend.input.schema.json",
     "scenario.json": "banking-advice-agent/issued-statement-configuration.json",
 }
-COMPATIBILITY = {"platform": "0.2.0", "pythonSdk": "0.3.1", "contracts": "1.2.0"}
+COMPATIBILITY = {"platform": "0.2.0", "pythonSdk": "0.3.2", "contracts": "1.2.0"}
 IMAGE_VARIABLES = {"banking": "BANKING_IMAGE", "advice": "ADVICE_IMAGE", "postgres": "POSTGRES_IMAGE"}
 DIGEST_IMAGE = re.compile(r"[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}")
 TAGGED_IMAGE = re.compile(r"[a-z0-9][a-z0-9._:/-]*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}")
@@ -116,7 +115,8 @@ def package(version, images, output, local_verification=False, source_revision=N
                   and not image.startswith("sha256:"))
         require(pinned or (local_verification and tagged),
                 f"{name} must be digest-pinned; installed tags require --local-verification")
-    for filename, relative in FILES.items():
+    files = {**FILES, "RELEASE-NOTES.md": f"docs/releases/{version}.md"}
+    for filename, relative in files.items():
         source = ROOT / relative
         require(source.is_file() and not source.is_symlink() and source.resolve().is_relative_to(ROOT.resolve()),
                 f"Missing or unsafe starter source: {relative}")
@@ -131,7 +131,7 @@ def package(version, images, output, local_verification=False, source_revision=N
         staging = Path(directory)
         bundle = staging / bundle_name
         bundle.mkdir()
-        for filename, relative in FILES.items():
+        for filename, relative in files.items():
             target = bundle / filename
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / relative, target)

@@ -20,10 +20,12 @@ class BankingStarterPackageTest(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name) / "source"
-        for destination, relative in packager.FILES.items():
+        self.files = {**packager.FILES, "RELEASE-NOTES.md": "docs/releases/v0.1.0.md"}
+        for destination, relative in self.files.items():
             path = self.root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(destination + "\n")
+        (self.root / "docs/releases/v0.1.0-local.1.md").write_text("Local rehearsal notes\n")
         (self.root / "deploy/banking-starter/private.env").write_text("DO_NOT_DISTRIBUTE=secret\n")
         self.root_patch = patch.object(packager, "ROOT", self.root)
         self.root_patch.start()
@@ -54,11 +56,11 @@ class BankingStarterPackageTest(unittest.TestCase):
         manifest = json.loads((bundle / "bundle-manifest.json").read_text())
         self.assertNotIn("localVerificationOnly", manifest)
         self.assertEqual(self.source_revision, manifest["sourceRevision"])
-        self.assertEqual({"platform": "0.2.0", "pythonSdk": "0.3.1", "contracts": "1.2.0"},
+        self.assertEqual({"platform": "0.2.0", "pythonSdk": "0.3.2", "contracts": "1.2.0"},
                          manifest["compatibility"])
         self.assertEqual(self.images, json.loads((bundle / "image-lock.json").read_text()))
         self.assertEqual("scenario.json\n", (bundle / "scenario.json").read_text())
-        self.assertEqual(set(packager.FILES) | {"image-lock.json", "release.env"}, set(manifest["files"]))
+        self.assertEqual(set(self.files) | {"image-lock.json", "release.env"}, set(manifest["files"]))
         for name, metadata in manifest["files"].items():
             self.assertEqual(hashlib.sha256((bundle / name).read_bytes()).hexdigest(), metadata["sha256"])
         self.assertIn("BANKING_IMAGE=" + self.images["banking"], (bundle / "release.env").read_text())
@@ -87,7 +89,7 @@ class BankingStarterPackageTest(unittest.TestCase):
     def test_archive_is_reproducible_across_source_mtime_and_permission_changes(self):
         with patch.object(packager.subprocess, "check_output", side_effect=self.registry):
             bundle = packager.package("v0.1.0", self.images, self.output, source_revision=self.source_revision)
-            for relative in packager.FILES.values():
+            for relative in self.files.values():
                 path = self.root / relative
                 os.utime(path, (1800000000, 1800000000))
                 path.chmod(0o600)

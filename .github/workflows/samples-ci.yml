@@ -193,7 +193,7 @@ jobs:
     if: >-
       ${{
         github.event_name == 'workflow_dispatch'
-        && github.ref_type == 'tag'
+        && (github.ref == 'refs/heads/main' || github.ref_type == 'tag')
         && (inputs.publish_images == true || inputs.publish_images == 'true')
       }}
     runs-on: ubuntu-24.04
@@ -212,15 +212,17 @@ jobs:
       - name: Resolve image tag
         id: image-tag
         run: |
-          tag="${GITHUB_REF_NAME}"
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            if [[ "${GITHUB_REF}" != "refs/tags/${tag}" ]]; then
-              echo "Manual image publication must run from the exact existing tag ref." >&2
+          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Image publication needs an exact source commit." >&2
               exit 1
             fi
-          fi
-          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
-            echo "image_tag must be an immutable vMAJOR.MINOR.PATCH release tag" >&2
+            tag="sha-${GITHUB_SHA}"
+          elif [[ "${GITHUB_REF}" == "refs/tags/${GITHUB_REF_NAME}" \
+                  && "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            echo "Publish images from main or an immutable vMAJOR.MINOR.PATCH tag." >&2
             exit 1
           fi
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
@@ -289,6 +291,7 @@ jobs:
           provenance: mode=max
           sbom: true
           tags: ${{ steps.java-candidate.outputs.tag }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Promote immutable Java manifest
         if: ${{ steps.image-selection.outputs.java == 'true' }}
@@ -329,6 +332,7 @@ jobs:
           provenance: mode=max
           sbom: true
           tags: ${{ steps.marketing-candidate.outputs.tag }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Promote immutable Marketing Ops manifest
         if: ${{ steps.image-selection.outputs.marketing == 'true' }}
@@ -558,3 +562,4 @@ jobs:
           scripts.tests.test_banking_remote_provider_parity
           scripts.tests.test_samples_ci_workflow
           scripts.tests.test_banking_starter_package
+          scripts.tests.test_samples_release

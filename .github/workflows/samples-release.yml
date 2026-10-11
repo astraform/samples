@@ -1,0 +1,75 @@
+name: Publish Samples Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the reviewed samples release; leave unchecked for a dry run"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: samples-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare shared samples release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.12"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          version: v0.35.0
+          driver: docker
+          use: false
+      - name: Require main when publishing
+        if: ${{ inputs.publish }}
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Run publication from main; other branches support dry runs only." >&2
+            exit 1
+          fi
+      - name: Reproduce the reviewed starter assets
+        run: python3 scripts/release-samples.py prepare --directory "$RUNNER_TEMP/samples-release"
+      - name: Save the candidate for review
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: samples-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/samples-release/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Record the publication boundary
+        run: |
+          printf '%s\n' 'Prepared from release.json. This job does not build images, create tags or publish a release.' >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish one samples release
+    if: ${{ inputs.publish && github.ref == 'refs/heads/main' }}
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: samples-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/samples-release
+      - name: Upload, verify and publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release-samples.py publish --directory "$RUNNER_TEMP/samples-release"
