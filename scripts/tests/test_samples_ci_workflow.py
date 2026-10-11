@@ -40,7 +40,7 @@ class SamplesCiWorkflowTest(unittest.TestCase):
             output.seek(0)
             return result, output.read().decode("utf-8")
 
-    def test_manual_publication_is_explicit_and_tag_bound(self):
+    def test_manual_publication_uses_an_exact_source_identity(self):
         triggers = self.workflow.get("on", self.workflow.get(True))
         inputs = triggers["workflow_dispatch"]["inputs"]
         selectors = (
@@ -57,14 +57,14 @@ class SamplesCiWorkflowTest(unittest.TestCase):
         self.assertEqual(
             job_condition,
             "${{ github.event_name == 'workflow_dispatch' "
-            "&& github.ref_type == 'tag' "
+            "&& (github.ref == 'refs/heads/main' || github.ref_type == 'tag') "
             "&& (inputs.publish_images == true "
             "|| inputs.publish_images == 'true') }}",
         )
 
         tag_step = self.step("Resolve image tag")["run"]
         self.assertIn('tag="${GITHUB_REF_NAME}"', tag_step)
-        self.assertIn('"refs/tags/${tag}"', tag_step)
+        self.assertIn('"refs/tags/${GITHUB_REF_NAME}"', tag_step)
         self.assertNotIn("INPUT_IMAGE_TAG", tag_step)
         self.assertIn("^v[0-9]+", tag_step)
 
@@ -78,15 +78,22 @@ class SamplesCiWorkflowTest(unittest.TestCase):
         )
         self.assertEqual(tag_result.returncode, 0, tag_result.stderr)
         self.assertEqual(tag_output, "tag=v0.2.0\n")
-        branch_result, _ = self.run_step(
+        branch_result, branch_output = self.run_step(
             "Resolve image tag",
             {
                 "GITHUB_EVENT_NAME": "workflow_dispatch",
                 "GITHUB_REF": "refs/heads/main",
                 "GITHUB_REF_NAME": "main",
+                "GITHUB_SHA": "a" * 40,
             },
         )
-        self.assertNotEqual(branch_result.returncode, 0)
+        self.assertEqual(branch_result.returncode, 0, branch_result.stderr)
+        self.assertEqual(branch_output, "tag=sha-" + "a" * 40 + "\n")
+        other_branch, _ = self.run_step("Resolve image tag", {
+            "GITHUB_REF": "refs/heads/feature/example", "GITHUB_REF_NAME": "feature/example",
+            "GITHUB_SHA": "a" * 40,
+        })
+        self.assertNotEqual(other_branch.returncode, 0)
 
         banking_selection, banking_selection_output = self.run_step(
             "Resolve image selection",
@@ -349,7 +356,7 @@ else:
                         FAKE_DOCKER_SCENARIO="absent",
                         DIGEST=f"sha256:{source_digest}",
                         REPOSITORY=values["repository"],
-                        TAG="v0.2.0",
+                        TAG="sha-" + "a" * 40,
                         GITHUB_STEP_SUMMARY=str(directory_path / "summary"),
                     )
                     result = subprocess.run(
@@ -364,7 +371,7 @@ else:
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertIn(
-                        f"imagetools create --tag ghcr.io/astraform/{image}:v0.2.0 "
+                        f"imagetools create --tag ghcr.io/astraform/{image}:sha-{'a' * 40} "
                         f"ghcr.io/astraform/{image}@sha256:{source_digest}",
                         log_path.read_text(encoding="utf-8"),
                     )

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 IMAGE="${1:?image name is required}"
-TAG="${2:?immutable release tag is required}"
+TAG="${2:?immutable image tag is required}"
 shift 2
 references=("$@")
 
@@ -11,8 +11,9 @@ if [[ ! "${IMAGE}" =~ ^[a-z0-9][a-z0-9._-]*$ ]]; then
   echo "Image name is invalid." >&2
   exit 1
 fi
-if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
-  echo "The immutable release tag must match vMAJOR.MINOR.PATCH." >&2
+if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$ \
+      && ! "${TAG}" =~ ^sha-[0-9a-f]{40}$ ]]; then
+  echo "The immutable release tag must match vMAJOR.MINOR.PATCH or sha-<full commit>." >&2
   exit 1
 fi
 if [[ "${#references[@]}" -eq 0 ]]; then

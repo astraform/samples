@@ -16,7 +16,7 @@ cd samples
 
 | Start here | What it runs |
 | --- | --- |
-| [Python banking starter](deploy/banking-starter/README.md) | An image-only deployment with a separate bank database, an LLM banking partner and one customer asking about an issued statement. The starter archive is prepared; public release is still pending. |
+| [Python banking starter](deploy/banking-starter/README.md) | An image-only deployment with a separate bank database, an LLM banking partner and one customer asking about an issued statement. Included as a starter archive in the planned repository release v0.1.0; publication is pending. |
 | [Banking from sample source](banking-advice-agent/README.md) | Build either the Java or Python bank, configure the shared LLM banking partner and run the customer through the published SDK. Includes fixed-statement and monthly-statement configurations. |
 | [Marketing from sample source](integration/marketing-ops-a2a/README.md#native-customer-simulation) | Build the Marketing Ops provider and LLM Creative Agency, configure their connections and launch a customer seeking campaign advice. |
 
@@ -107,17 +107,24 @@ model and how to replace a sample with your own agent or domain service.
 
 ## Releases
 
-Download published sample starters from [this repository's releases](https://github.com/astraform/samples/releases).
-Platform deployment bundles are distributed separately through
-[astraform/releases](https://github.com/astraform/releases/releases). Only treat
-an archive or image as available after its release has been published; a prepared
-workflow or passing CI is not a download. The first Python banking starter targets platform v0.2.0
-and Python SDK 0.3.1. A downloadable Java or marketing starter is not included
-in that first banking archive; their source guides remain separate.
+All examples share one repository release version, such as **v0.1.0**. Each
+[release](https://github.com/astraform/samples/releases) provides the source for
+all examples and any prepared starter archives. Choose the domain/language you
+need; you do not need to install all samples.
 
-Maintainers can use the [publication instructions](docs/PUBLICATION_CHECKLIST.md).
-A source tag runs verification; image publication is a separate manual workflow
-with explicit image selections.
+The first release is being prepared with the Python banking starter archive and
+checksum. Java, marketing and the other examples are available as source; they
+do not yet have downloadable starter archives. The banking starter targets
+platform **v0.2.0**, Python SDK **0.3.2** and contracts **1.2.0**.
+
+Platform deployment bundles remain in [astraform/releases](https://github.com/astraform/releases/releases).
+Platform and SDK versions are independent of the samples version. Only download
+assets after their release is published; passing CI is not publication.
+
+See the [changelog](CHANGELOG.md), [v0.1.0 release notes](docs/releases/v0.1.0.md)
+and [maintainer publication instructions](docs/PUBLICATION_CHECKLIST.md). One
+**Publish Samples Release** workflow prepares or publishes the repository release.
+Image publication is separate and is needed only when images change.
 
 ## Example data
 
