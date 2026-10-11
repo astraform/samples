@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -41,7 +41,7 @@ wheels = [
 
 [[package]]
 name = "astraform-remote-domain-author-kit"
-version = "0.3.1"
+version = "0.3.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jsonschema" },
@@ -50,9 +50,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6c/a0/7d4a02ebdf7479f3500740e5394af8f33826b5dc02cf684ce2a93bd0c389/astraform_remote_domain_author_kit-0.3.1.tar.gz", hash = "sha256:3370fae9bce41602b05c14331631ee2bfcd621b8a7bd2600d6686200ad0cca7a", size = 157907, upload-time = "2026-10-07T04:24:47.799Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c0/59/62c185b26bc4207c9adf59bc5413c0c59186ce067801c35b32498e06c27d/astraform_remote_domain_author_kit-0.3.2.tar.gz", hash = "sha256:f9526c05364c2b4970ce550f09a615ac48c736bdf030cad332b60a5db9c2d17e", size = 159437, upload-time = "2026-10-11T07:41:12.67Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/33/34/7a578d82ce3cdf0b778f20250a3f9fda9cb5a1e379b19ba7d4f081d32fbb/astraform_remote_domain_author_kit-0.3.1-py3-none-any.whl", hash = "sha256:a949e1a9c786426169a1a75d938e3de2e5be00a2bd72d4fe8226a5aca6ccf5fd", size = 296854, upload-time = "2026-10-07T04:24:46.003Z" },
+    { url = "https://files.pythonhosted.org/packages/e3/b9/7719c70de2fee7ba2218573b44852a92148fd0e3bd7bc3dfbe698fa22b5e/astraform_remote_domain_author_kit-0.3.2-py3-none-any.whl", hash = "sha256:b7a66c86331584806f18d4759e57d949382aeae91cdc57f0128c92677ea64162", size = 297005, upload-time = "2026-10-11T07:41:11.037Z" },
 ]
 
 [package.optional-dependencies]
@@ -100,7 +100,7 @@ release = [
 
 [package.metadata]
 requires-dist = [
-    { name = "astraform-remote-domain-author-kit", extras = ["fastapi"], specifier = "==0.3.1" },
+    { name = "astraform-remote-domain-author-kit", extras = ["fastapi"], specifier = "==0.3.2" },
     { name = "fastapi", specifier = ">=0.115,<1.0" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.28,<1.0" },
     { name = "mcp", specifier = ">=1.26,<2" },

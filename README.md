@@ -90,8 +90,8 @@ Each author kit includes both integration directions: domain interfaces for
 Astraform to call your provider, and a platform client for configuring customers,
 launching simulations and retrieving results. Use:
 
-- Java: [`ai.astraform:remote-domain-author-kit-java:0.4.1`](https://central.sonatype.com/artifact/ai.astraform/remote-domain-author-kit-java/0.4.1), with Java 21 and Maven 3.9+ for these samples.
-- Python: [`astraform-remote-domain-author-kit==0.3.1`](https://pypi.org/project/astraform-remote-domain-author-kit/0.3.1/), with Python 3.12+ and the module's committed `uv.lock`.
+- Java: [`ai.astraform:remote-domain-author-kit-java:0.4.2`](https://central.sonatype.com/artifact/ai.astraform/remote-domain-author-kit-java/0.4.2), with Java 21 and Maven 3.9+ for these samples.
+- Python: [`astraform-remote-domain-author-kit==0.3.2`](https://pypi.org/project/astraform-remote-domain-author-kit/0.3.2/), with Python 3.12+ and the module's committed `uv.lock`.
 - Public [contracts 1.2.0](https://github.com/astraform/remote-domain-contracts/releases/tag/v1.2.0), covering both platform and domain-provider APIs.
 
 The Java modules resolve the SDK from Maven Central; Python resolves it from

@@ -1,7 +1,7 @@
 # Python FastAPI Banking Remote Domain
 
 Python banking reference implementation for `remote-domain.v1`, using published
-Python author kit `0.3.1` and shared contract bundle `1.2.0`. The locked SDK comes from
+Python author kit `0.3.2` and shared contract bundle `1.2.0`. The locked SDK comes from
 PyPI; this sample does not require an editable checkout of the SDK or access
 to Astraform's platform source. Use the public
 [platform v0.2.0 bundle](https://github.com/astraform/releases/releases/tag/v0.2.0)
@@ -88,7 +88,7 @@ the bank URL and the deployment's MCP/domain/A2A bindings. The
 [Python endpoint setup](../banking-advice-agent/README.md#python-banking-endpoint-bindings)
 provides the complete binding properties and matching partner startup command.
 The setup helper uses the platform client included in the existing Astraform author
-kit, alongside domain authoring. Both are included in the published `0.3.1` author kit used by
+kit, alongside domain authoring. Both are included in the published `0.3.2` author kit used by
 this sample's registry-resolved lock. Conformance remains separate validation
 tooling. See [SDK dependency setup](../README.md#sdk-development).
 
@@ -235,15 +235,20 @@ skipped. CI supplies its own PostgreSQL service and runs these checks.
 
 Schema-backed conformance run:
 
-The author kit and conformance SDK `0.3.1` packages are published on PyPI.
+The author kit and conformance SDK `0.3.2` packages are published on PyPI.
+The source installation below uses those versions. Prebuilt images and starter
+archives retain the SDK versions recorded in their image and release metadata;
+a new image must be built from updated source to include SDK `0.3.2`. Record the
+running provider's source revision or image digest separately from the
+conformance tool version.
 
 ```bash
 cd python-fastapi-banking
 python3 -m venv .venv-conformance
 . .venv-conformance/bin/activate
 pip install -e '.[test]'
-pip install 'astraform-remote-domain-conformance==0.3.1'
-# Start the exact image by digest on localhost:8092 before running this command.
+pip install 'astraform-remote-domain-conformance==0.3.2'
+# Start the selected provider image by its actual digest on localhost:8092.
 mkdir -p build
 remote-domain-conformance \
   --base-url http://127.0.0.1:8092 \

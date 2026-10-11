@@ -171,18 +171,18 @@ new runs; existing runs retain their accepted binding revisions and configuratio
 ### Launch and inspect
 
 The helper uses the platform client included in the published **Astraform Python
-author kit 0.3.1**. Install it in a Python 3.12+ virtual environment. From the
+author kit 0.3.2**. Install it in a Python 3.12+ virtual environment. From the
 sample repository root:
 
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-python3 -m pip install 'astraform-remote-domain-author-kit==0.3.1'
+python3 -m pip install 'astraform-remote-domain-author-kit==0.3.2'
 ASTRAFORM_API_BASE=http://localhost:8084 \
   python3 integration/marketing-ops-a2a/run-customer.py
 ```
 
-The provider uses Java author-kit/conformance **0.4.1** from Maven Central.
+The provider uses Java author-kit/conformance **0.4.2** from Maven Central.
 Both SDKs use shared contract **1.2.0**. No SDK checkout or local wheel build is
 needed; see the [SDK dependencies](../../README.md#sdk-development).
 
