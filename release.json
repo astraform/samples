@@ -1,18 +1,18 @@
 {
   "version": "v0.1.0",
-  "publicationReady": false,
+  "publicationReady": true,
   "starters": [
     {
       "name": "python-banking",
-      "packagingRevision": "0e3300047f4ab649582fbe247a45f19826b59bbe",
-      "sourceRevision": "bd56bbd46c6f6e5371a29cdbef3443e8c4ac723c",
+      "packagingRevision": "8cfcb2cf3ddaf305124005acdc846ca1895713da",
+      "sourceRevision": "8cfcb2cf3ddaf305124005acdc846ca1895713da",
       "packager": "scripts/package-banking-starter.py",
       "images": {
-        "advice": "ghcr.io/astraform/banking-starter-advice@sha256:fad876048211fbab5176e25f71cbf6b8521b644246d92dbb43484c08cc8cd545",
-        "banking": "ghcr.io/astraform/banking-starter-bank@sha256:1c4cc8b0e67463852779926add1ddd14e28edd8987096e02ba2eff48e52ad4c5",
+        "advice": "ghcr.io/astraform/banking-starter-advice@sha256:1107d42501d1e76ba66ce3b67c7fcff5dcb97595b5da25a7d8b600092c8ae7a4",
+        "banking": "ghcr.io/astraform/banking-starter-bank@sha256:a49f3d100c8d1102dbe0e5d51c8404228072f1b4e1beb36bcdbd3726a2b5a04b",
         "postgres": "postgres@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d"
       },
-      "archiveSha256": "c72d7e7288cda907355a62a70708e0275dcffb732be502cabc35152bfacb4f60"
+      "archiveSha256": "70afe9cf66db3fe7485aef7b40b33d862345601a9b9804765fa286ef1d593f2d"
     }
   ]
 }
