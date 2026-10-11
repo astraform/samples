@@ -46,7 +46,7 @@ per-user authentication, high availability or a production certification.
   your scenario needs them.
 
 Each sample service uses published dependencies. The Java providers use author
-kit **0.4.1**; the Python bank and launch clients use author kit **0.3.1**; both
+kit **0.4.2**; the Python bank and launch clients use author kit **0.3.2**; both
 use public contracts **1.2.0**. The author kits include the platform client and
 domain authoring interfaces. No second platform-client SDK or platform checkout
 is required. Follow the module README for its build and runtime requirements.

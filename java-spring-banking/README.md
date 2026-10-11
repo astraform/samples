@@ -2,7 +2,7 @@
 
 Standalone Java/Spring reference provider for `remote-domain.v1`.
 
-The provider uses published [Java SDK 0.4.1](https://github.com/astraform/remote-domain-sdk-java/releases/tag/v0.4.1)
+The provider uses published [Java SDK 0.4.2](https://central.sonatype.com/artifact/ai.astraform/remote-domain-author-kit-java/0.4.2)
 and [contract bundle 1.2.0](https://github.com/astraform/remote-domain-contracts/releases/tag/v1.2.0).
 Its existing SDK controller delegates banking operations to
 `BankingRemoteDomainService`; the SDK supplies the protocol models, manifest
@@ -266,8 +266,8 @@ this policy alone does not make the customer act.
 - Maven 3.9+
 - Spring Boot `4.1.0`
 - Native Jackson 3
-- `ai.astraform:remote-domain-author-kit-java:0.4.1`
-- `ai.astraform:remote-domain-conformance-java:0.4.1` (test dependency)
+- `ai.astraform:remote-domain-author-kit-java:0.4.2`
+- `ai.astraform:remote-domain-conformance-java:0.4.2` (test dependency)
 
 Both SDK dependencies share `remote-domain.sdk.version` in `pom.xml` and resolve
 from Maven Central. Building the SDK from a sibling checkout is unnecessary.
@@ -431,7 +431,7 @@ banking actions. Native calls pin `X-Astraform-Expected-Provider-Revision` and
 verify the echoed `X-Astraform-Provider-Revision` as well as manifest identity.
 
 The [released checkpoint profile](https://github.com/astraform/remote-domain-contracts/blob/v1.2.0/remote-domain/v1/profiles/native-state-transform/README.md)
-and its tool schema are included in Java SDK 0.4.1. The sample uses the SDK's
+and its tool schema are included in Java SDK 0.4.2. The sample uses the SDK's
 `nativeStateTransform(...)` and `readOnlyCustomerTool(...)` builders through the
 SDK controller.
 The existing conformance test covers the default legacy configuration. Validate

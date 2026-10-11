@@ -51,9 +51,9 @@ database. It starts before the first statement exists. This is a bounded monthly
 not evidence of years of simulation or 1,000-customer capacity. The older
 snapshot-based provider profile remains separate.
 
-The Java bank provider uses published [Java SDK 0.4.1 from Maven Central](https://central.sonatype.com/artifact/ai.astraform/remote-domain-author-kit-java/0.4.1).
+The Java bank provider uses published [Java SDK 0.4.2 from Maven Central](https://central.sonatype.com/artifact/ai.astraform/remote-domain-author-kit-java/0.4.2).
 The Python bank provider and this scenario's launch helper use published
-[Python author kit 0.3.1](https://pypi.org/project/astraform-remote-domain-author-kit/0.3.1/).
+[Python author kit 0.3.2](https://pypi.org/project/astraform-remote-domain-author-kit/0.3.2/).
 Both SDKs use [shared contract 1.2.0](https://github.com/astraform/remote-domain-contracts/releases/tag/v1.2.0)
 and include domain helpers plus the platform client. Customer account reads use
 the bank's MCP endpoint; this separately running partner agent uses A2A plus
@@ -350,7 +350,7 @@ provides domain authoring; the bank seed still uses the partner's own HTTP API.
 Install the published author kit in the launcher's Python 3.12+ virtual environment:
 
 ```bash
-python3 -m pip install 'astraform-remote-domain-author-kit==0.3.1'
+python3 -m pip install 'astraform-remote-domain-author-kit==0.3.2'
 ```
 
 No SDK source checkout or locally built wheel is needed. The Python bank installs
