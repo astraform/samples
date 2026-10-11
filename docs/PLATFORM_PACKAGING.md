@@ -154,8 +154,9 @@ The platform bundle is versioned independently from sample source and starter
 archives. The first banking starter targets platform **v0.2.0**, Python SDK
 **0.3.1** and contracts **1.2.0**. Java/marketing source examples are separate
 from that first downloadable archive. A locally prepared archive is not proof
-of public image access; select releases from the
-[public release list](https://github.com/astraform/releases/releases).
+of public image access. Download sample starters from the
+[samples release list](https://github.com/astraform/samples/releases) and platform
+bundles from the separate [platform release list](https://github.com/astraform/releases/releases).
 
 All Astraform-authored examples, configuration and documentation in this
 repository use [Apache License 2.0](../LICENSE); see [NOTICE](../NOTICE). The

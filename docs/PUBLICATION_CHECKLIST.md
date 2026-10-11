@@ -70,12 +70,28 @@ model decisions; a successful command is not evidence of an achieved goal.
 Remove only trial-owned containers and temporary resources after saving evidence.
 
 After approval, publish the exact reviewed archive/checksum/notes to
-[`astraform/releases`](https://github.com/astraform/releases) using tag
-`banking-v0.1.0`, with **latest release disabled** so the platform remains the
-default download. Never silently replace a published asset. Verify anonymous
+[`astraform/samples`](https://github.com/astraform/samples) using tag
+`banking-v0.1.0` on a reviewed public samples commit. Keep this starter-specific
+release unmarked as latest and use its explicit version link. Platform bundles
+remain in the separate `astraform/releases` repository. Never silently replace a published asset. Verify anonymous
 downloads before enabling website links. See the
 [starter release notes](releases/banking-starter-v0.1.0.md) and
 [starter operating guide](../deploy/banking-starter/README.md).
+
+## First banking bundle after the public-repository cutover
+
+The already-verified v0.1.0 archive preserves the source revision and image
+identities from its original build. All eleven packaged source inputs match the
+clean public repository's initial snapshot byte-for-byte. Publish the archive
+and checksum unchanged, and explain that provenance in the release notes.
+The release tag must reference reviewed public history; do not import historical
+private commits or relabel the archive's source revision or image metadata.
+
+The `banking-v0.1.0` tag identifies the starter download. It does not trigger the
+`v*` source/image verification path or publish new images. Do not rerun
+**Prepare Banking Starter** on a new public commit with the old image digests:
+its source-revision check will correctly reject that mismatch. Subsequent builds
+should use images and packaging from the same public source revision.
 
 ## Public content
 

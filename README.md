@@ -107,10 +107,11 @@ model and how to replace a sample with your own agent or domain service.
 
 ## Releases
 
-The [public releases repository](https://github.com/astraform/releases/releases)
-contains published deployment downloads. Only treat an archive or image as
-available after its release has been published; a prepared workflow or passing
-CI is not a download. The first Python banking starter targets platform v0.2.0
+Download published sample starters from [this repository's releases](https://github.com/astraform/samples/releases).
+Platform deployment bundles are distributed separately through
+[astraform/releases](https://github.com/astraform/releases/releases). Only treat
+an archive or image as available after its release has been published; a prepared
+workflow or passing CI is not a download. The first Python banking starter targets platform v0.2.0
 and Python SDK 0.3.1. A downloadable Java or marketing starter is not included
 in that first banking archive; their source guides remain separate.
 
