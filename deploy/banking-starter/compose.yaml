@@ -27,6 +27,13 @@ services:
       BANKING_BACKEND_ENABLED: "true"
       BANKING_BACKEND_DATABASE_URL: postgresql://banking:${BANKING_DB_PASSWORD}@bank-db:5432/banking
       BANKING_BACKEND_MAX_POOL_SIZE: "8"
+      # Java consumes the JDBC fields; Python consumes the URL above.
+      BANKING_DB_URL: jdbc:postgresql://bank-db:5432/banking
+      BANKING_DB_USERNAME: banking
+      BANKING_DB_PASSWORD: ${BANKING_DB_PASSWORD}
+      SERVER_PORT: ${BANKING_SERVICE_PORT:-8092}
+      ASTRAFORM_NATIVE_SIMULATION_ENABLED: ${BANKING_NATIVE_ENABLED:-false}
+      ASTRAFORM_NATIVE_SIMULATION_PROFILE: remote-domain.native-reference-state.v1
     networks:
       bank: {}
       platform:
@@ -39,7 +46,7 @@ services:
         condition: service_healthy
     environment:
       BANKING_ADVICE_AGENT_URL: http://${COMPOSE_PROJECT_NAME}-advice:8099
-      BANKING_BACKEND_URL: http://${COMPOSE_PROJECT_NAME}-bank:8092
+      BANKING_BACKEND_URL: http://${COMPOSE_PROJECT_NAME}-bank:${BANKING_SERVICE_PORT:-8092}
       BANKING_CUSTOMER_BINDING_KEY: banking
       BANKING_LLM_BASE_URL: ${BANKING_LLM_BASE_URL:?Configure private/partner.env}
       BANKING_LLM_MODEL: ${BANKING_LLM_MODEL:?Configure private/partner.env}
@@ -48,6 +55,7 @@ services:
       BANKING_LLM_API_KEY: ${BANKING_LLM_API_KEY:-}
       BANKING_LLM_TIMEOUT_SECONDS: ${BANKING_LLM_TIMEOUT_SECONDS:-120}
       BANKING_LLM_MAX_OUTPUT_TOKENS: ${BANKING_LLM_MAX_OUTPUT_TOKENS:-2048}
+      BANKING_LLM_TEMPERATURE: ${BANKING_LLM_TEMPERATURE:-0}
       BANKING_LLM_REASONING_EFFORT: ${BANKING_LLM_REASONING_EFFORT:-}
       BANKING_LLM_MAX_CONCURRENCY: ${BANKING_LLM_MAX_CONCURRENCY:-1}
     extra_hosts:
@@ -64,7 +72,7 @@ services:
     user: "${LOCAL_UID:?Run python3 init.py first}:${LOCAL_GID:?Run python3 init.py first}"
     environment:
       ASTRAFORM_API_BASE: http://dashboard:8084
-      BANKING_BACKEND_URL: http://${COMPOSE_PROJECT_NAME}-bank:8092
+      BANKING_BACKEND_URL: http://${COMPOSE_PROJECT_NAME}-bank:${BANKING_SERVICE_PORT:-8092}
       BANKING_SAMPLE_FILE: /scenario.json
       BANKING_CUSTOMER_BINDING_KEY: banking
       BANKING_PARTNER_TARGET_AGENT_KEY: banking-advice

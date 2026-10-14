@@ -1,14 +1,16 @@
-# Python banking starter
+# Banking starter
 
 This starter connects a real LLM customer in Astraform to a real LLM banking agent over A2A 1.0 JSON-RPC. The customer reads its own bank account through MCP; the partner agent reads the same bank backend through its banking API. Bank records live in this starter's separate PostgreSQL database. Astraform stores simulation state and evidence in its own database.
 
 This guide targets **Astraform Platform v0.2.0** and the **Python SDK 0.3.2** included in the agent image. You need the platform and starter archives, Docker and your model configuration; no private source checkout or host SDK installation is required. A package marked `localVerificationOnly` requires the recorded locally installed images and is an engineering rehearsal, not a public starter release.
 
+The updated local source scenario opts into `completionPolicy.requireCustomerFinish: true`. This requires the locally updated Experiment service and prerelease API contract; published platform v0.2.0 does not implement it. Publication locks and SDK 0.3.2 remain unchanged. Use the recorded local images for this completion correction rather than treating a public v0.2.0 download as compatible with the new opt-in.
+
 ## What you will run
 
 Avery has an already-issued January statement and a budget of AUD 100. The goal is to understand the payment amount, due date and whether the budget covers the minimum or full balance. The customer chooses what to ask and whether to continue. This first example uses fixed bank data; it does not demonstrate monthly statement generation or partner-time progression.
 
-`scenario.json` contains the persona, goal, initial bank seed, MCP tool allowance, completion conditions and execution limits. It is copied from the existing issued-statement example. Defaults permit four partner interactions, ten customer decisions, three repeated exchanges and ten minutes of wall time. The January statement is seeded before the customer is created; customer identities and tool access are bound by the SDK launch, not chosen by the LLM.
+`scenario.json` contains the persona, goal, initial bank seed, MCP tool allowance, completion conditions and execution limits. It is copied from the existing issued-statement example. The issued-statement defaults permit four partner interactions, ten customer decisions, three repeated exchanges and two hours of wall time. The January statement is seeded before the customer is created; customer identities and tool access are bound by the SDK launch, not chosen by the LLM.
 
 Three prebuilt images run the bank, its PostgreSQL database and the banking agent. The agent image also contains the published Python SDK 0.3.2 and the launch/inspect/export helper. This is an evaluation sample; the banking agent reads current bank records per request and does not claim persistent conversation memory or implement real payment execution.
 
@@ -64,7 +66,11 @@ If Runtime was already running when you initialized the starter, recreate it to 
 ./astraform.sh up -d --force-recreate --wait agent-runtime
 ```
 
-The starter initializer sets an A2A timeout of 150 seconds for Gemini or 650 seconds for Ollama. The partner request timeout is 120 or 600 seconds respectively. These connection settings are separate from the customer's model timeout and the scenario's ten-minute wall-time limit. Adjust all relevant limits for a slow local model rather than assuming a longer HTTP timeout extends the simulation.
+The starter initializer keeps Gemini at a 150-second A2A request timeout and a 120-second partner deadline. The local Ollama thinking preset uses a finite 840-second partner deadline inside 900-second A2A request and poll deadlines, with a 32,768-token generated output ceiling. Initialization refuses an existing request timeout, and for Ollama also an existing poll timeout, so it preserves private configuration. These limits are separate from the customer model and the scenario's two-hour wall-time limit (7,200,000 ms). A longer HTTP timeout does not itself extend the simulation.
+
+The local source Ollama partner preset enables thinking with `BANKING_LLM_REASONING_EFFORT=high`, uses temperature `1.0`, and identifies the configuration as `banking-starter-qwen35-4b-thinking-v8`. To adopt it, build `advice` from the updated source and update both `BANKING_LLM_BINDING_REVISION` and the platform Runtime target's `simulation.event.runtime.a2a.targets.banking-advice.binding-revision`. Review the partner configuration, recreate `advice` and `agent-runtime`, then use a fresh run. Existing published images and private profiles retain their original provenance. The partner bounds the whole upstream response, including reasoning, to 1 MiB and returns only the original final answer (at most 4,096 characters). Thinking does not prove factual accuracy; check the actual answer against its bank records.
+
+The local Ollama customer preset in the platform source enables `AI_CHAT_THINK=true`, context 65,536, output ceiling 32,768, `AI_RESPONSE_TIMEOUT=840s`, `AGENT_RUNTIME_MODEL_INVOCATION_TIMEOUT=900s` and temperature `1.0`. Its bundle binding revision is `partner-ollama-qwen35-4b-thinking-v3`; the development profile is `dev-ollama-qwen35-4b-64k-thinking-v6`. Existing archives and initialized profiles retain their original values: update `private/model.env` and `AI_BINDING_REVISION` explicitly before recreating Runtime and launching a fresh run. Both agents still use `qwen3.5:4b`. The partner uses Ollama's OpenAI-compatible API, which cannot set context per request; its server/model configuration must allow 65,536 tokens so the request input plus generation ceiling fits. Check the existing server context before testing; a new model alias or server restart is unnecessary when that context is already configured. See [Ollama context configuration](https://docs.ollama.com/api/openai-compatibility#setting-the-local-context-size). The advice business prompt, date guards, source facts and response schema are unchanged by the thinking settings. It compares a customer-stated budget with issued minimum and closing debt while distinguishing arithmetic from future posting, fees and payment allocation. The budget remains self-reported; no payment is made or presumed. Initialization preserves existing private profiles and accepted runs. Truncated, oversized or late responses fail without repair or model retry. Review actual model results and bank evidence; these limits do not guarantee customer understanding or accurate advice.
 
 ## Configure the customer and scenario
 
@@ -79,9 +85,10 @@ Edit `scenario.json` before a new launch. These existing API fields are the conf
 | Bank data available before the run | `bankCustomerSeed.accounts` and `bankCustomerSeed.statements` |
 | Personal facts supplied to the customer | `launchRequestTemplate.facts` and `initialAgentState` |
 | Partner response requirements | `launchRequestTemplate.completionPolicy.partnerResponseConditions` |
+| Wait for customer completion | `launchRequestTemplate.completionPolicy.requireCustomerFinish` (local prerelease extension) |
 | Stop limits | `launchRequestTemplate.maxPartnerInteractions`; `completionPolicy.maxCustomerDecisions`, `maxRepeatedExchanges`, `maxWallTimeMs` |
 
-The goal is a human purpose; the response conditions check structured bank facts such as the account, statement month, amount and due date. Keep those conditions consistent if you change the seeded bank records. They do not score whether the partner's prose explains the AU$100 budget correctly; review that in the conversation evidence.
+The goal is a human purpose; the response conditions check structured bank facts such as the account, statement month, amount and due date. Keep those conditions consistent if you change the seeded bank records. The local `requireCustomerFinish: true` setting also waits for an accepted customer `FINISH` after matching evidence, so a clarification request can continue instead of being cut off by the earlier receipt. It neither forces the customer to finish nor scores whether the partner's prose explains the AU$100 budget correctly; review that in the conversation evidence. Omitted or false values retain the earlier receipt-only stopping behavior. The helper uses SDK 0.3.2's public transport to preserve this strictly validated Boolean extension; it does not retry a rejected launch or silently drop the setting.
 
 The helper supplies new catalog/request identities, discovers the configured MCP descriptor and binds the fresh bank context to `customer-a`. Leave the corresponding placeholders in the scenario; the LLM does not select its customer identity or another customer's account. The customer can read only its assigned account context. The partner agent reads the same bank through the backend API, using the host-provided context.
 
@@ -92,15 +99,15 @@ This scenario uses the `GOAL` completion policy and a fixed logical time. Its ba
 From this starter directory:
 
 ```sh
-./starter.sh run --rm customer --output /runs/first-run --wait --timeout 900
+./starter.sh run --rm customer --output /runs/first-run --wait --timeout 8220
 ```
 
-The SDK helper seeds a new isolated bank context, discovers the scoped MCP tool, creates and publishes a customer definition, launches one Agent Journey and waits for its evidence. It saves request identities before writes. `runs/first-run/manifest.json` records the accepted run and catalog IDs.
+The SDK helper seeds a new isolated bank context, discovers the scoped MCP tool, creates and publishes a customer definition, launches one Agent Journey and waits for its evidence. The default observer wait is 8,220 seconds: the two-hour admission window plus a 900-second admitted call and 120 seconds for finalization. This read wait does not extend the scenario deadline or retry a launch. It saves request identities before writes. `runs/first-run/manifest.json` records the accepted run and catalog IDs.
 
 If the local wait expires, use the saved `runId` to continue reading that run:
 
 ```sh
-./starter.sh run --rm customer --inspect RUN_ID --output /runs/first-run --wait --timeout 900
+./starter.sh run --rm customer --inspect RUN_ID --output /runs/first-run --wait --timeout 8220
 ```
 
 Do not launch again merely because a request timed out. If launch acceptance is uncertain, `launch-request.json` preserves the exact request identity for reconciliation using the SDK/API; the helper refuses to launch into a nonempty output directory. It deliberately does not retry writes. Inspection retries transient read errors at most three times and cannot create another run.
@@ -136,3 +143,42 @@ This removes the starter containers and its internal network while retaining ban
 ## License
 
 The Astraform-authored code, configuration and documentation in this component are licensed under the [Apache License 2.0](LICENSE); see [NOTICE](NOTICE). This permits use, modification and redistribution under that license. Third-party dependencies retain their own terms. This grant does not license Astraform's platform software or other sample components.
+
+
+## Local Java and scheduled-statement candidates
+
+The existing packager now prepares local-only variants with `--bank python|java`
+and `--scenario issued|monthly`. It keeps the published `release.json`, image
+pins and original released archive unchanged. New variants require
+`--local-verification` and record installed image IDs. They are local verification
+candidates, not additional public release assets.
+
+`starter-config.json` identifies the implementation, bank port, native domain
+profile and scenario. Java uses port 8094, JDBC settings and domain`banking`;
+Python uses port 8092, its PostgreSQL URL and domain`banking-python`. Both reuse
+the same separate bank database, banking advice service and Python SDK 0.3.2
+launch/inspect/export helper. The Java provider uses Java SDK 0.4.2; the customer
+launcher remains Python, so this candidate does not prove a Java launch/export
+client path.
+
+The `monthly` variant copies the existing three-month scenario to`scenario.json`,
+enables `remote-domain.native-reference-state.v1` and installs the existing
+`banking-reference` domain binding alongside MCP and A2A. It starts at January 15
+and retains participation through April 2, permitting statements for January,
+February andMarch. It requires Runtime's`retainedParticipationSupported`
+capability. The existing launcher discovers/pins capabilities and gives each
+run a fresh bank context; no script advances time or sends follow-up messages.
+
+The March partner receipt is the configured goal boundary; it alone does not
+prove January/February review, customer understanding or horizon coverage.
+Inspect actual domain work, statement periods, MCP/A2A activity and participation
+coverage in the same run's exported evidence. The source's ten-minute monthly
+wall limit is separate from the issued scenario's two-hour limit. Model failures
+and exhausted limits remain recorded outcomes.
+
+For all local candidates, use the packaged images already installed and follow
+the existing initialization/start/inspect instructions. Do not pull local tags.
+The issued variant explicitly requires the unreleased customer-FINISH
+Experiment/API correction and cannot be certified against a public v0.2.0
+platform download. The initializer reports this requirement without altering
+the platform images or silently removing the criterion.
