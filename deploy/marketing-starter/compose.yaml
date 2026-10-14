@@ -1,0 +1,88 @@
+name: ${COMPOSE_PROJECT_NAME:?Run python3 init.py first}
+
+# Partner services and the Python SDK helper attach to the platform's private network.
+services:
+  domain:
+    image: ${DOMAIN_IMAGE:?Use the packaged release.env}
+    environment:
+      SERVER_PORT: "8090"
+      ASTRAFORM_NATIVE_SIMULATION_ENABLED: "true"
+    networks:
+      platform:
+        aliases: ["${COMPOSE_PROJECT_NAME}-domain"]
+
+  agency:
+    image: ${AGENCY_IMAGE:?Use the packaged release.env}
+    depends_on:
+      domain:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: "8091"
+      MARKETING_OPS_CREATIVE_AGENCY_BASE_URL: http://${COMPOSE_PROJECT_NAME}-agency:8091
+      CREATIVE_AGENCY_GENERATION_MODE: llm
+      CREATIVE_AGENCY_A2A_RESPONSE_FORMAT: json
+      CREATIVE_AGENCY_A2A_TOKEN: ${CREATIVE_AGENCY_A2A_TOKEN:?Run python3 init.py first}
+      CREATIVE_AGENCY_LLM_PROVIDER_ID: ${CREATIVE_AGENCY_LLM_PROVIDER_ID:?Configure private/partner.env}
+      CREATIVE_AGENCY_LLM_BASE_URL: ${CREATIVE_AGENCY_LLM_BASE_URL:?Configure private/partner.env}
+      CREATIVE_AGENCY_LLM_MODEL: ${CREATIVE_AGENCY_LLM_MODEL:?Configure private/partner.env}
+      CREATIVE_AGENCY_LLM_BINDING_REVISION: ${CREATIVE_AGENCY_LLM_BINDING_REVISION:?Run python3 init.py first}
+      CREATIVE_AGENCY_LLM_AUTH_TYPE: ${CREATIVE_AGENCY_LLM_AUTH_TYPE:-bearer}
+      CREATIVE_AGENCY_LLM_API_KEY: ${CREATIVE_AGENCY_LLM_API_KEY:-}
+      CREATIVE_AGENCY_LLM_ALLOW_INSECURE_HTTP: ${CREATIVE_AGENCY_LLM_ALLOW_INSECURE_HTTP:-false}
+      CREATIVE_AGENCY_LLM_STRUCTURED_OUTPUT_MODE: ${CREATIVE_AGENCY_LLM_STRUCTURED_OUTPUT_MODE:-json-schema}
+      CREATIVE_AGENCY_LLM_TOKEN_LIMIT_PARAMETER: ${CREATIVE_AGENCY_LLM_TOKEN_LIMIT_PARAMETER:-max-tokens}
+      CREATIVE_AGENCY_LLM_REASONING_EFFORT: ${CREATIVE_AGENCY_LLM_REASONING_EFFORT:-}
+      CREATIVE_AGENCY_LLM_MAX_OUTPUT_TOKENS: ${CREATIVE_AGENCY_LLM_MAX_OUTPUT_TOKENS:-2048}
+      CREATIVE_AGENCY_LLM_MAX_RESPONSE_BYTES: ${CREATIVE_AGENCY_LLM_MAX_RESPONSE_BYTES:-131072}
+      CREATIVE_AGENCY_LLM_READ_TIMEOUT: ${CREATIVE_AGENCY_LLM_READ_TIMEOUT:-120s}
+      CREATIVE_AGENCY_LLM_MAX_ATTEMPTS: "1"
+      CREATIVE_AGENCY_LLM_MAX_CONCURRENCY: "1"
+      CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS: ${CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS:-140}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      platform:
+        aliases: ["${COMPOSE_PROJECT_NAME}-agency"]
+
+  customer:
+    profiles: [tools]
+    # Reuse the published Python SDK image; the bundle supplies the marketing script.
+    image: ${TOOLS_IMAGE:?Use the packaged release.env}
+    entrypoint: [python, /starter/run-customer.py]
+    command: [--help]
+    user: "${LOCAL_UID:?Run python3 init.py first}:${LOCAL_GID:?Run python3 init.py first}"
+    environment:
+      ASTRAFORM_API_BASE: http://dashboard:8084
+      MARKETING_SAMPLE_FILE: /starter/scenario.json
+      MARKETING_DOMAIN_BINDING_KEY: marketing-ops
+      CREATIVE_AGENCY_TARGET_KEY: creative-agency
+    volumes:
+      - type: bind
+        source: ./run-customer.py
+        target: /starter/run-customer.py
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./customer-run-evidence.py
+        target: /starter/customer-run-evidence.py
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./scenario.json
+        target: /starter/scenario.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./runs
+        target: /runs
+        bind:
+          create_host_path: false
+    networks: [platform]
+
+networks:
+  platform:
+    external: true
+    name: ${ASTRAFORM_NETWORK:?Run python3 init.py first}
