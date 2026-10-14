@@ -42,12 +42,14 @@
           "productCode": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 256
+            "maxLength": 256,
+            "description": "Sample bank product code. CC-prefixed products are credit cards; do not infer product type from the account name or balance sign."
           },
           "balance": {
             "type": "string",
             "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$",
-            "maxLength": 40
+            "maxLength": 40,
+            "description": "Current ledger balance at logicalTimeEpochMs. For CC-prefixed credit-card products, negative means an amount owed, zero means no current debt and positive means a credit balance. This is not the issued statement closing amount and does not prove whether its minimum payment has been paid."
           },
           "currency": {
             "type": "string",
@@ -56,12 +58,14 @@
           "limit": {
             "type": "string",
             "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
-            "maxLength": 40
+            "maxLength": 40,
+            "description": "Modeled credit limit for a CC-prefixed credit-card product. Remaining modeled credit limit is max(0, limit - max(0, -balance)); it is not guaranteed purchasing authorization. Pending authorizations, holds and other restrictions are not included in this view."
           },
           "currentMinPayment": {
             "type": "string",
             "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
-            "maxLength": 40
+            "maxLength": 40,
+            "description": "Most recently calculated minimum payment. Use the selected issued statement minimumAmountDue and dueDate for that statement; this field does not prove payment settlement or predict future minimums."
           }
         },
         "required": [
@@ -91,12 +95,14 @@
           "closingAmount": {
             "type": "string",
             "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$",
-            "maxLength": 40
+            "maxLength": 40,
+            "description": "Ledger balance when this statement closed. For a CC-prefixed credit-card account, a negative amount represents money owed. It may differ from the current account balance."
           },
           "minimumAmountDue": {
             "type": "string",
             "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
-            "maxLength": 40
+            "maxLength": 40,
+            "description": "Bank-recorded minimum amount for this issued statement and its dueDate. Preserve this recorded amount even if the current account balance differs; this view does not prove whether it was paid and does not provide future minimum-payment policy."
           },
           "currency": {
             "type": "string",
