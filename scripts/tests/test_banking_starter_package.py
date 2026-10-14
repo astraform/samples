@@ -25,6 +25,9 @@ class BankingStarterPackageTest(unittest.TestCase):
             path = self.root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(destination + "\n")
+        self.scenario = {"launchRequestTemplate": {"completionPolicy": {"mode": "GOAL"}}}
+        (self.root / packager.FILES["scenario.json"]).write_text(json.dumps(self.scenario))
+        (self.root / "banking-advice-agent/three-month-configuration.json").write_text(json.dumps(self.scenario))
         (self.root / "docs/releases/v0.1.0-local.1.md").write_text("Local rehearsal notes\n")
         (self.root / "deploy/banking-starter/private.env").write_text("DO_NOT_DISTRIBUTE=secret\n")
         self.root_patch = patch.object(packager, "ROOT", self.root)
@@ -55,12 +58,13 @@ class BankingStarterPackageTest(unittest.TestCase):
             bundle = packager.package("v0.1.0", self.images, self.output, source_revision=self.source_revision)
         manifest = json.loads((bundle / "bundle-manifest.json").read_text())
         self.assertNotIn("localVerificationOnly", manifest)
+        self.assertNotIn("sourceRevisionMeaning", manifest)
         self.assertEqual(self.source_revision, manifest["sourceRevision"])
         self.assertEqual({"platform": "0.2.0", "pythonSdk": "0.3.2", "contracts": "1.2.0"},
                          manifest["compatibility"])
         self.assertEqual(self.images, json.loads((bundle / "image-lock.json").read_text()))
-        self.assertEqual("scenario.json\n", (bundle / "scenario.json").read_text())
-        self.assertEqual(set(self.files) | {"image-lock.json", "release.env"}, set(manifest["files"]))
+        self.assertEqual(self.scenario, json.loads((bundle / "scenario.json").read_text()))
+        self.assertEqual(set(self.files) | {"image-lock.json", "release.env", "starter-config.json"}, set(manifest["files"]))
         for name, metadata in manifest["files"].items():
             self.assertEqual(hashlib.sha256((bundle / name).read_bytes()).hexdigest(), metadata["sha256"])
         self.assertIn("BANKING_IMAGE=" + self.images["banking"], (bundle / "release.env").read_text())
@@ -83,6 +87,8 @@ class BankingStarterPackageTest(unittest.TestCase):
                                       source_revision=self.source_revision)
         manifest = json.loads((bundle / "bundle-manifest.json").read_text())
         self.assertTrue(manifest["localVerificationOnly"])
+        self.assertIn("Baseline checkout commit only", manifest["sourceRevisionMeaning"])
+        self.assertIn("installed image IDs", manifest["sourceRevisionMeaning"])
         self.assertEqual({key: "sha256:" + "b" * 64 for key in tags}, manifest["localImageIds"])
         self.assertEqual(tags, manifest["images"])
 
@@ -159,6 +165,40 @@ class BankingStarterPackageTest(unittest.TestCase):
             packager.package("v0.1.0", self.images, self.output, source_revision=self.source_revision)
         self.assertEqual(before, original.read_bytes())
 
+    def test_all_bank_scenario_variants_preserve_implementation_and_platform_requirements(self):
+        tags = {key: "astraform-test/" + key + ":review" for key in self.images}
+        for bank in ("python", "java"):
+            for scenario in ("issued", "monthly"):
+                with self.subTest(bank=bank, scenario=scenario), patch.object(packager.subprocess, "check_output", return_value="sha256:" + "b" * 64 + "\n"):
+                    bundle = packager.package("v0.1.0", tags, self.output / (bank + scenario), True, self.source_revision, bank, scenario)
+                manifest = json.loads((bundle / "bundle-manifest.json").read_text())
+                configuration = json.loads((bundle / "starter-config.json").read_text())
+                self.assertTrue(manifest["localVerificationOnly"])
+                self.assertEqual(8092 if bank == "python" else 8094, configuration["bankPort"])
+                self.assertEqual("banking-python" if bank == "python" else "banking", configuration["domainId"])
+                self.assertEqual(scenario == "monthly", configuration["nativeDomainEnabled"])
+                self.assertEqual("0.3.2", manifest["compatibility"]["pythonSdk"])
+                if bank == "java":
+                    self.assertEqual("0.4.2", manifest["compatibility"]["javaSdk"])
+
+    def test_new_variants_and_finish_criteria_cannot_be_packaged_as_public_compatible_assets(self):
+        with patch.object(packager.subprocess, "check_output") as docker:
+            for bank, scenario in (("java", "issued"), ("python", "monthly"), ("java", "monthly")):
+                with self.subTest(bank=bank, scenario=scenario), self.assertRaisesRegex(ValueError, "local-verification"):
+                    packager.package("v0.1.0", self.images, self.output, False, self.source_revision, bank, scenario)
+            self.scenario["launchRequestTemplate"]["completionPolicy"]["requireCustomerFinish"] = True
+            (self.root / packager.FILES["scenario.json"]).write_text(json.dumps(self.scenario))
+            with self.assertRaisesRegex(ValueError, "local-verification"):
+                packager.package("v0.1.0", self.images, self.output, False, self.source_revision)
+            docker.assert_not_called()
+        self.assertFalse(self.output.exists())
+        with patch.object(packager.subprocess, "check_output", return_value="sha256:" + "b" * 64 + "\n"):
+            bundle = packager.package("v0.1.0", self.images, self.output, True, self.source_revision)
+        manifest = json.loads((bundle / "bundle-manifest.json").read_text())
+        self.assertEqual("unreleased-local-customer-finish", manifest["compatibility"]["platform"])
+        self.assertTrue(manifest["requiredPlatform"]["completionPolicy.requireCustomerFinish"])
+        self.assertTrue(json.loads((bundle / "starter-config.json").read_text())["requiresUnreleasedPlatform"])
+
 
 class BankingStarterInitializationTest(unittest.TestCase):
     def setUp(self):
@@ -201,6 +241,46 @@ class BankingStarterInitializationTest(unittest.TestCase):
         self.assertEqual(runtime, self.runtime.read_bytes())
         self.assertEqual(before, {path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()})
 
+    def test_ollama_initialization_keeps_partner_call_within_a2a_budget(self):
+        self.initializer.initialize(self.platform, "ollama")
+        partner = self.initializer.env(self.root / "private/partner.env")
+        bindings = (self.root / "private/runtime-bindings.properties").read_text()
+        timeout = next(line.split("=", 1)[1] for line in bindings.splitlines()
+                       if line.startswith("simulation.event.runtime.a2a.request-timeout="))
+        self.assertEqual("900s", timeout)
+        self.assertIn("simulation.event.runtime.a2a.poll-timeout=900s\n", bindings)
+        self.assertEqual("840", partner["BANKING_LLM_TIMEOUT_SECONDS"])
+        self.assertLess(10 + float(partner["BANKING_LLM_TIMEOUT_SECONDS"]), float(timeout[:-1]))
+        self.assertEqual("banking-starter-qwen35-4b-thinking-v8", partner["BANKING_LLM_BINDING_REVISION"])
+        self.assertEqual("32768", partner["BANKING_LLM_MAX_OUTPUT_TOKENS"])
+        self.assertEqual("high", partner["BANKING_LLM_REASONING_EFFORT"])
+        self.assertEqual("1.0", partner["BANKING_LLM_TEMPERATURE"])
+        self.assertEqual(self.original, (self.root / "private/runtime.properties.before-starter").read_text())
+        self.assertTrue(self.runtime.read_text().startswith(self.original))
+
+    def test_existing_ollama_poll_timeout_is_preserved_before_any_starter_write(self):
+        existing = self.original + "simulation.event.runtime.a2a.poll-timeout=90s\n"
+        self.runtime.write_text(existing)
+        with self.assertRaisesRegex(ValueError, "already has an A2A poll timeout"):
+            self.initializer.initialize(self.platform, "ollama")
+        self.assertEqual(existing, self.runtime.read_text())
+        self.assertFalse((self.root / ".env").exists())
+        self.assertFalse((self.root / "private").exists())
+
+    def test_gemini_settings_and_existing_poll_timeout_remain_unchanged(self):
+        existing = self.original + "simulation.event.runtime.a2a.poll-timeout=90s\n"
+        self.runtime.write_text(existing)
+        self.initializer.initialize(self.platform, "gemini")
+        partner = self.initializer.env(self.root / "private/partner.env")
+        bindings = (self.root / "private/runtime-bindings.properties").read_text()
+        self.assertIn("simulation.event.runtime.a2a.request-timeout=150s\n", bindings)
+        self.assertNotIn("simulation.event.runtime.a2a.poll-timeout=", bindings)
+        self.assertEqual("120", partner["BANKING_LLM_TIMEOUT_SECONDS"])
+        self.assertEqual("2048", partner["BANKING_LLM_MAX_OUTPUT_TOKENS"])
+        self.assertEqual("none", partner["BANKING_LLM_REASONING_EFFORT"])
+        self.assertTrue(self.runtime.read_text().startswith(existing))
+        self.assertEqual(existing, (self.root / "private/runtime.properties.before-starter").read_text())
+
     def test_compose_uses_saved_project_and_images_even_for_down(self):
         self.initializer.initialize(self.platform, "gemini")
         images = {key: f"registry.example/{key}@sha256:" + "a" * 64
@@ -229,6 +309,48 @@ class BankingStarterInitializationTest(unittest.TestCase):
         self.assertEqual(existing, self.runtime.read_text())
         self.assertFalse((self.root / ".env").exists())
         self.assertFalse((self.root / "private").exists())
+
+    def test_java_monthly_initializer_installs_native_reference_domain_without_overwriting_private_state(self):
+        (self.root / "starter-config.json").write_text(json.dumps({
+            "schemaVersion": "astraform.banking-starter.configuration.v1", "bankImplementation": "java",
+            "scenario": "monthly", "bankPort": 8094, "domainId": "banking", "nativeDomainEnabled": True,
+            "requiresUnreleasedPlatform": False, "requiredPlatformCapabilities": ["retainedParticipationSupported"],
+        }))
+        self.initializer.initialize(self.platform, "gemini")
+        settings = self.initializer.env(self.root / ".env")
+        bindings = (self.root / "private/runtime-bindings.properties").read_text()
+        self.assertIn("-bank:8094/mcp", bindings)
+        self.assertIn("simulation.event.runtime.domain.bindings.banking-reference.domain-id=banking\n", bindings)
+        self.assertIn("-bank:8094\n", bindings)
+        self.assertEqual("8094", settings["BANKING_SERVICE_PORT"])
+        self.assertEqual("true", settings["BANKING_NATIVE_ENABLED"])
+        self.assertEqual(self.original, (self.root / "private/runtime.properties.before-starter").read_text())
+
+    def test_python_monthly_initializer_uses_python_domain_id_and_refuses_existing_domain_owner(self):
+        configuration = {"schemaVersion": "astraform.banking-starter.configuration.v1", "bankImplementation": "python",
+            "scenario": "monthly", "bankPort": 8092, "domainId": "banking-python", "nativeDomainEnabled": True,
+            "requiresUnreleasedPlatform": False, "requiredPlatformCapabilities": ["retainedParticipationSupported"]}
+        (self.root / "starter-config.json").write_text(json.dumps(configuration))
+        existing = self.original + "simulation.event.runtime.domain.bindings.banking-reference.base-url=http://another-bank\n"
+        self.runtime.write_text(existing)
+        with self.assertRaisesRegex(ValueError, "already has banking bindings"):
+            self.initializer.initialize(self.platform, "gemini")
+        self.assertEqual(existing, self.runtime.read_text())
+        self.assertFalse((self.root / ".env").exists())
+        self.runtime.write_text(self.original)
+        self.initializer.initialize(self.platform, "gemini")
+        self.assertIn("banking-reference.domain-id=banking-python\n", self.runtime.read_text())
+
+    def test_mismatched_bank_metadata_is_refused_before_private_configuration_changes(self):
+        (self.root / "starter-config.json").write_text(json.dumps({
+            "schemaVersion": "astraform.banking-starter.configuration.v1", "bankImplementation": "java",
+            "scenario": "issued", "bankPort": 8092, "domainId": "banking", "nativeDomainEnabled": False,
+            "requiresUnreleasedPlatform": False,
+        }))
+        with self.assertRaisesRegex(ValueError, "Invalid packaged"):
+            self.initializer.initialize(self.platform, "gemini")
+        self.assertFalse((self.root / ".env").exists())
+        self.assertEqual(self.original, self.runtime.read_text())
 
 
 if __name__ == "__main__":

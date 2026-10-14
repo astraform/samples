@@ -102,26 +102,28 @@ def write_json(path, value):
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def package(version, images, output, local_verification=False, source_revision=None):
+def package_bundle(version, images, output, source_revision, files, bundle_name,
+                   compatibility, schema_version, local_verification=False,
+                   configuration=None, required_platform=None):
+    """One deterministic archive writer shared by the existing sample starters."""
     require(re.fullmatch(r"v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?", version),
             "version must be an explicit release version such as v0.2.0 or v0.2.0-local.1")
     require(isinstance(source_revision, str) and re.fullmatch(r"[0-9a-f]{40}", source_revision),
             "source revision must be a full Git commit")
-    require(isinstance(images, dict) and set(images) == set(IMAGE_VARIABLES),
-            "image lock must contain exactly banking, advice and postgres references")
+    require(isinstance(images, dict) and images, "image lock must not be empty")
     for name, image in images.items():
         pinned = isinstance(image, str) and DIGEST_IMAGE.fullmatch(image)
         tagged = (isinstance(image, str) and TAGGED_IMAGE.fullmatch(image)
                   and not image.startswith("sha256:"))
         require(pinned or (local_verification and tagged),
                 f"{name} must be digest-pinned; installed tags require --local-verification")
-    files = {**FILES, "RELEASE-NOTES.md": f"docs/releases/{version}.md"}
     for filename, relative in files.items():
+        require(not Path(filename).is_absolute() and ".." not in Path(filename).parts,
+                "Starter destination must stay inside the archive")
         source = ROOT / relative
         require(source.is_file() and not source.is_symlink() and source.resolve().is_relative_to(ROOT.resolve()),
                 f"Missing or unsafe starter source: {relative}")
     output = Path(output).resolve()
-    bundle_name = f"astraform-banking-starter-{version}"
     names = (bundle_name, bundle_name + ".tar.gz", bundle_name + ".tar.gz.sha256")
     require(not any((output / name).exists() or (output / name).is_symlink() for name in names),
             "Output already exists; choose a fresh output directory or version")
@@ -136,20 +138,28 @@ def package(version, images, output, local_verification=False, source_revision=N
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / relative, target)
         write_json(bundle / "image-lock.json", images)
+        variables = {name: name.upper() + "_IMAGE" for name in images}
+        if schema_version == "astraform.banking-starter.bundle.v1":
+            variables = IMAGE_VARIABLES
         (bundle / "release.env").write_text("".join(
-            f"{variable}={images[key]}\n" for key, variable in IMAGE_VARIABLES.items()), encoding="utf-8")
+            f"{variables[key]}={images[key]}\n" for key in sorted(images)), encoding="utf-8")
+        if configuration is not None:
+            write_json(bundle / "starter-config.json", configuration)
         manifest = {
-            "schemaVersion": "astraform.banking-starter.bundle.v1",
+            "schemaVersion": schema_version,
             "version": version,
             "sourceRevision": source_revision,
-            "compatibility": COMPATIBILITY,
+            "compatibility": compatibility,
             "images": images,
             "files": {path.relative_to(bundle).as_posix(): {
                 "sha256": file_hash(path), "sizeBytes": path.stat().st_size,
             } for path in sorted(bundle.rglob("*")) if path.is_file()},
         }
+        if required_platform:
+            manifest["requiredPlatform"] = required_platform
         if local_verification:
-            manifest.update(localVerificationOnly=True, localImageIds=local_ids)
+            manifest.update(localVerificationOnly=True, localImageIds=local_ids,
+                sourceRevisionMeaning="Baseline checkout commit only; uncommitted operator-file hashes and installed image IDs identify this local candidate.")
         write_json(bundle / "bundle-manifest.json", manifest)
         for path in [bundle, *bundle.rglob("*")]:
             path.chmod(0o755 if path.is_dir() or path.name in ("init.py", "starter.sh") else 0o644)
@@ -172,6 +182,39 @@ def package(version, images, output, local_verification=False, source_revision=N
     return output / bundle_name
 
 
+def package(version, images, output, local_verification=False, source_revision=None,
+            bank="python", scenario="issued"):
+    require(bank in {"python", "java"}, "bank must be python or java")
+    require(scenario in {"issued", "monthly"}, "scenario must be issued or monthly")
+    require(isinstance(images, dict) and set(images) == set(IMAGE_VARIABLES),
+            "image lock must contain exactly banking, advice and postgres references")
+    files = {**FILES, "RELEASE-NOTES.md": f"docs/releases/{version}.md"}
+    files["scenario.json"] = "banking-advice-agent/" + (
+        "issued-statement-configuration.json" if scenario == "issued" else "three-month-configuration.json")
+    source = ROOT / files["scenario.json"]
+    require(source.is_file() and not source.is_symlink(), f"Missing or unsafe starter source: {files['scenario.json']}")
+    selected = json.loads(source.read_text())
+    finish = selected.get("launchRequestTemplate", {}).get("completionPolicy", {}).get("requireCustomerFinish") is True
+    require(local_verification or (bank == "python" and scenario == "issued" and not finish),
+            "New starter variants and customer-FINISH criteria require --local-verification; publication is not authorized")
+    configuration = {
+        "schemaVersion": "astraform.banking-starter.configuration.v1",
+        "bankImplementation": bank, "scenario": scenario,
+        "bankPort": 8092 if bank == "python" else 8094,
+        "domainId": "banking-python" if bank == "python" else "banking",
+        "nativeDomainEnabled": scenario == "monthly",
+        "requiresUnreleasedPlatform": finish,
+        "requiredPlatformCapabilities": ["retainedParticipationSupported"] if scenario == "monthly" else [],
+    }
+    compatibility = {**COMPATIBILITY, **({"javaSdk": "0.4.2"} if bank == "java" else {})}
+    if finish:
+        compatibility["platform"] = "unreleased-local-customer-finish"
+    bundle_name = (f"astraform-banking-starter-{version}" if bank == "python" and scenario == "issued"
+                   else f"astraform-{bank}-banking-{scenario}-starter-{version}")
+    return package_bundle(version, images, output, source_revision, files, bundle_name,
+                          compatibility, "astraform.banking-starter.bundle.v1", local_verification,
+                          configuration, {"completionPolicy.requireCustomerFinish": True} if finish else None)
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True)
@@ -181,6 +224,8 @@ def main():
                         help="JSON object with banking, advice and postgres image references")
     parser.add_argument("--output", required=True, type=Path,
                         help="Parent directory for the versioned folder, archive and checksum")
+    parser.add_argument("--bank", choices=("python", "java"), default="python", help="Bank service implementation")
+    parser.add_argument("--scenario", choices=("issued", "monthly"), default="issued", help="Issued statement or native three-month statement scenario")
     parser.add_argument("--local-verification", action="store_true",
                         help="Rehearsal only: allow installed image tags and record their local IDs")
     args = parser.parse_args()
@@ -189,7 +234,7 @@ def main():
         source_revision = subprocess.check_output(
             ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True, timeout=30).strip()
     bundle = package(args.version, json.loads(args.image_lock.read_text()), args.output,
-                     args.local_verification, source_revision)
+                     args.local_verification, source_revision, args.bank, args.scenario)
     print(f"Prepared {bundle}; no images, release or public download were published.")
     if args.local_verification:
         print("Local verification only; this archive requires the recorded images already installed.")
