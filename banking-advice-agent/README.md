@@ -1,11 +1,14 @@
 # Banking advice agent and customer simulation
 
-The first image-only Python banking starter is prepared under
-[`deploy/banking-starter`](../deploy/banking-starter/README.md). It reuses this agent,
-the Python bank and the published SDK for launch, inspection and evidence export.
+The image-only Python banking starter is prepared under
+[`deploy/banking-starter`](../deploy/banking-starter/README.md). It reuses this agent
+and the Python bank. The published SDK supports launch, inspection and evidence
+export when `completionPolicy.requireCustomerFinish` is omitted. The strict
+issued-statement scenario supplies that field and requires the locally updated,
+unreleased platform and a native typed customer SDK that preserves it.
 The starter images have been published to private registry packages; a public
-starter archive is not yet available. The source workflow below uses the public
-platform bundle and published SDKs.
+starter archive is not yet available. The monthly source workflow below uses the
+public platform bundle and published SDKs; it omits that completion field.
 
 The partner owns the banking database and populates customer records before
 creating Astraform customers. Astraform receives each customer's persona, goals,
@@ -38,6 +41,51 @@ time, then writes the answer. It does not autonomously choose another lookup or
 parse a month from free text. If the question and selected month disagree, it is
 instructed to explain the mismatch rather than relabel the bank record.
 
+For this sample bank, `CC`-prefixed products use a credit-card ledger convention:
+a negative balance is money owed on the card. The partner supplies the model
+with that convention and exact current debt, credit balance and remaining modeled
+credit limit derived from the guarded bank record. For example, a balance of
+`-1200` and limit of `3000` means `1200` owed and `1800` of the modeled limit
+remaining. These values keep accounts and currencies separate; missing limits or
+balances remain unknown. The model must not describe a negative card balance as
+proof of an overdraft, zero spending power, or a requirement to reach a positive
+balance before repayment can reduce the debt. Remaining modeled credit is not a
+purchase-authorization guarantee: pending authorizations, holds and restrictions
+are absent from this lookup. Unknown products are not assigned this convention.
+
+The model is instructed to answer the actual question and keep minimum/due-date
+questions focused on the issued statement, rather than volunteering balances or
+credit availability. Current account interpretations are explicitly marked as the
+ledger at the bank as-of time; their amounts must not be attributed to an earlier
+statement closing date, even if the numbers happen to match. Amounts owed are debt,
+not a positive credit balance.
+
+Current account amounts are separate from the selected issued statement. A later
+zero or positive balance does not replace its recorded minimum and due date or
+prove payment settlement. The model is instructed to state missing payment history,
+APR or future minimum-payment policy when those facts are needed. The canonical
+[bank account schema](../python-fastapi-banking/src/banking_remote_domain_python/schemas/banking-customer-accounts.v1.schema.json)
+documents these field meanings for both bank implementations. These grounded inputs
+and instructions improve the model's evidence; the agent still returns its actual
+prose unchanged, so transport/schema success alone does not prove answer quality.
+
+For budget questions, the local advice source also provides an
+`issuedStatementInterpretation` from the selected closing amount and its own
+matching credit-card account/currency. It stays separate from current ledger
+amounts; unknown products, missing amounts, ambiguous accounts or currency
+mismatches are not assigned a guessed debt. This annotation is model input only;
+the public request/response schemas and raw bank records remain unchanged.
+
+The model is instructed to compare the customer's explicitly stated budget with
+both the issued minimum and the amount owed, using that same budget throughout.
+The budget is a customer premise, not verified bank funds. Basic same-currency
+capacity arithmetic does not require APR or payment-allocation policy. Any
+remaining-balance subtraction is a conditional illustration, assuming the whole
+payment reduces this debt and no intervening charges; actual posting, allocation
+and settlement remain unknown. Missing/ambiguous budgets or currencies require
+clarification rather than inferred amounts or exchange rates. Answers are still
+actual model prose, preserved without templates, repair or hidden retries.
+
 Each partner answer sees **only this request and its current bank records**.
 The partner does not retain conversation history; reusing an A2A context ID does
 not supply earlier exchanges. Astraform's customer memory remains separate.
@@ -52,7 +100,7 @@ not evidence of years of simulation or 1,000-customer capacity. The older
 snapshot-based provider profile remains separate.
 
 The Java bank provider uses published [Java SDK 0.4.2 from Maven Central](https://central.sonatype.com/artifact/ai.astraform/remote-domain-author-kit-java/0.4.2).
-The Python bank provider and this scenario's launch helper use published
+The Python bank provider and this monthly scenario's launch helper use published
 [Python author kit 0.3.2](https://pypi.org/project/astraform-remote-domain-author-kit/0.3.2/).
 Both SDKs use [shared contract 1.2.0](https://github.com/astraform/remote-domain-contracts/releases/tag/v1.2.0)
 and include domain helpers plus the platform client. Customer account reads use
@@ -100,8 +148,11 @@ export BANKING_LLM_BASE_URL=http://localhost:11434/v1
 export BANKING_LLM_MODEL=qwen3.5:4b
 export BANKING_LLM_AUTH_TYPE=none
 unset BANKING_LLM_API_KEY
-export BANKING_LLM_BINDING_REVISION=bank-ollama-qwen35-v1
-export BANKING_LLM_REASONING_EFFORT=none
+export BANKING_LLM_BINDING_REVISION=bank-ollama-qwen35-thinking-v8
+export BANKING_LLM_REASONING_EFFORT=high
+export BANKING_LLM_MAX_OUTPUT_TOKENS=32768
+export BANKING_LLM_TIMEOUT_SECONDS=840
+export BANKING_LLM_TEMPERATURE=1.0
 ```
 
 That is a configuration example, not a fresh Ollama acceptance result for this
@@ -141,21 +192,51 @@ change and update the Astraform A2A target binding revision before launching a n
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `BANKING_LLM_TIMEOUT_SECONDS` | `120` | Total model queue, connection and response deadline, 1–600 seconds |
-| `BANKING_LLM_MAX_OUTPUT_TOKENS` | `2048` | Provider output cap, 1–8192 tokens |
+| `BANKING_LLM_TIMEOUT_SECONDS` | `120` | Total model queue, connection and response deadline, 1–900 seconds |
+| `BANKING_LLM_MAX_OUTPUT_TOKENS` | `2048` | Provider output cap, 1–32768 tokens |
 | `BANKING_LLM_MAX_CONCURRENCY` | `4` | Maximum concurrent model calls per process, 1–32 |
+| `BANKING_LLM_TEMPERATURE` | `0` | Explicit sampling temperature, a finite number from 0–2; lower variance does not prove factual accuracy |
 | `BANKING_LLM_REASONING_EFFORT` | omitted | Optional provider-supported setting |
 | `BANKING_LLM_DIAGNOSTICS` | `false` | Include actual model request and response in service logs |
 
 The guarded bank read has a separate ten-second deadline. Configure Astraform's
 `simulation.event.runtime.a2a.request-timeout` above the bank + model deadlines;
 use `150s` with the defaults, and raise it if using a slower local model. This is
-separate from Astraform's customer-model timeout. The model is called once per
+separate from Astraform's customer-model timeout. The Ollama thinking preset uses
+`reasoning_effort=high`, 32,768 total generated tokens, a finite 840-second model
+deadline and temperature `1.0`; configure A2A request and poll timeouts to `900s`.
+Those are ceilings, not guaranteed duration or accuracy. Ollama's compatibility
+API cannot set context size per request: configure the model server to allow the
+input plus generated tokens before testing. The [Qwen model card](https://huggingface.co/Qwen/Qwen3.5-4B)
+recommends 32,768 output tokens for most queries, and [Ollama's thinking controls](https://docs.ollama.com/api/openai-compatibility)
+map `high` to enabled thinking for models with Boolean thinking support. Other
+providers retain the generic defaults above unless explicitly configured. The model is called once per
 valid request, with no internal retry. Network/provider errors, truncation, refusal,
 tool calls, empty answers and answers over 4096 characters produce an A2A error;
 no successful canned answer is substituted. Upstream responses are bounded to
-131072 bytes. Use the actual model output to assess quality; prose is not repaired
+1 MiB (1,048,576 bytes), including a provider's separate reasoning field. Only the
+unchanged final `message.content` is returned as advice; reasoning is neither
+substituted for it nor added to the customer-facing answer. Use the actual model
+output to assess quality; prose is not repaired
 or automatically proven truthful.
+
+Before a bank-backed answer is accepted, a bounded literal-date guard checks
+ISO `YYYY-MM-DD` / `YYYY-MM` and common English month/day/year, day/month/year
+and month/year forms. An invalid calendar date or a newly introduced date absent
+from the selected statement, bank as-of time and customer question fails the
+existing model attempt with an A2A error; no answer is rewritten or retried.
+The model also receives `statementDateRoles` from the same selected issued record:
+closing date/month and payment due date are distinct. A second bounded check rejects
+recognized dates directly following explicit closing/statement-date or payment-due
+labels when they conflict with that role in the record. It does not understand
+arbitrary prose or all ways a date may be attributed.
+An explicit requested statement month remains valid even when no statement exists.
+Dates already mentioned in the question can be discussed conditionally, but remain
+unverified unless the bank records confirm them. This recognizer checks date
+literals, not their attribution or conditional wording; it does not cover every
+natural-language date form, relative dates, all factual claims or general answer
+quality. It does not interpret arbitrary four-digit amounts or credit limits as
+years. Legacy customer-supplied mode retains its conditional-answer behavior.
 
 The model's text is returned verbatim in `message`. The existing JSON fields
 `decision`, `missingFields`, `statement`, `statementPeriod` and `bankingContext`
@@ -353,10 +434,17 @@ Install the published author kit in the launcher's Python 3.12+ virtual environm
 python3 -m pip install 'astraform-remote-domain-author-kit==0.3.2'
 ```
 
-No SDK source checkout or locally built wheel is needed. The Python bank installs
+For this monthly scenario, which omits `requireCustomerFinish`, no SDK source
+checkout or locally built wheel is needed. The Python bank installs
 the same version with the `[fastapi]` extra through its own project dependency
 lock; the launcher does not require that extra. Conformance remains separate
 testing tooling. See the [SDK dependencies](../README.md#sdk-development).
+
+The launcher shares saved-run inspection and export behavior with
+[`customer-run-evidence.py`](../integration/customer-run-evidence.py). Its local
+Docker build places that utility beside `/app/run-customer.py`; source execution
+uses the same file from `integration/`. The utility does not seed a bank,
+create/publish an agent or launch a customer.
 
 Use the updated platform gateway with canonical `/api/...` routing:
 
@@ -432,18 +520,35 @@ The launcher preserves an omitted `domain` rather than adding one. Existing
 monthly scenarios retain their domain configuration. The current platform
 requires a bounded `GOAL` completion policy for the scoped account tool: this
 case allows two account lookups, four partner interactions, ten customer
-decisions, three repeated exchanges and ten minutes of wall-time admission.
+decisions, three repeated exchanges and two hours of wall-time admission.
 
-**The completion conditions verify statement records, not understanding.** They
-match the actual partner receipt's schema, payment status, customer, account,
-bill, statement end, minimum, currency, due date and closing amount against the
-seed. A matching receipt can end the run after the customer reaction without
-requiring the customer to choose `FINISH`. It does not prove the partner explained
-whether AU$100 covers the minimum while leaving debt, or that Avery understood
-that explanation. Assess those points separately from the actual partner prose
-and customer reaction; retain contradictions, missing answers and failures.
-Several turns may be useful, but a particular number of turns is not guaranteed.
-No answer text, customer decision or payment action is scripted.
+**The local issued-statement scenario waits for the customer to finish.** Its
+`completionPolicy.requireCustomerFinish: true` requires both a matching actual
+partner receipt and a later accepted customer `FINISH` decision. A customer
+`CONTACT_PARTNER` follow-up continues through the existing dispatch path even if
+the previous receipt matched; all decision, interaction, repetition and time
+limits still apply. `FINISH` without matching evidence is not achievement.
+Omitted or false values preserve the earlier receipt-only stopping behavior.
+
+This optional field requires the locally updated Experiment service and a native
+customer SDK whose generated completion-policy model preserves the supplied
+Boolean. Published platform v0.2.0 and Python SDK 0.3.2 do not support the field.
+The launcher checks raw type and typed round-trip fidelity before bank seeding or
+create/publish/launch writes, then uses the normal generated Agent Journey API.
+It never manually inserts a JSON extension, drops the value, retries a failed
+launch or chooses customer behavior. Both explicit true and explicit false fail
+with SDK 0.3.2; omission remains compatible. A supporting locally generated
+customer SDK is unreleased and does not change the bank/advice provider pins.
+
+The receipt conditions still verify statement records, not understanding. They
+match schema, payment status, customer, account, bill, statement end, minimum,
+currency, due date and closing amount against the seed. Neither those checks nor
+a model-authored `FINISH` prove that the advice correctly explains the AU$100
+budget. Inspect the actual partner prose and customer reaction to verify that
+AU$100 covers the AU$48 minimum but does not repay AU$1,200, and retain missing
+answers, contradictions and unsuccessful runs. Several turns may be useful, but
+a particular number of turns is not guaranteed. No answer text, customer decision
+or payment action is scripted.
 
 ## Shared Java and Python scenarios
 
@@ -451,7 +556,7 @@ Use these same three files for either bank implementation:
 
 | Configuration | Scenario | Participation |
 | --- | --- | --- |
-| `issued-statement-configuration.json` | Already-issued January statement and AU$100 payment budget | Omitted policy preserves early goal/conversation stopping; no domain advance |
+| `issued-statement-configuration.json` | Already-issued January statement and AU$100 payment budget | Local `requireCustomerFinish: true` waits for the customer to finish; no domain advance |
 | `sample-configuration.json` | Upcoming statement and customer account lookup | Omitted policy preserves early stopping; monthly domain work is available |
 | `three-month-configuration.json` | January–March statement review | `THROUGH_HORIZON` keeps the customer eligible through April 2 |
 

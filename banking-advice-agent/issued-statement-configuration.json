@@ -96,6 +96,7 @@
     "completionPolicy": {
       "mode": "GOAL",
       "goalIndex": 0,
+      "requireCustomerFinish": true,
       "partnerResponseConditions": [
         {
           "pointer": "/schemaVersion",
@@ -159,7 +160,7 @@
         }
       ],
       "maxCustomerDecisions": 10,
-      "maxWallTimeMs": 600000,
+      "maxWallTimeMs": 7200000,
       "maxRepeatedExchanges": 3,
       "requestFactBindings": []
     }

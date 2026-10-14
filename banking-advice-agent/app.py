@@ -2,7 +2,7 @@
 
 import asyncio
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, localcontext
 import json
 import math
 import logging
@@ -212,7 +212,30 @@ async def assess_from_backend(facts: dict, backend_url: str, binding_key: str) -
 
 
 BANKING_SYSTEM_PROMPT = """You are the bank's read-only customer support assistant.
-Answer the customer's actual question in clear, concise language using the supplied bank records.
+Answer only the question the customer actually asked, in clear, concise language from the records.
+For a question asking only the minimum amount due and due date, focus on the selected issued
+statement's minimumAmountDue, currency, dueDate and closing period. Do not volunteer account
+balances, spending capacity or repayment policy that the customer did not ask about.
+Bank-backed budget comparisons: B is the customer-stated amount and currency, an unverified
+personal premise. M is the issued minimumAmountDue; D is issuedStatementInterpretation.closingAmountOwed.
+Ask if B or its currency is missing/ambiguous, or currencies differ; do not guess, convert or use current debt.
+Give two separate conclusions using the SAME B:
+- Minimum: M=0 means no recorded minimum due; B>=M covers the ENTIRE minimum, while B<M falls short.
+- Full issued debt: D=0 means no closing debt; B>=D can fund it, while B<D funds only PART of the DEBT.
+Thus M<=B<D means FULL minimum coverage and partial DEBT coverage. Do not subtract M from B first,
+or describe this case as partial minimum coverage. Check that your opening and later sentences agree.
+Use your own words. Missing M/D stays unknown; a closing credit balance does not cancel recorded M.
+Policy/history is not needed for these nominal comparisons. If asked, illustrate max(D-B,0) only assuming
+all B reduces this debt with no new charges, not actual allocation or settlement. Do not predict interest,
+fees, future minima or payments. issuedStatementInterpretation is the closing record, not the current ledger.
+statementDateRoles explicitly separates the issued closingDate/closingPeriod from paymentDueDate.
+A due date is not a statement date or closing period. Use each date only for its supplied role.
+Copy supported dates and their year exactly from the selected records. Do not add a full
+calendar date when the question only needs the closing month. Dates mentioned by the customer
+remain unverified unless the selected bank records confirm them; discuss them conditionally.
+Use the source currency when quoting an amount. An amount owed is the customer's debt to the
+bank; a positive credit balance is money credited beyond zero debt. Never call debt a positive
+credit balance. Keep hypothetical repayment arithmetic conditional; do not claim it happened.
 When source is bank-api, the application retrieved scoped bank records and their as-of time;
 those records are authoritative. When source is customer-supplied, no bank lookup occurred:
 explain conditionally from those unverified supplied fields and never claim bank verification.
@@ -223,6 +246,25 @@ been returned by this lookup; do not invent its balance, due date, payment or fu
 The requested statementPeriod is the closing month, not the issue month or payment due month.
 If the wording asks about another period than the supplied selection, explain that mismatch and
 ask for the correct period; do not relabel the returned statement or pretend to have queried it.
+For this sample bank, accountInterpretations describes current credit-card ledger amounts for
+CC-prefixed products. A negative credit-card balance means money owed on the card, not proof of
+an overdraft or zero spending power. Use the supplied currentAmountOwed, creditLimit and
+remainingCreditLimit rather than guessing from the sign. If the question asks about this value,
+call it the remaining modeled credit limit, not unqualified available or spendable credit, and
+state that purchasing authorization is unknown: pending authorizations, holds and restrictions
+have not been provided. The value is the limit less current debt, floored at zero. Repayments that are
+actually credited reduce the amount owed before the balance reaches zero; do not say a positive
+balance is required to restore credit. This lookup does not prove any payment was made.
+accountInterpretationsDateBasis marks current-account facts as current-ledger-at-bankAsOfUtc.
+When asked about current account amounts, attribute them to bankAsOfUtc, not the statement date.
+Issued statement amounts describe the selected statementEndDate/closing period. Even when the
+numbers are equal, do not attribute current account facts to that earlier statement or imply
+current records omit payments since it closed. Payment settlement history has not been provided.
+A later current balance does not replace the issued minimumAmountDue or prove it has
+been paid. Quote the issued minimum and due date as recorded. Future minimum payments, interest,
+fees and changes in payment obligations require bank policy and transaction/payment records;
+never infer them from the balance sign or extrapolate the current minimum. Do not guess the
+product type or these sign conventions for accounts without a supplied interpretation.
 Explain what the retrieved amounts and dates mean for the question. If the question needs records
 or policy that are absent (such as transaction history, APR or a prior balance), say exactly what
 is missing; do not invent an explanation. You may explain general concepts, clearly distinguished
@@ -258,8 +300,8 @@ def llm_configuration() -> dict:
     config = {"base_url": base_url, "model": required("MODEL"),
               "binding_revision": required("BINDING_REVISION"), "api_key": api_key, "auth_type": auth_type}
     for name, key, default, upper, convert in (
-            ("TIMEOUT_SECONDS", "timeout", "120", 600, float),
-            ("MAX_OUTPUT_TOKENS", "max_output_tokens", "2048", 8192, int),
+            ("TIMEOUT_SECONDS", "timeout", "120", 900, float),
+            ("MAX_OUTPUT_TOKENS", "max_output_tokens", "2048", 32768, int),
             ("MAX_CONCURRENCY", "max_concurrency", "4", 32, int)):
         try:
             value = convert(os.environ.get(prefix + name, default))
@@ -268,6 +310,13 @@ def llm_configuration() -> dict:
         except ValueError as error:
             raise ValueError(f"{prefix}{name} must be between 1 and {upper}") from error
         config[key] = value
+    try:
+        temperature = float(os.environ.get(prefix + "TEMPERATURE", "0"))
+        if not math.isfinite(temperature) or not 0 <= temperature <= 2:
+            raise ValueError()
+    except ValueError as error:
+        raise ValueError("BANKING_LLM_TEMPERATURE must be a finite number between 0 and 2") from error
+    config["temperature"] = temperature
     diagnostics = os.environ.get(prefix + "DIAGNOSTICS", "false").lower()
     if diagnostics not in {"true", "false"}:
         raise ValueError("BANKING_LLM_DIAGNOSTICS must be true or false")
@@ -279,19 +328,185 @@ def llm_configuration() -> dict:
     return config
 
 
+def bank_account_interpretations(accounts: list) -> list:
+    """Explain the sample bank's CC ledger convention, without creating advice or policy.
+
+    Both bank implementations classify CC-prefixed products as credit cards and
+    calculate debt from the negative balance. Unknown products stay uninterpreted.
+    These facts supplement the unchanged scoped records only in bank-backed mode.
+    """
+    interpretations = []
+    for account in accounts:
+        code = account.get("productCode")
+        if not isinstance(code, str) or not code.strip().upper().startswith("CC"):
+            continue
+        interpretation = {"accountId": account["accountId"], "productCode": code,
+                          "balanceConvention": "negative-is-amount-owed"}
+        currency = account.get("currency")
+        if not isinstance(currency, str) or not re.fullmatch(r"[A-Z]{3}", currency):
+            raise ValueError("Banking credit-card interpretation requires a currency")
+        interpretation["currency"] = currency
+        amounts = {}
+        for key in ("balance", "limit"):
+            if key not in account:
+                continue
+            value = account[key]
+            # Bank API amounts are bounded decimal strings; reject malformed data
+            # before dispatching a model request rather than inventing a value.
+            pattern = r"-?(0|[1-9][0-9]*)(\.[0-9]+)?" if key == "balance" else r"(0|[1-9][0-9]*)(\.[0-9]+)?"
+            if not isinstance(value, str) or len(value) > 40 or not re.fullmatch(pattern, value):
+                raise ValueError("Invalid bank credit-card " + key)
+            amounts[key] = Decimal(value)
+        # Forty-character source amounts can exceed the default Decimal precision.
+        with localcontext() as precision:
+            precision.prec = 82
+            if "balance" in amounts:
+                owed = max(Decimal("0"), -amounts["balance"])
+                interpretation["currentAmountOwed"] = format(owed, "f")
+                interpretation["currentCreditBalance"] = format(max(Decimal("0"), amounts["balance"]), "f")
+                if "limit" in amounts:
+                    interpretation["creditLimit"] = format(amounts["limit"], "f")
+                    interpretation["remainingCreditLimit"] = format(max(Decimal("0"), amounts["limit"] - owed), "f")
+            elif "limit" in amounts:
+                interpretation["creditLimit"] = format(amounts["limit"], "f")
+        interpretation["missingFields"] = [key for key in ("balance", "limit") if key not in amounts]
+        interpretations.append(interpretation)
+    return interpretations
+
+
+def bank_statement_interpretation(statement: dict, accounts: list, interpretations: list) -> dict:
+    """Interpret the validated issued closing amount using its own account's convention.
+
+    assess_from_backend already validates this selected amount/date through
+    validate_request. Current ledger values never replace this closing amount.
+    An ambiguous account, unknown product, absent amount or different currency
+    stays uninterpreted rather than acquiring a guessed debt or conversion.
+    """
+    if "closingAmount" not in statement:
+        return {}
+    owned = [account for account in accounts if account["accountId"] == statement.get("accountId")]
+    if len(owned) != 1 or owned[0].get("currency") != statement.get("currency"):
+        return {}
+    convention = next((item for item in interpretations if item["accountId"] == statement["accountId"]
+                       and item["currency"] == statement["currency"]), None)
+    if convention is None:
+        return {}
+    with localcontext() as precision:
+        precision.prec = 82
+        closing = Decimal(str(statement["closingAmount"]))
+        return {"accountId": statement["accountId"], "currency": statement["currency"],
+                "balanceConvention": convention["balanceConvention"],
+                "dateBasis": "issued-statement-at-statementEndDate",
+                "statementEndDate": statement["statementEndDate"],
+                "closingAmountOwed": format(max(Decimal("0"), -closing), "f"),
+                "closingCreditBalance": format(max(Decimal("0"), closing), "f")}
+
+
+def calendar_reference_patterns() -> tuple:
+    """Use the same literal forms for date membership and explicit date-role checks."""
+    month_name = (r"Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+                  r"Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?")
+    year_separator = r"(?:\s*,\s*|\s+|\s*-\s*|(?=\d))"
+    return (
+        r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)",
+        rf"(?<![A-Za-z0-9])({month_name})\.?[\s.-]*(\d{{1,2}})(?:st|nd|rd|th)?{year_separator}(\d{{4}})(?!\d)",
+        rf"(?<![A-Za-z0-9])(\d{{1,2}})(?:st|nd|rd|th)?[\s.-]*({month_name})\.?{year_separator}(\d{{4}})(?!\d)",
+        r"(?<![A-Za-z0-9-])(\d{4})-(\d{2})(?![-\d])",
+        rf"(?<![A-Za-z0-9])({month_name})\.?(?:\s+|[-,]\s*|(?=\d))(\d{{4}})(?!\d)",
+    )
+
+
+def calendar_references(text: str, *, reject_invalid: bool) -> tuple[set, set]:
+    """Recognize bounded literal date forms, not arbitrary four-digit money amounts."""
+    months = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+              "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
+    dates, periods, full_spans = set(), set(), []
+
+    def record(match, year, month, day=None):
+        try:
+            value = date(int(year), int(month), int(day or 1))
+        except ValueError as error:
+            if reject_invalid:
+                raise ValueError("Model answer contains an invalid calendar reference") from error
+            return
+        periods.add((value.year, value.month))
+        if day is not None:
+            dates.add(value)
+            full_spans.append(match.span())
+
+    for pattern_index, pattern in enumerate(calendar_reference_patterns()):
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            if pattern_index >= 3 and any(match.start() < end and match.end() > start for start, end in full_spans):
+                continue
+            if pattern_index == 0:
+                record(match, *match.groups())
+            elif pattern_index == 1:
+                record(match, match[3], months[match[1][:3].lower()], match[2])
+            elif pattern_index == 2:
+                record(match, match[3], months[match[2][:3].lower()], match[1])
+            elif pattern_index == 3:
+                record(match, match[1], match[2])
+            else:
+                record(match, match[2], months[match[1][:3].lower()])
+    return dates, periods
+
+
+def validate_bank_answer_date_roles(answer: str, evidence: dict) -> None:
+    """Check literal dates directly following explicit closing/due labels only.
+
+    Question-origin references remain unverified and may be discussed conditionally;
+    this recognizer cannot prove their qualification or understand arbitrary prose.
+    """
+    statement = evidence["statementResult"]["statement"]
+    if not statement:
+        return  # No issued date exists to which an unavailable requested month can be attributed.
+    question_dates, question_periods = calendar_references(evidence["customerQuestion"], reject_invalid=False)
+    labels = (r"\b(?P<role>(?:statement\s+)?closing\s+(?:period|month|date)|"
+              r"statement(?:\s+(?:end|closing))?\s+date|statementEndDate|closed\s+on|"
+              r"(?:payment\s+)?due\s+date|payment\s+due)\b")
+    for label in re.finditer(labels, answer, re.IGNORECASE):
+        tail = answer[label.end():].lstrip(" \t\r\n:=-")
+        for _ in range(2):
+            tail = re.sub(r"^(?:of|is|was|on|by|for|ended|ends)\b[\s:=-]*", "", tail, count=1, flags=re.IGNORECASE)
+        token = next((match for pattern in calendar_reference_patterns()
+                      if (match := re.match(pattern, tail, re.IGNORECASE))), None)
+        if token is None:
+            continue
+        dates, periods = calendar_references(token[0], reject_invalid=True)
+        if (dates and dates.issubset(question_dates)) or (not dates and periods.issubset(question_periods)):
+            continue  # This permits discussion, not a bank-verification claim about the question's date.
+        expected = date.fromisoformat(statement["dueDate" if "due" in label["role"].lower() else "statementEndDate"])
+        if not dates.issubset({expected}) or not periods.issubset({(expected.year, expected.month)}):
+            raise ValueError("Model answer attributes a bank date to a contradictory closing or payment-due role")
+
+
+def validate_bank_answer_dates(answer: str, evidence: dict) -> None:
+    """Reject newly introduced literal dates; do not repair prose or certify its meaning.
+
+    A question-origin date can be discussed conditionally, but this recognizer
+    cannot establish whether prose actually qualifies it or attributes it correctly.
+    """
+    if evidence["source"] != "bank-api":
+        return
+    statement_result = evidence["statementResult"]
+    allowed_dates = {date.fromisoformat(value) for key, value in statement_result["statement"].items()
+                     if key in {"statementEndDate", "dueDate"}}
+    allowed_dates.add(date.fromisoformat(evidence["bankAsOfUtc"][:10]))
+    allowed_periods = {(value.year, value.month) for value in allowed_dates}
+    if "statementPeriod" in statement_result:
+        allowed_periods.add(tuple(int(value) for value in statement_result["statementPeriod"].split("-")))
+    question_dates, question_periods = calendar_references(evidence["customerQuestion"], reject_invalid=False)
+    allowed_dates.update(question_dates)
+    allowed_periods.update(question_periods)
+    answer_dates, answer_periods = calendar_references(answer, reject_invalid=True)
+    if not answer_dates.issubset(allowed_dates) or not answer_periods.issubset(allowed_periods):
+        raise ValueError("Model answer introduces a calendar reference absent from bank records and the question")
+    validate_bank_answer_date_roles(answer, evidence)
+
+
 async def model_answer(facts: dict, response: dict, accounts: list, config: dict,
                        capacity: asyncio.Semaphore, message_id: str, context_id: str) -> str:
-    evidence = {"source": "bank-api" if "bankingContext" in response else "customer-supplied",
-                "customerQuestion": facts["customerMessage"], "statementResult": response, "accounts": accounts}
-    if "bankingContext" in response:
-        evidence["bankAsOfUtc"] = datetime.fromtimestamp(
-            response["bankingContext"]["logicalTimeEpochMs"] / 1000, timezone.utc).isoformat()
-    messages = [{"role": "system", "content": BANKING_SYSTEM_PROMPT},
-                {"role": "user", "content": json.dumps(evidence, ensure_ascii=False, separators=(",", ":"))}]
-    request = {"model": config["model"], "messages": messages, "stream": False,
-               "max_tokens": config["max_output_tokens"]}
-    if config["reasoning_effort"]:
-        request["reasoning_effort"] = config["reasoning_effort"]
+    request = None
     headers = {"Authorization": "Bearer " + config["api_key"]} if config["auth_type"] == "bearer" else {}
     record = {"invocationId": str(uuid4()), "a2aMessageId": message_id, "a2aContextId": context_id,
               "model": config["model"], "bindingRevision": config["binding_revision"], "attempt": 1,
@@ -300,6 +515,25 @@ async def model_answer(facts: dict, response: dict, accounts: list, config: dict
     raw = bytearray()
     provider = None
     try:
+        evidence = {"source": "bank-api" if "bankingContext" in response else "customer-supplied",
+                    "customerQuestion": facts["customerMessage"], "statementResult": response, "accounts": accounts}
+        if "bankingContext" in response:
+            evidence["bankAsOfUtc"] = datetime.fromtimestamp(
+                response["bankingContext"]["logicalTimeEpochMs"] / 1000, timezone.utc).isoformat()
+            evidence["accountInterpretations"] = bank_account_interpretations(accounts)
+            evidence["accountInterpretationsDateBasis"] = "current-ledger-at-bankAsOfUtc"
+            statement = response["statement"]
+            evidence["issuedStatementInterpretation"] = bank_statement_interpretation(
+                statement, accounts, evidence["accountInterpretations"])
+            evidence["statementDateRoles"] = ({"closingDate": statement["statementEndDate"],
+                                               "closingPeriod": statement["statementEndDate"][:7],
+                                               "paymentDueDate": statement["dueDate"]} if statement else {})
+        messages = [{"role": "system", "content": BANKING_SYSTEM_PROMPT},
+                    {"role": "user", "content": json.dumps(evidence, ensure_ascii=False, separators=(",", ":"))}]
+        request = {"model": config["model"], "messages": messages, "stream": False,
+                   "max_tokens": config["max_output_tokens"], "temperature": config["temperature"]}
+        if config["reasoning_effort"]:
+            request["reasoning_effort"] = config["reasoning_effort"]
         # Admission, connection and streaming all share one wall-time limit; no hidden retries.
         async with asyncio.timeout(config["timeout"]):
             async with capacity:
@@ -310,8 +544,8 @@ async def model_answer(facts: dict, response: dict, accounts: list, config: dict
                         record["httpStatus"] = upstream.status_code
                         upstream.raise_for_status()
                         async for chunk in upstream.aiter_bytes():
-                            if len(raw) + len(chunk) > 131072:
-                                raise ValueError("Model response exceeds 131072 bytes")
+                            if len(raw) + len(chunk) > 1048576:
+                                raise ValueError("Model response exceeds 1048576 bytes")
                             raw.extend(chunk)
         provider = json.loads(raw)
         if isinstance(provider, dict):
@@ -331,6 +565,7 @@ async def model_answer(facts: dict, response: dict, accounts: list, config: dict
         answer = message.get("content")
         if not isinstance(answer, str) or not answer.strip() or len(answer) > 4096:
             raise ValueError("Model answer must contain 1-4096 characters")
+        validate_bank_answer_dates(answer, evidence)
         usage = provider.get("usage")
         if isinstance(usage, dict):
             record["usage"] = {k: v for k, v in usage.items() if k in

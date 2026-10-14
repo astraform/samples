@@ -1,10 +1,10 @@
-"""Launch one banking customer, or inspect the same run through the published SDK."""
+"""Launch one banking customer, or inspect the same run through the typed SDK."""
 
 import argparse
+import importlib.util
 import json
 import math
 import sys
-import time
 import os
 from pathlib import Path
 from urllib.parse import quote
@@ -21,7 +21,16 @@ from astraform_platform_client.models.agent_definition_create_request import Age
 from astraform_platform_client.models.agent_definition_publish_request import AgentDefinitionPublishRequest
 from astraform_platform_client.models.agent_journey_launch_request import AgentJourneyLaunchRequest
 from astraform_platform_client.api.simulation_events_api import SimulationEventsApi
-from astraform_platform_client.api.simulation_runs_api import SimulationRunsApi
+from astraform_platform_client.models.agent_journey_goal_completion_policy import AgentJourneyGoalCompletionPolicy
+
+
+# One shared evidence owner, shipped beside either standalone launcher.
+_evidence_path = Path(__file__).resolve().with_name("customer-run-evidence.py")
+if not _evidence_path.is_file():
+    _evidence_path = Path(__file__).resolve().parents[1] / "integration/customer-run-evidence.py"
+_evidence_spec = importlib.util.spec_from_file_location("astraform_customer_run_evidence", _evidence_path)
+evidence = importlib.util.module_from_spec(_evidence_spec)
+_evidence_spec.loader.exec_module(evidence)
 
 
 def bank_request(method, url, body=None):
@@ -34,93 +43,6 @@ def bank_request(method, url, body=None):
         raise SystemExit(f"{method} {url}: HTTP {error.code}: {error.read().decode()}") from None
 
 
-def save(directory, filename, value):
-    if directory is None:
-        return
-    path = directory / filename
-    temporary = path.with_name("." + path.name + ".tmp")
-    try:
-        temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
-        temporary.replace(path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def read_api(operation, deadline, output, label):
-    """Retry only read-only requests, never creation, publication or launch."""
-    for attempt in range(3):
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError("Inspection deadline reached; the simulation was not cancelled")
-        try:
-            return operation(_request_timeout=float(min(30, remaining)))
-        except (ApiException, TransportError, OSError) as error:
-            retryable = not isinstance(error, ApiException) or error.status in {0, 408, 429, 500, 502, 503, 504}
-            if not retryable or attempt == 2:
-                raise
-            record = {"operation": label, "attempt": attempt + 1,
-                      "errorType": type(error).__name__, "httpStatus": getattr(error, "status", None)}
-            with (output / "read-errors.jsonl").open("a", encoding="utf-8") as log:
-                log.write(json.dumps(record) + "\n")
-            print(f"Temporary {label} error; retrying the same run's read request.", file=sys.stderr)
-            time.sleep(min(2 ** attempt, max(0, deadline - time.monotonic())))
-
-
-def inspect_run(client, api, run_id, output, wait, timeout):
-    output.mkdir(parents=True, exist_ok=True)
-    for filename in ("session.json", "manifest.json"):
-        path = output / filename
-        if path.exists():
-            previous = json.loads(path.read_text(encoding="utf-8"))
-            if previous["apiBase"] != api or previous.get("runId", run_id) != run_id:
-                raise ValueError("Output directory belongs to another API deployment or run")
-    saved_launch = output / "launch.json"
-    if saved_launch.exists() and json.loads(saved_launch.read_text(encoding="utf-8"))["runId"] != run_id:
-        raise ValueError("Output directory belongs to another run")
-    if not (output / "manifest.json").exists():
-        save(output, "manifest.json", {"apiBase": api, "runId": run_id})
-    runs = SimulationRunsApi(client)
-    deadline = time.monotonic() + timeout
-    while True:
-        run = json.loads(read_api(lambda **kwargs: runs.get_simulation_run(run_id, **kwargs),
-                                 deadline, output, "status").to_json())
-        save(output, "run.json", run)
-        terminal = run["status"] in {"COMPLETED", "FAILED", "CANCELLED"}
-        if terminal or not wait:
-            ledger = read_api(lambda **kwargs: runs.inspect_simulation_run_ledger(run_id, limit=100, **kwargs),
-                              deadline, output, "ledger")
-            save(output, "ledger.json", json.loads(ledger.to_json()))
-            if terminal:
-                progress = run.get("metadata", {}).get("nativeProgress", {})
-                print(json.dumps({"runId": run_id, "status": run["status"],
-                                  "goal": progress.get("goal"), "stopReason": progress.get("stopReason")}, indent=2))
-                try:
-                    ready = read_api(lambda **kwargs: runs.get_simulation_run_evidence_export_readiness_with_http_info(
-                        run_id, **kwargs), deadline, output, "export readiness").status_code == 204
-                except ApiException as error:
-                    if error.status != 409:
-                        raise
-                    ready = False
-                if ready:
-                    evidence = read_api(lambda **kwargs: runs.export_simulation_run_evidence(run_id, **kwargs),
-                                        deadline, output, "export")
-                    temporary = output / ".evidence.zip.tmp"
-                    temporary.write_bytes(evidence)
-                    temporary.replace(output / "evidence.zip")
-                    print("Saved evidence.zip and ledger.json (up to 100 entries per ledger category). "
-                          "The complete export preserves the actual outcome, including failed goals.")
-                    return 0
-                print("Run is terminal; evidence export is not ready yet. Inspect this same run again.")
-            else:
-                print(f"Run {run_id} is {run['status']}. Inspect this same run again; do not relaunch.")
-            if not wait:
-                return 0
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError("Inspection deadline reached; the simulation was not cancelled")
-        time.sleep(min(3, remaining))
-
-
 def launch(client, api, output):
     directory = Path(__file__).resolve().parent
     catalog_api = AgentCatalogApi(client)
@@ -131,6 +53,17 @@ def launch(client, api, output):
     subject = os.environ.get("BANKING_SUBJECT_REF", "customer-a")
     sample_path = Path(os.environ.get("BANKING_SAMPLE_FILE", directory / "sample-configuration.json"))
     sample = json.loads(sample_path.read_text())
+    policy = sample["launchRequestTemplate"].get("completionPolicy", {})
+    if "requireCustomerFinish" in policy:
+        required_finish = policy["requireCustomerFinish"]
+        if type(required_finish) is not bool:
+            raise ValueError("completionPolicy.requireCustomerFinish must be a Boolean")
+        serialized = client.sanitize_for_serialization(AgentJourneyGoalCompletionPolicy.from_dict(policy))
+        if serialized.get("requireCustomerFinish") is not required_finish:
+            raise ValueError(
+                "The selected Python SDK cannot preserve completionPolicy.requireCustomerFinish. "
+                "Published SDK 0.3.2 does not support this field. Install a typed SDK with completion "
+                "support; this launcher refuses to remove or change the configured value.")
     configured_tools = [tool for tool in sample["catalogDraftRequest"]["draft"]["tools"]
                         if tool.get("kind") == "MCP" and tool.get("toolName") == "get_customer_accounts"]
     if len(configured_tools) != 1:
@@ -156,7 +89,7 @@ def launch(client, api, output):
             json.dump({"apiBase": api, "bankBase": bank, "contextRef": context,
                        "subjectRef": subject, "scenario": sample}, record, indent=2)
             record.write("\n")
-        save(output, "bank-seed-request.json", {"contextRef": context, "subjectRef": subject, "body": seed})
+        evidence.save(output, "bank-seed-request.json", {"contextRef": context, "subjectRef": subject, "body": seed})
     bank_request("PUT", bank + "/api/banking/v1/contexts/" + quote(context, safe="")
             + "/customers/" + quote(subject, safe=""), seed)
 
@@ -168,17 +101,17 @@ def launch(client, api, output):
              **{key: descriptor[key] for key in ("descriptorDigest", "inputSchemaDigest", "outputSchemaDigest",
                                                "effectClass", "scope")}}
     catalog["draft"]["tools"] = [grant]
-    save(output, "create-request.json", catalog)
+    evidence.save(output, "create-request.json", catalog)
     definition = json.loads(catalog_api.create_agent_definition(
         AgentDefinitionCreateRequest.from_dict(catalog), _request_timeout=60.0).to_json())["definition"]
-    save(output, "created.json", definition)
+    evidence.save(output, "created.json", definition)
     publish_request = {"expectedDraftVersion": definition["draftVersion"],
                        "expectedDraftSpecDigest": definition["draftSpecDigest"]}
-    save(output, "publish-request.json", publish_request)
+    evidence.save(output, "publish-request.json", publish_request)
     published = json.loads(catalog_api.publish_agent_definition(
         definition["catalogAgentId"], AgentDefinitionPublishRequest.from_dict(publish_request),
         _request_timeout=60.0).to_json())["revision"]
-    save(output, "published.json", published)
+    evidence.save(output, "published.json", published)
     launch = sample["launchRequestTemplate"]
     launch.update({"catalogAgentId": definition["catalogAgentId"],
                    "catalogRevisionId": published["catalogRevisionId"],
@@ -192,12 +125,12 @@ def launch(client, api, output):
     for condition in launch["completionPolicy"]["partnerResponseConditions"]:
         if condition["pointer"] == "/bankingContext/subjectRef":
             condition["oneOf"] = [subject]
-    save(output, "launch-request.json", launch)
+    evidence.save(output, "launch-request.json", launch)
     print(json.dumps({"launchRequest": launch}, indent=2), flush=True)
     result = json.loads(AgentJourneysApi(client).launch_agent_journey(
         AgentJourneyLaunchRequest.from_dict(launch), _request_timeout=60.0).to_json())
-    save(output, "launch.json", result)
-    save(output, "manifest.json", {"apiBase": api, "runId": result["runId"],
+    evidence.save(output, "launch.json", result)
+    evidence.save(output, "manifest.json", {"apiBase": api, "runId": result["runId"],
                                   "catalogAgentId": definition["catalogAgentId"],
                                   "catalogRevisionId": published["catalogRevisionId"],
                                   "launchRequestId": launch["requestId"],
@@ -212,7 +145,7 @@ def main(argv=None):
     parser.add_argument("--output", type=Path, help="Save requests and evidence; use an empty directory for a new launch")
     parser.add_argument("--wait", action="store_true", help="Wait for this run and its terminal evidence export")
     parser.add_argument("--inspect", metavar="RUN_ID", help="Read an existing run; never seed, create, publish or launch")
-    parser.add_argument("--timeout", type=float, default=900, help="Maximum inspection/wait seconds (default: 900)")
+    parser.add_argument("--timeout", type=float, default=8220, help="Maximum inspection/wait seconds (default: 8220)")
     args = parser.parse_args(argv)
     if (args.wait or args.inspect) and args.output is None:
         parser.error("--wait and --inspect require --output")
@@ -231,7 +164,7 @@ def main(argv=None):
             run_id = accepted["runId"] if args.wait else None
         if run_id is not None:
             try:
-                return inspect_run(client, api, run_id, args.output, args.wait, args.timeout)
+                return evidence.inspect_run(client, api, run_id, args.output, args.wait, args.timeout)
             except TimeoutError as error:
                 print(f"Wait stopped: {error}. Continue with --inspect {run_id} --output {args.output}.", file=sys.stderr)
                 return 3

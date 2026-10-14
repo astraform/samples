@@ -35,6 +35,7 @@ RUN python -m pip install \
     useradd --uid 10001 --create-home astraform
 
 COPY banking-advice-agent/app.py banking-advice-agent/run-customer.py ./
+COPY integration/customer-run-evidence.py ./
 COPY banking-advice-agent/input.schema.json banking-advice-agent/bank-backend.input.schema.json banking-advice-agent/output.schema.json ./
 COPY banking-advice-agent/sample-configuration.json banking-advice-agent/issued-statement-configuration.json banking-advice-agent/three-month-configuration.json ./
 
