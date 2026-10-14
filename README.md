@@ -16,7 +16,7 @@ cd samples
 
 | Start here | What it runs |
 | --- | --- |
-| [Python banking starter](deploy/banking-starter/README.md) | An image-only deployment with a separate bank database, an LLM banking partner and one customer asking about an issued statement. Included as a starter archive in the planned repository release v0.1.0; publication is pending. |
+| [Python banking starter](deploy/banking-starter/README.md) | An image-only deployment with a separate bank database, an LLM banking partner and one customer asking about an issued statement. Available as a starter archive in the published repository release v0.1.0. That archive retains its original scenario and completion behavior. |
 | [Banking from sample source](banking-advice-agent/README.md) | Build either the Java or Python bank, configure the shared LLM banking partner and run the customer through the published SDK. Includes fixed-statement and monthly-statement configurations. |
 | [Marketing from sample source](integration/marketing-ops-a2a/README.md#native-customer-simulation) | Build the Marketing Ops provider and LLM Creative Agency, configure their connections and launch a customer seeking campaign advice. |
 
@@ -112,10 +112,16 @@ All examples share one repository release version, such as **v0.1.0**. Each
 all examples and any prepared starter archives. Choose the domain/language you
 need; you do not need to install all samples.
 
-The first release is being prepared with the Python banking starter archive and
+The published **v0.1.0** release includes the Python banking starter archive and
 checksum. Java, marketing and the other examples are available as source; they
-do not yet have downloadable starter archives. The banking starter targets
+do not yet have published starter archives. The released banking starter targets
 platform **v0.2.0**, Python SDK **0.3.2** and contracts **1.2.0**.
+
+Local onboarding work adds [Java/Python issued/monthly banking candidates](deploy/banking-starter/README.md#local-java-and-scheduled-statement-candidates)
+and a [marketing candidate](deploy/marketing-starter/README.md), all marked
+`localVerificationOnly`. They are not additional public release assets. The
+local issued scenario requires the unreleased customer-FINISH platform fix;
+public v0.2.0 retains the original completion behavior.
 
 Platform deployment bundles remain in [astraform/releases](https://github.com/astraform/releases/releases).
 Platform and SDK versions are independent of the samples version. Only download

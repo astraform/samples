@@ -12,8 +12,20 @@ Do not distribute it as a verified public download or infer partner acceptance
 from image availability. `image-lock.json`, `release.env`, `starter-config.json`
 and the manifest identify its topology, scenario, source and actual payload.
 The tools service reuses a Python SDK image, while the marketing launcher and
-its existing banking evidence helper are supplied by this archive and mounted
+the shared `customer-run-evidence.py` utility are supplied by this archive and mounted
 read-only; they are not claimed to be embedded in that published image.
+The shared utility saves and inspects the same accepted run through SDK reads;
+the marketing launcher owns its normal generated create/publish/launch calls.
+It does not import the banking launcher or start a helper service.
+
+The default marketing templates omit `completionPolicy.requireCustomerFinish`
+and work with published Python SDK 0.3.2. A custom `MARKETING_SAMPLE_FILE` that
+supplies either `true` or `false` requires a native typed customer SDK that
+preserves that value, plus the locally updated platform. With SDK 0.3.2 the
+launcher rejects either explicit value before writing output or creating,
+publishing or launching a Catalog definition. It does not insert the field
+through a transport bridge. Supporting SDK/platform changes remain local and
+unreleased; the provider dependency pins are unchanged.
 
 ## Initialize and run
 

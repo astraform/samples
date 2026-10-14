@@ -155,9 +155,20 @@ source for every example and separate starter archives for the examples packaged
 for deployment. Adding a language or framework does not create another release
 stream, and downloading one starter does not install the others.
 
-The first samples release, **v0.1.0**, includes a Python banking starter targeting
+The published first samples release, **v0.1.0**, includes a Python banking starter targeting
 platform **v0.2.0**, Python SDK **0.3.2** and contracts **1.2.0**. Java and marketing
 remain source examples in that release; they do not yet have starter archives.
+Local starter preparation now covers Java/Python banking (issued or monthly)
+and marketing (scheduled or current-boundary), using the shared deterministic
+packaging owner. Each new candidate is explicitly `localVerificationOnly`,
+records installed image IDs and payload hashes, and leaves published locks,
+release metadata and archives unchanged. The issued banking candidate requires
+the unreleased customer-FINISH Experiment/API fix; it is not compatible with a
+public v0.2.0 platform download. See the [banking guide](../deploy/banking-starter/README.md#local-java-and-scheduled-statement-candidates)
+and [marketing guide](../deploy/marketing-starter/README.md). Java SDK 0.4.2
+provider callbacks and Python SDK 0.3.2 customer launch/export are distinct
+verification paths; these candidates do not certify a Java customer client.
+
 Download published starters from the [samples release list](https://github.com/astraform/samples/releases).
 The platform and SDKs are versioned independently; platform bundles are on the
 separate [platform release list](https://github.com/astraform/releases/releases).

@@ -2,9 +2,11 @@
 
 This starter connects a real LLM customer in Astraform to a real LLM banking agent over A2A 1.0 JSON-RPC. The customer reads its own bank account through MCP; the partner agent reads the same bank backend through its banking API. Bank records live in this starter's separate PostgreSQL database. Astraform stores simulation state and evidence in its own database.
 
-This guide targets **Astraform Platform v0.2.0** and the **Python SDK 0.3.2** included in the agent image. You need the platform and starter archives, Docker and your model configuration; no private source checkout or host SDK installation is required. A package marked `localVerificationOnly` requires the recorded locally installed images and is an engineering rehearsal, not a public starter release.
+The published baseline uses **Astraform Platform v0.2.0** and **Python SDK 0.3.2** in the bank/advice images. You need the platform and starter archives, Docker and your model configuration; no private source checkout or host SDK installation is required. A package marked `localVerificationOnly` requires the recorded locally installed images and is an engineering rehearsal, not a public starter release.
 
-The updated local source scenario opts into `completionPolicy.requireCustomerFinish: true`. This requires the locally updated Experiment service and prerelease API contract; published platform v0.2.0 does not implement it. Publication locks and SDK 0.3.2 remain unchanged. Use the recorded local images for this completion correction rather than treating a public v0.2.0 download as compatible with the new opt-in.
+The updated local source scenario opts into `completionPolicy.requireCustomerFinish: true`. It requires both the locally updated Experiment service and a customer SDK whose generated completion-policy model preserves this field. Published platform v0.2.0 and Python SDK 0.3.2 do not support it. A customer launcher using SDK 0.3.2 rejects any explicit Boolean value before bank seeding or create/publish/launch writes; it does not add the field through a transport bridge. Inspection of an existing run still uses the published SDK. Provider dependency pins and published artifacts remain unchanged. `starter-config.json` records `requiresUnreleasedCustomerSdk` and `requiredCustomerSdkCapabilities`; a supporting native customer client is an explicit local, unreleased requirement.
+
+The banking image owns `run-customer.py` and the shared `customer-run-evidence.py` beside it in `/app`. The updated Docker build includes both. This archive does not supply replacement launcher scripts or a helper service, and an older published image is not assumed to contain the updated code.
 
 ## What you will run
 
@@ -88,7 +90,7 @@ Edit `scenario.json` before a new launch. These existing API fields are the conf
 | Wait for customer completion | `launchRequestTemplate.completionPolicy.requireCustomerFinish` (local prerelease extension) |
 | Stop limits | `launchRequestTemplate.maxPartnerInteractions`; `completionPolicy.maxCustomerDecisions`, `maxRepeatedExchanges`, `maxWallTimeMs` |
 
-The goal is a human purpose; the response conditions check structured bank facts such as the account, statement month, amount and due date. Keep those conditions consistent if you change the seeded bank records. The local `requireCustomerFinish: true` setting also waits for an accepted customer `FINISH` after matching evidence, so a clarification request can continue instead of being cut off by the earlier receipt. It neither forces the customer to finish nor scores whether the partner's prose explains the AU$100 budget correctly; review that in the conversation evidence. Omitted or false values retain the earlier receipt-only stopping behavior. The helper uses SDK 0.3.2's public transport to preserve this strictly validated Boolean extension; it does not retry a rejected launch or silently drop the setting.
+The goal is a human purpose; the response conditions check structured bank facts such as the account, statement month, amount and due date. Keep those conditions consistent if you change the seeded bank records. The local `requireCustomerFinish: true` setting also waits for an accepted customer `FINISH` after matching evidence, so a clarification request can continue instead of being cut off by the earlier receipt. It neither forces the customer to finish nor scores whether the partner's prose explains the AU$100 budget correctly; review that in the conversation evidence. Omission retains earlier receipt-only stopping behavior. Explicit false has that same runtime meaning but still requires a typed SDK that preserves the field. The launcher validates the raw Boolean and its typed round-trip, then calls the normal generated journey API; it never drops or manually reinserts the setting.
 
 The helper supplies new catalog/request identities, discovers the configured MCP descriptor and binds the fresh bank context to `customer-a`. Leave the corresponding placeholders in the scenario; the LLM does not select its customer identity or another customer's account. The customer can read only its assigned account context. The partner agent reads the same bank through the backend API, using the host-provided context.
 
@@ -156,10 +158,13 @@ candidates, not additional public release assets.
 `starter-config.json` identifies the implementation, bank port, native domain
 profile and scenario. Java uses port 8094, JDBC settings and domain`banking`;
 Python uses port 8092, its PostgreSQL URL and domain`banking-python`. Both reuse
-the same separate bank database, banking advice service and Python SDK 0.3.2
-launch/inspect/export helper. The Java provider uses Java SDK 0.4.2; the customer
-launcher remains Python, so this candidate does not prove a Java launch/export
-client path.
+the same separate bank database, banking advice service and Python customer
+launcher. The monthly scenario omits `requireCustomerFinish` and can use published
+Python SDK 0.3.2 for launch/inspect/export. The strict issued scenario requires a
+native typed customer SDK that preserves its explicit completion field; its
+supporting SDK/platform changes remain local and unreleased. The Java provider
+uses Java SDK 0.4.2; the customer launcher remains Python, so this candidate does
+not prove a Java launch/export client path.
 
 The `monthly` variant copies the existing three-month scenario to`scenario.json`,
 enables `remote-domain.native-reference-state.v1` and installs the existing
