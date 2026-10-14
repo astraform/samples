@@ -565,6 +565,12 @@ jobs:
           scripts.tests.test_marketing_starter_package
           scripts.tests.test_samples_release
 
+      - name: Test banking customer same-run recovery
+        run: >-
+          uv run --locked --no-dev --no-editable --group release
+          --project python-fastapi-banking python -m unittest discover
+          -s banking-advice-agent/tests -p test_customer_launcher.py -v
+
       - name: Test marketing customer same-run recovery
         run: >-
           uv run --locked --no-dev --no-editable --group release
