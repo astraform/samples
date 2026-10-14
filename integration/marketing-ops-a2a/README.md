@@ -179,14 +179,14 @@ python3 -m venv .venv
 . .venv/bin/activate
 python3 -m pip install 'astraform-remote-domain-author-kit==0.3.2'
 ASTRAFORM_API_BASE=http://localhost:8084 \
-  python3 integration/marketing-ops-a2a/run-customer.py
+  python3 integration/marketing-ops-a2a/run-customer.py --output /tmp/marketing-first --wait
 ```
 
 The provider uses Java author-kit/conformance **0.4.2** from Maven Central.
 Both SDKs use shared contract **1.2.0**. No SDK checkout or local wheel build is
 needed; see the [SDK dependencies](../../README.md#sdk-development).
 
-The helper prints one JSON document containing the actual launch request,
+The helper prints a JSON document containing the actual launch request,
 Catalog identity and launch result. Defaults can be changed with
 `ASTRAFORM_API_BASE` (legacy development default `http://localhost:8384`;
 set `http://localhost:8084` for the bundle as shown above),
@@ -250,3 +250,31 @@ Astraform customer or establish real-model simulation success. Use the SDK
 workflow above for that purpose. Internal platform restart, replay and retired
 clock-runtime proofs are maintained with the platform source and are not required
 to build or run these sample services.
+
+
+## Same-run evidence and local image-only starter
+
+The existing launcher accepts`--output DIRECTORY --wait` to save the create,
+publish and launch identities before their requests, then inspect the accepted
+run and export terminal evidence. A new launch requires an empty directory;
+a transport error never triggers automatic creation/publication/launch retries.
+Use the returned run ID to resume:
+
+```sh
+ASTRAFORM_API_BASE=http://localhost:8084 \
+  python3 integration/marketing-ops-a2a/run-customer.py \
+  --inspect RUN_ID --output /tmp/marketing-first --wait
+```
+
+`--inspect` is read-only. Status/ledger/export reads can retry bounded temporary
+transport errors against that same run. The observer's1,500-second default covers
+the configured1,200-second scenario limit with export time; it does not extend or
+cancel the run. Saved evidence keeps unsuccessful goals and original messages.
+This reuses the banking launcher's public SDK transport and evidence inspection
+functions, not a second coordinator or scripted customer path.
+
+[The image-only marketing starter](../../deploy/marketing-starter/README.md)
+packages these scripts, scenario and private-network image topology for local
+verification. It is not published, and it does not replace this editable source
+example. Java SDK 0.4.2 is exercised by the domain provider; the launch/export
+client uses Python SDK 0.3.2.
