@@ -18,6 +18,7 @@ import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -122,6 +123,62 @@ class OpenAiCompatibleCreativeAgencyResponseGeneratorTest {
         assertThatThrownBy(() -> service.buildReply(new CreativeAgencyCommand("oversized",
                 envelope.replace("final-context-fact", "x".repeat(16_000)), Map.of())))
                 .isInstanceOf(IllegalArgumentException.class);
+        assertThat(requestCount).hasValue(1);
+    }
+
+    @Test
+    void keepsDocumentRightsAndActionEvidenceDistinctInTheActualModelRequest() throws Exception {
+        responses.add(new StubResponse(200, completedDecision("requested-model", "launch-blocker", "AWAIT_REVIEW",
+                "Responsibility for the document is known; permission and approval remain unknown.",
+                List.of("Ask for the document and confirmation of its scope."),
+                List.of("usage permission and approval status"))));
+        Map<String, Object> facts = new LinkedHashMap<>();
+        facts.put("documentResponsibility", "Supplier must provide the signed approval document.");
+        facts.put("assetCopyrightOwner", null);
+        facts.put("usagePermission", null);
+        facts.put("completedWork", null);
+        var history = new CreativeAgencyConversationStore.Exchange(
+                "Can we use the asset?", "Request permission and confirm the approval status.");
+        var result = generator(1).generate(new CreativeAgencyResponseGenerator.GenerationRequest(
+                CreativeAgencyScenarioKey.LAUNCH_BLOCKER, CreativeAgencyScenarioKey.LAUNCH_BLOCKER,
+                "I requested the document earlier. What should happen next?", facts, true, List.of(history)));
+
+        JsonNode wire = receivedRequest.get();
+        String policy = wire.path("messages").get(0).path("content").stringValue();
+        JsonNode context = objectMapper.readTree(wire.path("messages").get(1).path("content").stringValue());
+        assertThat(policy).contains("ownership of an asset or copyright", "permission to use it",
+                "does not establish the others", "not evidence that work was completed");
+        assertThat(context.path("observedFacts")).isEqualTo(objectMapper.valueToTree(facts));
+        assertThat(context.path("recentExchanges")).isEqualTo(objectMapper.valueToTree(List.of(history)));
+        assertThat(context.path("latestUserInput").stringValue()).contains("requested the document earlier");
+        assertThat(context.has("authoritativeDecision")).isFalse();
+        assertThat(result.disposition()).isEqualTo("AWAIT_REVIEW");
+        assertThat(result.summary()).isEqualTo(
+                "Responsibility for the document is known; permission and approval remain unknown.");
+        assertThat(requestCount).hasValue(1);
+    }
+
+    @Test
+    void shapeValidOwnershipAndCompletionMistakesRemainVisibleWithoutAnswerRepair() throws Exception {
+        String unsupportedSummary = "The supplier owns the asset and has already granted usage permission.";
+        String unsupportedAction = "The approval work has already been completed.";
+        responses.add(new StubResponse(200, completedDecision("requested-model", "launch-blocker", "UNBLOCK_PLAN",
+                unsupportedSummary, List.of(unsupportedAction), List.of())));
+        var store = new CreativeAgencyConversationStore();
+        var service = new CreativeAgencyScenarioService(store, generator(2));
+        var reply = service.buildReply(new CreativeAgencyCommand("unrepaired-model-output", """
+                {"schemaVersion":"astraform.isolated-event-a2a-invocation.v1",
+                 "request":{"instruction":"What should we do about the missing document?",
+                   "facts":{"scenario":"launch-blocker","campaignKey":"asset-review-campaign",
+                     "queueState":"blocked","reviewSummary":"The supplier is responsible for the missing document; ownership, permission and completed work are unknown."}}}
+                """, Map.of()));
+
+        assertThat(reply.disposition()).isEqualTo("UNBLOCK_PLAN");
+        assertThat(reply.responseText()).contains(unsupportedSummary, "1. " + unsupportedAction);
+        assertThat(reply.metadata()).containsEntry("generationDecisionSource", "llm")
+                .containsEntry("generationFallback", false);
+        assertThat(store.get("unrepaired-model-output").recentExchanges().getFirst().agencyReply())
+                .contains(unsupportedSummary, unsupportedAction);
         assertThat(requestCount).hasValue(1);
     }
 

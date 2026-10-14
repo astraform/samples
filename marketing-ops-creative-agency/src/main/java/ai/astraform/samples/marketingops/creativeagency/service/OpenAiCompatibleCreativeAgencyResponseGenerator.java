@@ -171,6 +171,14 @@ public final class OpenAiCompatibleCreativeAgencyResponseGenerator implements Cr
                 AWAIT_REVIEW (insufficient review findings), or NO_EXTERNAL_BLOCKER (none established).
                 Base your choice on the facts available now. A pending review has not established its findings.
                 Do not invent blockers, approvals, completed work, deadlines or agency commitments.
+                Keep responsibility for supplying or reviewing a document, ownership of an asset or copyright,
+                and permission to use it as separate facts. Evidence establishing one does not establish the others.
+                A party responsible for a document is not thereby established as the asset owner or rights holder.
+                State unavailable details as unknown or ask for clarification. Use explicit subjects and objects
+                so responsibility or ownership is not assigned to a different item through an ambiguous reference.
+                Previous recommendations, requests and promises are not evidence that work was completed or
+                permission was granted. A proposed recovery plan does not establish approval or launch readiness;
+                qualify its result using the observed evidence and any remaining prerequisites.
                 You provide advice only: no tool execution, launch, escalation or campaign-state change occurs
                 from your response. Distinguish suggested next steps from work already performed.
                 Return exactly one JSON object with scenario, disposition, summary, actions and needsFromUser.
