@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -37,7 +39,7 @@ class MarketingStarterPackageTest(unittest.TestCase):
             self.assertTrue(manifest["localVerificationOnly"])
             self.assertEqual({"platform": "0.2.0", "javaSdk": "0.4.2", "pythonSdk": "0.3.2", "contracts": "1.2.0"}, manifest["compatibility"])
             self.assertEqual((ROOT / "integration/marketing-ops-a2a/run-customer.py").read_bytes(), (bundle / "run-customer.py").read_bytes())
-            self.assertEqual((ROOT / "banking-advice-agent/run-customer.py").read_bytes(), (bundle / "customer-run-evidence.py").read_bytes())
+            self.assertEqual((ROOT / "integration/customer-run-evidence.py").read_bytes(), (bundle / "customer-run-evidence.py").read_bytes())
             self.assertEqual(scenario, json.loads((bundle / "starter-config.json").read_text())["scenario"])
             for name, metadata in manifest["files"].items():
                 self.assertEqual(packager.packaging.file_hash(bundle / name), metadata["sha256"])
@@ -46,6 +48,22 @@ class MarketingStarterPackageTest(unittest.TestCase):
             checksum = Path(str(bundle) + ".tar.gz.sha256")
             archive = Path(str(bundle) + ".tar.gz")
             self.assertEqual(f"{packager.packaging.file_hash(archive)}  {archive.name}\n", checksum.read_text())
+
+    def test_standalone_archive_imports_shared_evidence_without_banking_source(self):
+        with patch.object(packager.packaging.subprocess, "check_output", return_value="sha256:" + "a" * 64 + "\n"):
+            bundle = packager.package("v0.1.0", self.images, self.directory / "standalone", True, "a" * 40)
+        result = subprocess.run([sys.executable, "-B", "run-customer.py", "--help"],
+                                cwd=bundle, capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("--inspect", result.stdout)
+        helper = (bundle / "customer-run-evidence.py").read_text()
+        self.assertNotIn("bank_request", helper)
+        self.assertNotIn("AgentCatalogApi", helper)
+        self.assertNotIn("launch_journey", helper)
+        (bundle / "customer-run-evidence.py").unlink()
+        missing = subprocess.run([sys.executable, "-B", "run-customer.py", "--help"],
+                                 cwd=bundle, capture_output=True, text=True)
+        self.assertNotEqual(0, missing.returncode)
 
     def test_public_packaging_and_extra_image_roles_are_rejected_before_docker_or_output(self):
         with patch.object(packager.packaging.subprocess, "check_output") as docker:

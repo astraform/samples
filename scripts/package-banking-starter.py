@@ -104,7 +104,7 @@ def write_json(path, value):
 
 def package_bundle(version, images, output, source_revision, files, bundle_name,
                    compatibility, schema_version, local_verification=False,
-                   configuration=None, required_platform=None):
+                   configuration=None, required_platform=None, compatibility_meaning=None):
     """One deterministic archive writer shared by the existing sample starters."""
     require(re.fullmatch(r"v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?", version),
             "version must be an explicit release version such as v0.2.0 or v0.2.0-local.1")
@@ -157,6 +157,8 @@ def package_bundle(version, images, output, source_revision, files, bundle_name,
         }
         if required_platform:
             manifest["requiredPlatform"] = required_platform
+        if compatibility_meaning:
+            manifest["compatibilityMeaning"] = compatibility_meaning
         if local_verification:
             manifest.update(localVerificationOnly=True, localImageIds=local_ids,
                 sourceRevisionMeaning="Baseline checkout commit only; uncommitted operator-file hashes and installed image IDs identify this local candidate.")
@@ -194,8 +196,12 @@ def package(version, images, output, local_verification=False, source_revision=N
     source = ROOT / files["scenario.json"]
     require(source.is_file() and not source.is_symlink(), f"Missing or unsafe starter source: {files['scenario.json']}")
     selected = json.loads(source.read_text())
-    finish = selected.get("launchRequestTemplate", {}).get("completionPolicy", {}).get("requireCustomerFinish") is True
-    require(local_verification or (bank == "python" and scenario == "issued" and not finish),
+    policy = selected.get("launchRequestTemplate", {}).get("completionPolicy", {})
+    finish_present = "requireCustomerFinish" in policy
+    finish = policy.get("requireCustomerFinish")
+    require(not finish_present or type(finish) is bool,
+            "completionPolicy.requireCustomerFinish must be a Boolean when present")
+    require(local_verification or (bank == "python" and scenario == "issued" and not finish_present),
             "New starter variants and customer-FINISH criteria require --local-verification; publication is not authorized")
     configuration = {
         "schemaVersion": "astraform.banking-starter.configuration.v1",
@@ -203,17 +209,22 @@ def package(version, images, output, local_verification=False, source_revision=N
         "bankPort": 8092 if bank == "python" else 8094,
         "domainId": "banking-python" if bank == "python" else "banking",
         "nativeDomainEnabled": scenario == "monthly",
-        "requiresUnreleasedPlatform": finish,
-        "requiredPlatformCapabilities": ["retainedParticipationSupported"] if scenario == "monthly" else [],
+        "requiresUnreleasedPlatform": finish_present,
+        "requiredPlatformCapabilities": (["retainedParticipationSupported"] if scenario == "monthly" else [])
+            + (["completionPolicy.requireCustomerFinish"] if finish_present else []),
+        "requiresUnreleasedCustomerSdk": finish_present,
+        "requiredCustomerSdkCapabilities": ["completionPolicy.requireCustomerFinish"] if finish_present else [],
     }
     compatibility = {**COMPATIBILITY, **({"javaSdk": "0.4.2"} if bank == "java" else {})}
-    if finish:
+    if finish_present:
         compatibility["platform"] = "unreleased-local-customer-finish"
     bundle_name = (f"astraform-banking-starter-{version}" if bank == "python" and scenario == "issued"
                    else f"astraform-{bank}-banking-{scenario}-starter-{version}")
     return package_bundle(version, images, output, source_revision, files, bundle_name,
                           compatibility, "astraform.banking-starter.bundle.v1", local_verification,
-                          configuration, {"completionPolicy.requireCustomerFinish": True} if finish else None)
+                          configuration, {"completionPolicy.requireCustomerFinish": finish} if finish_present else None,
+                          "Python SDK 0.3.2 identifies the bank/advice provider dependency. The customer launcher requires a native typed SDK that preserves completionPolicy.requireCustomerFinish; published Python SDK 0.3.2 cannot preserve that field. See starter-config.json requiredCustomerSdkCapabilities."
+                          if finish_present else None)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

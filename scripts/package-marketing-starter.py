@@ -17,7 +17,7 @@ FILES = {
         "models/gemini.env.example", "models/ollama.env.example",
     )},
     "run-customer.py": "integration/marketing-ops-a2a/run-customer.py",
-    "customer-run-evidence.py": "banking-advice-agent/run-customer.py",
+    "customer-run-evidence.py": "integration/customer-run-evidence.py",
     "input.schema.json": "integration/marketing-ops-a2a/input.schema.json",
 }
 

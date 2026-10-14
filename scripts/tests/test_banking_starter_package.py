@@ -3,7 +3,9 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -198,6 +200,54 @@ class BankingStarterPackageTest(unittest.TestCase):
         self.assertEqual("unreleased-local-customer-finish", manifest["compatibility"]["platform"])
         self.assertTrue(manifest["requiredPlatform"]["completionPolicy.requireCustomerFinish"])
         self.assertTrue(json.loads((bundle / "starter-config.json").read_text())["requiresUnreleasedPlatform"])
+
+    def test_any_explicit_finish_boolean_records_native_customer_sdk_requirement(self):
+        for value in (False, True):
+            with self.subTest(value=value):
+                self.scenario["launchRequestTemplate"]["completionPolicy"]["requireCustomerFinish"] = value
+                (self.root / packager.FILES["scenario.json"]).write_text(json.dumps(self.scenario))
+                with patch.object(packager.subprocess, "check_output") as docker:
+                    with self.assertRaisesRegex(ValueError, "local-verification"):
+                        packager.package("v0.1.0", self.images, self.output / f"public-{value}", False, self.source_revision)
+                    docker.assert_not_called()
+                with patch.object(packager.subprocess, "check_output", return_value="sha256:" + "b" * 64 + "\n"):
+                    bundle = packager.package("v0.1.0", self.images, self.output / str(value), True, self.source_revision)
+                configuration = json.loads((bundle / "starter-config.json").read_text())
+                manifest = json.loads((bundle / "bundle-manifest.json").read_text())
+                self.assertTrue(configuration["requiresUnreleasedCustomerSdk"])
+                self.assertEqual(["completionPolicy.requireCustomerFinish"], configuration["requiredCustomerSdkCapabilities"])
+                self.assertTrue(configuration["requiresUnreleasedPlatform"])
+                self.assertIs(value, manifest["requiredPlatform"]["completionPolicy.requireCustomerFinish"])
+                self.assertEqual("0.3.2", manifest["compatibility"]["pythonSdk"])
+                self.assertIn("bank/advice provider dependency", manifest["compatibilityMeaning"])
+                self.assertIn("published Python SDK 0.3.2 cannot preserve that field", manifest["compatibilityMeaning"])
+                self.assertEqual(self.scenario, json.loads((bundle / "scenario.json").read_text()))
+                self.assertNotIn("customer-run-evidence.py", manifest["files"])
+
+    def test_invalid_finish_value_fails_before_images_or_archive(self):
+        for value in (None, "true", 0):
+            with self.subTest(value=value):
+                self.scenario["launchRequestTemplate"]["completionPolicy"]["requireCustomerFinish"] = value
+                (self.root / packager.FILES["scenario.json"]).write_text(json.dumps(self.scenario))
+                with patch.object(packager.subprocess, "check_output") as docker:
+                    with self.assertRaisesRegex(ValueError, "must be a Boolean"):
+                        packager.package("v0.1.0", self.images, self.output, True, self.source_revision)
+                    docker.assert_not_called()
+                self.assertFalse(self.output.exists())
+
+    def test_image_owned_customer_imports_with_only_shared_evidence_neighbor(self):
+        repository = Path(__file__).resolve().parents[2]
+        dockerfile = (repository / "banking-advice-agent/Dockerfile").read_text()
+        self.assertIn("COPY integration/customer-run-evidence.py ./", dockerfile)
+        standalone = Path(self.temporary.name) / "standalone-image-files"
+        standalone.mkdir()
+        for source, name in (("banking-advice-agent/run-customer.py", "run-customer.py"),
+                             ("integration/customer-run-evidence.py", "customer-run-evidence.py")):
+            shutil.copyfile(repository / source, standalone / name)
+        result = subprocess.run([sys.executable, "-B", "run-customer.py", "--help"],
+                                cwd=standalone, capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("--inspect", result.stdout)
 
 
 class BankingStarterInitializationTest(unittest.TestCase):
