@@ -170,9 +170,10 @@ new runs; existing runs retain their accepted binding revisions and configuratio
 
 ### Launch and inspect
 
-The helper uses the platform client included in the published **Astraform Python
-author kit 0.3.2**. Install it in a Python 3.12+ virtual environment. From the
-sample repository root:
+The default marketing templates omit `completionPolicy.requireCustomerFinish`
+and use the platform client included in the published **Astraform Python author
+kit 0.3.2**. Install it in a Python 3.12+ virtual environment. From the sample
+repository root:
 
 ```bash
 python3 -m venv .venv
@@ -184,7 +185,21 @@ ASTRAFORM_API_BASE=http://localhost:8084 \
 
 The provider uses Java author-kit/conformance **0.4.2** from Maven Central.
 Both SDKs use shared contract **1.2.0**. No SDK checkout or local wheel build is
-needed; see the [SDK dependencies](../../README.md#sdk-development).
+needed for those default templates; see the [SDK dependencies](../../README.md#sdk-development).
+
+The launcher uses the normal generated Catalog and Agent Journey APIs. It shares
+save, bounded read polling and same-run export behavior with
+[`customer-run-evidence.py`](../customer-run-evidence.py), not the banking
+launcher. A standalone marketing archive includes that utility beside
+`run-customer.py`; its existing read-only Compose mount keeps both available.
+
+If a custom `MARKETING_SAMPLE_FILE` supplies `completionPolicy.requireCustomerFinish`
+as either `true` or `false`, the launcher checks the raw Boolean and native typed
+SDK serialization before writing output or creating, publishing or launching a
+Catalog definition. With published Python SDK 0.3.2, this launcher rejects either explicit value;
+the selected customer SDK must preserve it. There is no transport bridge to
+insert the field. Supporting SDK/platform changes remain local and unreleased,
+while default template omission stays compatible with 0.3.2.
 
 The helper prints a JSON document containing the actual launch request,
 Catalog identity and launch result. Defaults can be changed with

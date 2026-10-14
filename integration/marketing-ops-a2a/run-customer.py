@@ -1,4 +1,4 @@
-"""Launch one marketing customer, or inspect the same run through the published SDK."""
+"""Launch one marketing customer, or inspect the same run through the typed SDK."""
 
 import argparse
 import importlib.util
@@ -18,25 +18,34 @@ from astraform_platform_client.api.agent_journeys_api import AgentJourneysApi
 from astraform_platform_client.models.agent_definition_create_request import AgentDefinitionCreateRequest
 from astraform_platform_client.models.agent_definition_publish_request import AgentDefinitionPublishRequest
 from astraform_platform_client.models.agent_journey_launch_request import AgentJourneyLaunchRequest
+from astraform_platform_client.models.agent_journey_goal_completion_policy import AgentJourneyGoalCompletionPolicy
 
 
-
-def evidence_helper():
-    directory = Path(__file__).resolve().parent
-    path = directory / "customer-run-evidence.py"
-    if not path.is_file():
-        path = directory.parents[1] / "banking-advice-agent/run-customer.py"
-    spec = importlib.util.spec_from_file_location("astraform_customer_run_evidence", path)
-    helper = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(helper)
-    return helper
+# One shared evidence owner, shipped beside either standalone launcher.
+_evidence_path = Path(__file__).resolve().with_name("customer-run-evidence.py")
+if not _evidence_path.is_file():
+    _evidence_path = Path(__file__).resolve().parent.parent / "customer-run-evidence.py"
+_evidence_spec = importlib.util.spec_from_file_location("astraform_customer_run_evidence", _evidence_path)
+evidence = importlib.util.module_from_spec(_evidence_spec)
+_evidence_spec.loader.exec_module(evidence)
 
 
-def launch(client, api, output, evidence):
+def launch(client, api, output):
     directory = Path(__file__).resolve().parent
     catalog_api = AgentCatalogApi(client)
     sample_path = Path(os.environ.get("MARKETING_SAMPLE_FILE", directory / "sample-configuration.json"))
     sample = json.loads(sample_path.read_text())
+    policy = sample["launchRequestTemplate"].get("completionPolicy", {})
+    if "requireCustomerFinish" in policy:
+        required_finish = policy["requireCustomerFinish"]
+        if type(required_finish) is not bool:
+            raise ValueError("completionPolicy.requireCustomerFinish must be a Boolean")
+        serialized = client.sanitize_for_serialization(AgentJourneyGoalCompletionPolicy.from_dict(policy))
+        if serialized.get("requireCustomerFinish") is not required_finish:
+            raise ValueError(
+                "The selected Python SDK cannot preserve completionPolicy.requireCustomerFinish. "
+                "Published SDK 0.3.2 does not support this field. Install a typed SDK with completion "
+                "support; this launcher refuses to remove or change the configured value.")
     catalog = sample["catalogDraftRequest"]
     catalog["requestId"] = str(uuid4())
     catalog["agentKey"] = "marketing-customer-" + uuid4().hex[:12]
@@ -70,7 +79,8 @@ def launch(client, api, output, evidence):
     launch["domain"]["bindingKey"] = os.environ.get("MARKETING_DOMAIN_BINDING_KEY", launch["domain"]["bindingKey"])
     launch["partnerTargetAgentKey"] = os.environ.get("CREATIVE_AGENCY_TARGET_KEY", launch["partnerTargetAgentKey"])
     evidence.save(output, "launch-request.json", launch)
-    result = json.loads(evidence.launch_journey(client, launch).to_json())
+    result = json.loads(AgentJourneysApi(client).launch_agent_journey(
+        AgentJourneyLaunchRequest.from_dict(launch), _request_timeout=60.0).to_json())
     evidence.save(output, "launch.json", result)
     evidence.save(output, "manifest.json", {"apiBase": api, "runId": result["runId"],
         "catalogAgentId": definition["catalogAgentId"], "catalogRevisionId": published["catalogRevisionId"],
@@ -97,11 +107,10 @@ def main(argv=None):
         if api.endswith(suffix):
             api = api[:-len(suffix)]
             break
-    evidence = evidence_helper()
     with ApiClient(Configuration(host=api, retries=0)) as client:
         run_id = arguments.inspect
         if run_id is None:
-            accepted = launch(client, api, arguments.output, evidence)
+            accepted = launch(client, api, arguments.output)
             run_id = accepted["runId"] if arguments.wait else None
         if run_id is not None:
             try:
