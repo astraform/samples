@@ -25,9 +25,11 @@ from decimal import Decimal
 from importlib import resources
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError, URLError
 from urllib.parse import quote
-from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
+
+from astraform_platform_client import ApiClient, Configuration
+from astraform_platform_client.api.simulation_runs_api import SimulationRunsApi
+from astraform_platform_client.models.simulation_run_update_request import SimulationRunUpdateRequest
 
 from astraform.remote_domain.author_kit.protocol import build_projection
 from astraform.remote_domain.author_kit.protocol import build_manifest
@@ -51,14 +53,12 @@ from banking_remote_domain_python.rate_change_plan import eligible_account_count
 from banking_remote_domain_python.rate_change_plan import PLAN_SCHEMA_VERSION as RATE_CHANGE_PLAN_SCHEMA_VERSION
 from banking_remote_domain_python.rate_change_plan import SUPPORTED_PRESET_ID as RATE_CHANGE_SUPPORTED_PRESET_ID
 from banking_remote_domain_python.rate_change_plan import SUPPORTED_PRODUCT_CODE as RATE_CHANGE_SUPPORTED_PRODUCT_CODE
-from banking_remote_domain_python.rate_change_plan import RateChangeInstallationCustomer
 from banking_remote_domain_python.rate_change_plan import RateChangePlanSnapshot
 from banking_remote_domain_python.rate_change_plan import WORK_KIND as RATE_CHANGE_WORK_KIND
 from banking_remote_domain_python.rate_change_plan import canonical_installation_manifest_bytes
 from banking_remote_domain_python.rate_change_plan import canonical_decimal as canonical_rate_change_decimal
 from banking_remote_domain_python.rate_change_plan import canonical_snapshot_bytes as canonical_rate_change_plan_bytes
 from banking_remote_domain_python.rate_change_plan import compile_for_launch as compile_rate_change_plan
-from banking_remote_domain_python.rate_change_plan import installation_manifest as rate_change_installation_manifest
 from banking_remote_domain_python.rate_change_plan import require_installation_manifest_bytes as require_rate_change_installation_manifest_bytes
 from banking_remote_domain_python.rate_change_plan import install_operation_id as rate_change_plan_install_operation_id
 from banking_remote_domain_python.rate_change_plan import require_snapshot_bytes as require_rate_change_plan_bytes
@@ -71,14 +71,6 @@ PROVIDER_ARTIFACT_DIGEST_FILE_ENV = "ASTRAFORM_PROVIDER_ARTIFACT_DIGEST_FILE"
 REQUIRE_OCI_PROVIDER_DIGEST_ENV = "ASTRAFORM_REQUIRE_OCI_PROVIDER_DIGEST"
 SHARED_STORAGE_ENABLED_ENV = "ASTRAFORM_REMOTE_DOMAIN_SHARED_STORAGE_ENABLED"
 DEFAULT_PROVIDER_ARTIFACT_DIGEST_FILE = Path("/opt/astraform/provider-artifact-digest")
-
-
-class _RejectRedirects(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
-        return None
-
-
-_OPPORTUNITY_AUDIT_OPENER = build_opener(_RejectRedirects())
 
 
 def resolve_wind_tunnel_provider_revision() -> str:
@@ -411,7 +403,6 @@ CLOCK_DRIVEN_LIFECYCLE_TRANSITIONS: dict[str, dict[str, Any]] = {
     },
 }
 HYBRID_ACTIVATION_CHUNK_SIZE = 50
-HYBRID_REPLAY_SEED = 20_260_306
 HYBRID_STATE_MUTATION_SAMPLE_LIMIT = 100
 DEFAULT_SIMULATION_START_EPOCH_MS = 1767225600000
 MILLIS_PER_SIMULATION_DAY = 86_400_000
@@ -2586,6 +2577,13 @@ def require_canonical_launch_execution_mode(payload: dict[str, Any]) -> None:
             "FAST_BATCH_COMPARE supports historical reads and lifecycle cleanup only.",
             operation="policy-wind-tunnel-run",
         )
+    raise ProtocolError(
+        410, "scenario_lab_clock_execution_retired", "invalid_request",
+        "Clock-driven Scenario Lab execution is unavailable: the platform clock API was retired. "
+        "Native event execution remains tracked under #470; no run or customer was created.",
+        operation="policy-wind-tunnel-run",
+        details={"executionMode": mode, "migrationIssue": "#470"},
+    )
 
 
 def policy_launch_digest(
@@ -2611,7 +2609,7 @@ def policy_launch_digest(
 
 
 def policy_wind_tunnel_run_status(run_id: str) -> dict[str, Any]:
-    run = policy_run_record(run_id)
+    run = policy_run_record(run_id, read_only=True)
     return {
         "runId": run_id,
         "status": run["status"],
@@ -2633,7 +2631,6 @@ def policy_wind_tunnel_run_status(run_id: str) -> dict[str, Any]:
 
 def control_policy_wind_tunnel_run(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     action = trim(payload.get("action")) or trim(payload.get("lifecycleAction")) or "STATUS"
-    run = policy_run_record(run_id)
     normalized_action = action.upper().replace("-", "_")
     if normalized_action != "FINALIZE" and trim(payload.get("operationId")):
         raise ProtocolError(
@@ -2644,7 +2641,32 @@ def control_policy_wind_tunnel_run(run_id: str, payload: dict[str, Any]) -> dict
             operation="policy-wind-tunnel-lifecycle",
             details={"runId": run_id, "action": normalized_action},
         )
+    run = policy_run_record(run_id, read_only=True)
+    receipt = load_finalization_receipt(run_id)
     clock_driven = is_clock_driven_parameters(run.get("parameters", {}))
+    if normalized_action == "FINALIZE" and clock_driven:
+        operation = finalization_operation(payload)
+        mode = trim(receipt.get("finalizationMode")) if receipt else policy_run_finalization_mode(run)
+        require_finalization_operation(run_id, mode, operation)
+        if receipt:
+            validate_finalization_receipt(receipt, run_id, mode, operation, operation["inputDigest"])
+        else:
+            validate_finalization_operation(run, operation, run_id)
+    if normalized_action in {"PAUSE", "RESUME", "SET_PLAYBACK_RATE", "FINALIZE", "CANCEL"} and clock_driven:
+        # Reconcile only an already-published finalization operation. Its native
+        # SDK notification does not require replay, time or new execution.
+        published_reconciliation = (
+            normalized_action == "FINALIZE"
+            and receipt.get("state") == FINALIZATION_RECEIPT_PUBLISHED
+        )
+        if not published_reconciliation:
+            raise ProtocolError(
+                410, "scenario_lab_clock_execution_retired", "invalid_request",
+                "This Scenario Lab lifecycle action requires the retired platform clock. "
+                "Stored evidence remains readable; native lifecycle restoration is tracked under #470.",
+                operation="policy-wind-tunnel-lifecycle",
+                details={"runId": run_id, "action": normalized_action, "migrationIssue": "#470"},
+            )
     if normalized_action in {"PAUSE", "RESUME", "SET_PLAYBACK_RATE", "FINALIZE"} and not clock_driven:
         raise ProtocolError(
             400,
@@ -2860,11 +2882,13 @@ def policy_wind_tunnel_bundle(run_id: str) -> dict[str, Any]:
             persisted_bundle = persisted_clock_driven_policy_wind_tunnel_bundle(run_id, run)
             if persisted_bundle is not None:
                 return persisted_bundle
-        bundle = clock_driven_policy_wind_tunnel_bundle(run_id)
-        summary = dict(bundle.get("summary", {}) or {})
-        if summary.get("summaryMode") == "CLOCK_DRIVEN_HYBRID_FINALIZED":
-            write_clock_driven_artifact_files(run_id, summary)
-        return bundle
+        raise ProtocolError(
+            503, "scenario_lab_stored_evidence_unavailable", "invalid_request",
+            "Stored Scenario Lab evidence is unavailable. A live rebuild would require the retired "
+            "platform clock; native event restoration remains tracked under #470.",
+            operation="policy-wind-tunnel-bundle",
+            details={"runId": run_id, "migrationIssue": "#470"},
+        )
     preset_id = run["presetId"]
     parameters = run["parameters"]
     metrics = wind_tunnel_metrics(parameters)
@@ -3262,6 +3286,7 @@ def start_clock_driven_policy_wind_tunnel_run(
     execution_role: str | None = None,
     launch_digest: str,
 ) -> dict[str, Any]:
+    require_canonical_launch_execution_mode(normalized)
     run_id = trim(normalized.get("simulationRunId"))
     if not run_id:
         raise ValueError("Clock-driven launch requires a resolved simulationRunId")
@@ -3449,13 +3474,13 @@ def start_clock_driven_policy_wind_tunnel_worker(
     *,
     execution_claim_owner: str | None = None,
 ) -> None:
-    worker = threading.Thread(
-        target=execute_clock_driven_policy_wind_tunnel_run,
-        args=(run_id, resume_source_phase, execution_claim_owner),
-        name=f"banking-python-wt-{safe_token(run_id)}",
-        daemon=True,
+    raise ProtocolError(
+        410, "scenario_lab_clock_execution_retired", "invalid_request",
+        "Clock-driven Scenario Lab workers cannot start after platform clock retirement. "
+        "Native event execution remains tracked under #470.",
+        operation="policy-wind-tunnel-run",
+        details={"runId": run_id, "migrationIssue": "#470"},
     )
-    worker.start()
 
 
 def start_clock_driven_policy_wind_tunnel_recovery(
@@ -3463,72 +3488,25 @@ def start_clock_driven_policy_wind_tunnel_recovery(
     *,
     execution_claim_owner: str,
 ) -> None:
-    worker = threading.Thread(
-        target=recover_existing_clock_driven_policy_wind_tunnel_run,
-        args=(run_id, execution_claim_owner),
-        name=f"banking-python-wt-recovery-{safe_token(run_id)}",
-        daemon=True,
+    raise ProtocolError(
+        410, "scenario_lab_clock_execution_retired", "invalid_request",
+        "Clock-driven Scenario Lab workers cannot start after platform clock retirement. "
+        "Native event execution remains tracked under #470.",
+        operation="policy-wind-tunnel-run",
+        details={"runId": run_id, "migrationIssue": "#470"},
     )
-    worker.start()
 
 
 def recover_existing_clock_driven_policy_wind_tunnel_run(
     run_id: str,
     execution_claim_owner: str,
 ) -> None:
-    with policy_execution_claim_scope(run_id, execution_claim_owner):
-        try:
-            renew_policy_execution_claim(run_id, execution_claim_owner)
-            run = policy_run_record(run_id)
-            status = trim(run.get("status")).upper()
-            phase = trim(run.get("phase")).upper()
-            if is_terminal_phase(status):
-                return
-            if phase == PHASE_QUEUED and status in {STATUS_QUEUED, STATUS_RUNNING}:
-                execute_clock_driven_policy_wind_tunnel_run(
-                    run_id,
-                    PHASE_PREPARING_CLOCK,
-                    execution_claim_owner,
-                )
-                return
-            if phase == PHASE_PREPARING_CLOCK and status == STATUS_RUNNING:
-                execute_clock_driven_policy_wind_tunnel_run(
-                    run_id,
-                    PHASE_PREPARING_CLOCK,
-                    execution_claim_owner,
-                )
-                return
-            if phase == PHASE_CLOCK_RUNNING and status == STATUS_RUNNING:
-                start_clock_horizon_monitor(run_id, execution_claim_owner)
-                return
-            if phase == PHASE_ACTIVATING_COHORT and status == STATUS_RUNNING:
-                handle_clock_driven_worker_failure(
-                    run_id,
-                    RuntimeError(
-                        "Provider ownership expired during cohort activation; activation was not replayed because its committed boundary is ambiguous."
-                    ),
-                )
-                return
-            if (
-                (phase == PHASE_PAUSED and status == STATUS_PAUSED)
-                or (
-                    phase == PHASE_READY_TO_FINALIZE
-                    and status == STATUS_READY_TO_FINALIZE
-                )
-                or (
-                    phase == PHASE_FINALIZING_REPORT
-                    and status == STATUS_RUNNING
-                )
-            ):
-                return
-            handle_clock_driven_worker_failure(
-                run_id,
-                RuntimeError(
-                    f"Expired provider ownership found an invalid lifecycle state {status or 'UNKNOWN'}/{phase or 'UNKNOWN'}."
-                ),
-            )
-        except StalePolicyExecutionClaim:
-            return
+    raise ProtocolError(
+        410, "scenario_lab_clock_execution_retired", "invalid_request",
+        "Legacy Scenario Lab clock execution was retired. Native event restoration remains tracked under #470.",
+        operation="policy-wind-tunnel-run",
+        details={"runId": run_id, "migrationIssue": "#470"},
+    )
 
 
 def execute_clock_driven_policy_wind_tunnel_run(
@@ -3536,178 +3514,12 @@ def execute_clock_driven_policy_wind_tunnel_run(
     resume_source_phase: str | None = None,
     execution_claim_owner: str | None = None,
 ) -> None:
-    with policy_execution_claim_scope(run_id, execution_claim_owner):
-        try:
-            if execution_claim_owner is not None:
-                renew_policy_execution_claim(run_id, execution_claim_owner)
-            run = policy_run_record(run_id)
-            parameters = dict(run.get("parameters", {}) or {})
-            if not ensure_clock_driven_preparing_phase(run_id):
-                return
-            append_policy_log(run_id, "Preparing Clock-Driven Simulation run with explicit E24 evidence scope.")
-
-            cohort_id = selected_cohort_id(parameters)
-            if not cohort_id:
-                raise ValueError("Clock-Driven Simulation requires a generated Cohort Factory cohort.")
-            agent_decision_mode = normalize_agent_decision_mode(parameters.get("agentDecisionMode"))
-            playback_rate = negotiated_playback_rate(parameters, {})
-            rate_change_plan = resolve_clock_driven_intervention_plan(run_id, parameters)
-            parameters["agentDecisionMode"] = agent_decision_mode
-            parameters["playbackRate"] = playback_rate
-            update_policy_run(run_id, fields={"parameters": parameters})
-
-            append_policy_log(run_id, f"Loading generated cohort {cohort_id} for streaming activation.")
-            platform_pinned_activation = bool(trim(parameters.get("cohortArtifactDigest")))
-            cohort_snapshot = (
-                load_durable_cohort_artifact_snapshot(run_id, parameters)
-                if platform_pinned_activation
-                else None
-            )
-            if platform_pinned_activation:
-                if cohort_snapshot is None:
-                    raise ValueError("Platform-owned run has no pinned cohort artifact snapshot.")
-                agents = load_pinned_cohort_agents_for_streaming(
-                    cohort_id,
-                    cohort_snapshot,
-                    agent_decision_mode,
-                    parameters,
-                )
-            else:
-                agents = load_generated_cohort_agents_for_streaming(cohort_id, agent_decision_mode, parameters)
-            enforce_real_llm_canary(parameters, agent_decision_mode, len(agents))
-            enforce_hybrid_cohort_limit(cohort_id, len(agents))
-            update_policy_run(run_id, fields={"cohortSize": len(agents)})
-
-            with _POLICY_WIND_TUNNEL_LOCK:
-                if not clock_driven_worker_state_matches(run_id, "RUNNING", "PREPARING_CLOCK"):
-                    append_clock_driven_start_stopped_log(run_id, "before preparing simulator clock")
-                    return
-                if not apply_hybrid_replay_contract(run_id, parameters, playback_rate, resume_source_phase):
-                    paused_from_phase = trim(resume_source_phase) or "PREPARING_CLOCK"
-                    update_policy_run(
-                        run_id,
-                        status="PAUSED",
-                        phase="PAUSED",
-                        progress=0.05,
-                        bundle_ready=False,
-                        paused_from_phase=paused_from_phase,
-                    )
-                    action_label = "Start requested" if not trim(resume_source_phase) else "Resume requested"
-                    append_policy_log(
-                        run_id,
-                        f"{action_label}. Setup remains paused because simulator replay ownership was not empty or owned by this run.",
-                    )
-                    return
-            with _POLICY_WIND_TUNNEL_LOCK:
-                if not clock_driven_worker_state_matches(run_id, "RUNNING", "PREPARING_CLOCK"):
-                    append_clock_driven_start_stopped_log(run_id, "after preparing simulator clock")
-                    return
-                if not platform_pinned_activation:
-                    clear_active_agents(run_id)
-
-            if not transition_clock_driven_worker_phase(
-                run_id,
-                expected_status="RUNNING",
-                expected_phase="PREPARING_CLOCK",
-                next_status="RUNNING",
-                next_phase="ACTIVATING_COHORT",
-                progress=0.15,
-                checkpoint="before activating cohort",
-            ):
-                return
-            append_policy_log(run_id, f"Activating {len(agents)} customers in chunks of {HYBRID_ACTIVATION_CHUNK_SIZE}.")
-            append_policy_log(run_id, f"Agent Decision Mode: {agent_decision_mode}.")
-
-            if cohort_snapshot is not None:
-                with _POLICY_WIND_TUNNEL_LOCK:
-                    if stop_if_clock_driven_activation_should_stop(run_id, "before pinned cohort activation"):
-                        return
-                activate_pinned_cohort(
-                    run_id,
-                    cohort_id,
-                    cohort_snapshot,
-                    agent_decision_mode,
-                    parameters,
-                    len(agents),
-                )
-                with _POLICY_WIND_TUNNEL_LOCK:
-                    if stop_if_clock_driven_activation_should_stop(run_id, "after pinned cohort activation"):
-                        return
-                    update_policy_run(run_id, status="RUNNING", phase="ACTIVATING_COHORT", progress=0.50, bundle_ready=False)
-            else:
-                chunk_count = max(1, (len(agents) + HYBRID_ACTIVATION_CHUNK_SIZE - 1) // HYBRID_ACTIVATION_CHUNK_SIZE)
-                for chunk_index in range(chunk_count):
-                    with _POLICY_WIND_TUNNEL_LOCK:
-                        if stop_if_clock_driven_activation_should_stop(run_id, f"before activating chunk {chunk_index + 1}"):
-                            return
-                    start = chunk_index * HYBRID_ACTIVATION_CHUNK_SIZE
-                    end = min(len(agents), start + HYBRID_ACTIVATION_CHUNK_SIZE)
-                    chunk = agents[start:end]
-                    activate_agent_chunk(
-                        run_id,
-                        cohort_id,
-                        "",
-                        chunk_index + 1,
-                        chunk_count,
-                        chunk,
-                    )
-                    progress = 0.15 + (0.35 * ((chunk_index + 1) / chunk_count))
-                    with _POLICY_WIND_TUNNEL_LOCK:
-                        if stop_if_clock_driven_activation_should_stop(run_id, f"after activating chunk {chunk_index + 1}"):
-                            return
-                        update_policy_run(run_id, status="RUNNING", phase="ACTIVATING_COHORT", progress=progress, bundle_ready=False)
-
-            if rate_change_plan is not None:
-                expected_rate_change_agent_ids = {
-                    trim(agent.get("personaName")) or trim(agent.get("agentId"))
-                    for agent in agents
-                }
-                if "" in expected_rate_change_agent_ids or len(expected_rate_change_agent_ids) != len(agents):
-                    raise RuntimeError("Activated cohort has invalid rate-change customer identities.")
-                expected_identity_set_digest = rate_change_agent_identity_set_digest(
-                    list(expected_rate_change_agent_ids)
-                )
-                if (
-                    cohort_snapshot is not None
-                    and expected_identity_set_digest
-                    != trim(cohort_snapshot.get("identitySetDigest"))
-                ):
-                    raise RuntimeError(
-                        "Activated rate-change cohort does not match the platform-pinned identity set."
-                    )
-                install_clock_driven_rate_change_plan(
-                    run_id,
-                    rate_change_plan,
-                    expected_rate_change_agent_ids,
-                    expected_identity_set_digest,
-                    trim(cohort_snapshot.get("artifactDigest")),
-                )
-
-            if not start_simulator_clock_after_activation(run_id, playback_rate):
-                return
-            horizon_days = max(1, int_or_default(parameters.get("simulationHorizonDays"), 30))
-            append_policy_log(
-                run_id,
-                "Clock-driven cohort activated. Simulator clock now owns progression; E24 evidence records runtime activity.",
-            )
-            append_policy_log(
-                run_id,
-                "Clock target: "
-                + str(horizon_days)
-                + " simulated day(s) at "
-                + format_playback_rate(playback_rate)
-                + " playback (~"
-                + estimate_wall_clock_duration(horizon_days, playback_rate)
-                + "). At the horizon, the run enters the platform-owned pause, drain, and finalization handoff; use Finalize early when evidence is sufficient.",
-            )
-            start_clock_horizon_monitor(run_id, execution_claim_owner)
-        except StalePolicyExecutionClaim:
-            return
-        except Exception as exc:
-            try:
-                handle_clock_driven_worker_failure(run_id, exc)
-            except StalePolicyExecutionClaim:
-                return
+    raise ProtocolError(
+        410, "scenario_lab_clock_execution_retired", "invalid_request",
+        "Legacy Scenario Lab clock execution was retired. Native event restoration remains tracked under #470.",
+        operation="policy-wind-tunnel-run",
+        details={"runId": run_id, "migrationIssue": "#470"},
+    )
 
 
 def handle_clock_driven_worker_failure(run_id: str, exc: Exception) -> None:
@@ -3762,46 +3574,25 @@ def start_clock_horizon_monitor(
     run_id: str,
     execution_claim_owner: str | None = None,
 ) -> None:
-    worker = threading.Thread(
-        target=monitor_clock_driven_horizon,
-        args=(run_id, execution_claim_owner),
-        name=f"banking-python-wt-horizon-{safe_token(run_id)}",
-        daemon=True,
+    raise ProtocolError(
+        410, "scenario_lab_clock_execution_retired", "invalid_request",
+        "Clock-driven Scenario Lab workers cannot start after platform clock retirement. "
+        "Native event execution remains tracked under #470.",
+        operation="policy-wind-tunnel-run",
+        details={"runId": run_id, "migrationIssue": "#470"},
     )
-    worker.start()
 
 
 def monitor_clock_driven_horizon(
     run_id: str,
     execution_claim_owner: str | None = None,
 ) -> None:
-    with policy_execution_claim_scope(run_id, execution_claim_owner):
-        while True:
-            try:
-                if execution_claim_owner is not None:
-                    renew_policy_execution_claim(run_id, execution_claim_owner)
-                run = policy_run_record(run_id)
-                if run.get("status") != "RUNNING" or run.get("phase") != "CLOCK_RUNNING":
-                    return
-                if not is_clock_driven_parameters(run.get("parameters", {})):
-                    return
-                maybe_advance_clock_driven_lifecycle(run_id)
-                run = policy_run_record(run_id)
-                if run.get("status") != "RUNNING" or run.get("phase") != "CLOCK_RUNNING":
-                    return
-                time.sleep(clock_horizon_monitor_poll_seconds(dict(run.get("parameters", {}) or {})))
-            except StalePolicyExecutionClaim:
-                return
-            except Exception as exc:  # pragma: no cover - defensive monitor guard
-                try:
-                    append_policy_log(
-                        run_id,
-                        "Clock horizon monitor stopped before finalization: "
-                        + (str(exc) or exc.__class__.__name__),
-                    )
-                except (ProtocolError, StalePolicyExecutionClaim):
-                    pass
-                return
+    raise ProtocolError(
+        410, "scenario_lab_clock_execution_retired", "invalid_request",
+        "Legacy Scenario Lab clock execution was retired. Native event restoration remains tracked under #470.",
+        operation="policy-wind-tunnel-run",
+        details={"runId": run_id, "migrationIssue": "#470"},
+    )
 
 
 def clock_horizon_monitor_poll_seconds(parameters: dict[str, Any]) -> float:
@@ -3816,15 +3607,36 @@ def finalize_clock_driven_policy_wind_tunnel_run(
 ) -> None:
     request_payload = dict(payload or {})
     operation = finalization_operation(request_payload)
-    initial_run = policy_run_record(run_id)
-    initial_mode = policy_run_finalization_mode(initial_run)
+    initial_run = policy_run_record(run_id, read_only=True)
+    initial_receipt = load_finalization_receipt(run_id)
+    initial_mode = trim(initial_receipt.get("finalizationMode")) if initial_receipt else policy_run_finalization_mode(initial_run)
     require_finalization_operation(run_id, initial_mode, operation)
+    if initial_receipt:
+        validate_finalization_receipt(initial_receipt, run_id, initial_mode, operation, operation["inputDigest"])
+    else:
+        validate_finalization_operation(initial_run, operation, run_id)
+    if initial_receipt.get("state") != FINALIZATION_RECEIPT_PUBLISHED:
+        raise ProtocolError(
+            410, "scenario_lab_clock_execution_retired", "invalid_request",
+            "New Scenario Lab finalization requires native event execution; the platform clock was retired. "
+            "An already-published finalization notification can still reconcile through the typed SDK.",
+            operation="policy-wind-tunnel-lifecycle",
+            details={"runId": run_id, "migrationIssue": "#470"},
+        )
     if is_explicit_legacy_finalization_mode(initial_mode):
         finalize_legacy_clock_driven_policy_wind_tunnel_run(run_id)
         return
     with finalization_receipt_lock(run_id):
         receipt = load_finalization_receipt(run_id)
-        run = policy_run_record(run_id)
+        run = policy_run_record(run_id, read_only=True)
+        if receipt.get("state") != FINALIZATION_RECEIPT_PUBLISHED:
+            raise ProtocolError(
+                410, "scenario_lab_clock_execution_retired", "invalid_request",
+                "Scenario Lab reconciliation requires an already-published finalization receipt; "
+                "retired execution cannot publish or resume a new operation.",
+                operation="policy-wind-tunnel-lifecycle",
+                details={"runId": run_id, "migrationIssue": "#470"},
+            )
         finalization_mode = (
             trim(receipt.get("finalizationMode"))
             if receipt
@@ -5147,13 +4959,16 @@ def notify_simulation_run_completed(payload: dict[str, Any]) -> bool:
     run_id = trim(payload.get("runId"))
     operation_id = trim(payload.get("operationId"))
     try:
-        http_json(
-            "PATCH",
-            experiment_service_url() + "/api/simulation-runs/" + quote(run_id, safe=""),
-            payload,
-            headers={"Idempotency-Key": operation_id} if operation_id else None,
-            timeout=10.0,
-        )
+        with ApiClient(Configuration(host=experiment_service_url(), retries=0)) as client:
+            update = SimulationRunUpdateRequest.from_dict(payload)
+            if client.sanitize_for_serialization(update) != payload:
+                raise ValueError(
+                    "The selected Python SDK cannot preserve the complete Scenario Lab finalization payload. "
+                    "Install a typed SDK supporting runId, operationId, inputDigest and providerRevision; "
+                    "the notification remains unconfirmed and no PATCH was sent.")
+            SimulationRunsApi(client).update_simulation_run(
+                run_id, update, _headers={"Idempotency-Key": operation_id} if operation_id else None,
+                _request_timeout=10.0)
         return True
     except Exception as exc:  # pragma: no cover - best-effort ledger closure
         append_policy_log(
@@ -5532,63 +5347,13 @@ def fetch_decision_opportunity_correlation_audit(
     trigger_type: str,
 ) -> dict[str, Any]:
     try:
-        capability = current_opportunity_correlation_capability()
+        current_opportunity_correlation_capability()
     except RuntimeError as unavailable:
         raise OpportunityCorrelationAuditUnavailableError(str(unavailable)) from unavailable
-    provider_revision = WIND_TUNNEL_PROVIDER_REVISION
-    url = (
-        f"{agent_runtime_url()}/api/agents/simulation-runs/{quote(run_id, safe='')}"
-        "/decision-opportunities/correlation-audit?triggerType="
-        + quote(trigger_type, safe="")
-        + "&domainId="
-        + quote(DOMAIN_ID, safe="")
-        + "&providerRevision="
-        + quote(provider_revision, safe="")
+    raise OpportunityCorrelationAuditUnavailableError(
+        "The legacy Runtime opportunity correlation API was retired. "
+        "Native correlated evidence restoration remains tracked under #470."
     )
-    request = Request(
-        url,
-        headers={
-            "Accept": "application/json",
-            OPPORTUNITY_CORRELATION_CAPABILITY_HEADER: capability,
-        },
-        method="GET",
-    )
-    try:
-        with _OPPORTUNITY_AUDIT_OPENER.open(request, timeout=30.0) as response:
-            if response.status != 200:
-                raise OpportunityCorrelationAuditUnavailableError(
-                    "Opportunity correlation audit did not return 200"
-                )
-            media_type, _, parameters = (response.headers.get("Content-Type") or "").partition(";")
-            if media_type.strip().lower() != "application/json":
-                raise OpportunityCorrelationAuditUnavailableError(
-                    "Opportunity correlation audit did not return application/json"
-                )
-            if parameters:
-                parameter = parameters.strip().lower().replace(" ", "")
-                if parameter not in {"charset=utf-8", "charset=\"utf-8\""}:
-                    raise OpportunityCorrelationAuditUnavailableError(
-                        "Opportunity correlation audit used a non-UTF-8 charset"
-                    )
-            content = response.read(4 * 1024 * 1024 + 1)
-            if not content or len(content) > 4 * 1024 * 1024:
-                raise OpportunityCorrelationAuditUnavailableError(
-                    "Opportunity correlation audit exceeded its response bound"
-                )
-            try:
-                return strict_json_object(content, "Opportunity correlation audit is invalid JSON")
-            except RuntimeError as invalid_json:
-                raise OpportunityCorrelationAuditUnavailableError(
-                    "Opportunity correlation audit is not strict UTF-8 JSON"
-                ) from invalid_json
-    except HTTPError as exc:
-        raise OpportunityCorrelationAuditUnavailableError(
-            f"Opportunity correlation audit failed with status {exc.code}"
-        ) from exc
-    except (URLError, TimeoutError, OSError) as exc:
-        raise OpportunityCorrelationAuditUnavailableError(
-            "Opportunity correlation audit is unavailable"
-        ) from exc
 
 
 class OpportunityCorrelationAuditUnavailableError(RuntimeError):
@@ -8308,14 +8073,13 @@ def playback_rate_policy_max(parameters: dict[str, Any]) -> float:
 
 
 def simulator_max_playback_rate() -> float:
-    try:
-        payload = get_json(simulator_url() + "/api/clock/rate/info")
-        if isinstance(payload, dict):
-            max_rate = float_or_default(payload.get("max"), HYBRID_FAST_PLAYBACK_RATE)
-            return max_rate if max_rate > 0 else HYBRID_FAST_PLAYBACK_RATE
-    except Exception:
-        return HYBRID_FAST_PLAYBACK_RATE
-    return HYBRID_FAST_PLAYBACK_RATE
+    raise ProtocolError(
+        410, "scenario_lab_clock_execution_retired", "invalid_request",
+        "Legacy Scenario Lab clock/Runtime execution is unavailable: its platform APIs were retired. "
+        "Native event restoration remains tracked under #470.",
+        operation="policy-wind-tunnel-lifecycle",
+        details={"migrationIssue": "#470"},
+    )
 
 
 def apply_hybrid_replay_contract(
@@ -8324,38 +8088,13 @@ def apply_hybrid_replay_contract(
     playback_rate: float,
     resume_source_phase: str | None = None,
 ) -> bool:
-    preset_id = trim(parameters.get("presetId")) or WIND_TUNNEL_PRESET_ID
-    for expected_run_id in replay_claim_expected_run_ids(run_id, resume_source_phase):
-        replay = {
-            "seed": HYBRID_REPLAY_SEED,
-            "simulationStartEpochMs": simulation_start_epoch_ms(parameters),
-            "playback": {"rate": 0.0, "paused": True},
-            "deterministic": {"enabled": True, "resetStateOnClockRewind": True, "strictClock": True},
-            "executionContext": {
-                "experimentId": "banking-python-scenario-lab",
-                "runId": run_id,
-                "scenarioId": "banking-python-policy-compare",
-                "branchType": "CANDIDATE",
-                "compareMode": trim(parameters.get("compareMode")) or "SEEDED_DETERMINISTIC",
-                "presetId": preset_id,
-                "startedAtEpochMs": int(time.time() * 1000),
-            },
-        }
-        if expected_run_id is not None:
-            replay["expectedRunId"] = expected_run_id
-        try:
-            post_json(simulator_url() + "/api/clock/replay", replay)
-            append_policy_log(run_id, "Applied deterministic replay contract to simulator clock.")
-            return True
-        except RuntimeError as exc:
-            if "status 409" in str(exc):
-                continue
-            raise
-    append_policy_log(
-        run_id,
-        "Replay contract was not applied because simulator replay ownership was neither empty nor owned by this run.",
+    raise ProtocolError(
+        410, "scenario_lab_clock_execution_retired", "invalid_request",
+        "Legacy Scenario Lab clock/Runtime execution is unavailable: its platform APIs were retired. "
+        "Native event restoration remains tracked under #470.",
+        operation="policy-wind-tunnel-lifecycle",
+        details={"runId": run_id, "migrationIssue": "#470"},
     )
-    return False
 
 
 def replay_claim_expected_run_ids(run_id: str, resume_source_phase: str | None) -> list[str | None]:
@@ -8368,24 +8107,13 @@ def replay_claim_expected_run_ids(run_id: str, resume_source_phase: str | None) 
 
 
 def release_hybrid_replay_contract(run_id: str) -> None:
-    try:
-        post_json(
-            simulator_url() + "/api/clock/replay",
-            {
-                "expectedRunId": run_id,
-                "playback": {"paused": True, "rate": 0.0},
-                "executionContext": {},
-            },
-        )
-        append_policy_log(run_id, "Released Scenario Lab simulator clock ownership.")
-    except RuntimeError as exc:
-        if "status 409" in str(exc):
-            append_policy_log(
-                run_id,
-                "Simulator clock ownership release requested. Simulator playback was not changed because replay ownership changed before the simulator accepted the update.",
-            )
-            return
-        raise
+    raise ProtocolError(
+        410, "scenario_lab_clock_execution_retired", "invalid_request",
+        "Legacy Scenario Lab clock/Runtime execution is unavailable: its platform APIs were retired. "
+        "Native event restoration remains tracked under #470.",
+        operation="policy-wind-tunnel-lifecycle",
+        details={"runId": run_id, "migrationIssue": "#470"},
+    )
 
 
 def clear_hybrid_runtime_cohort(run_id: str) -> None:
@@ -8397,28 +8125,12 @@ def clear_hybrid_runtime_cohort(run_id: str) -> None:
 
 
 def start_simulator_clock_after_activation(run_id: str, playback_rate: float) -> bool:
-    with _POLICY_WIND_TUNNEL_LOCK:
-        if not clock_driven_run_ready_to_start(run_id):
-            append_clock_driven_start_stopped_log(run_id, "before starting simulator clock")
-            return False
-        if not apply_playback_control_for_run(
-            run_id,
-            paused=False,
-            playback_rate=playback_rate,
-            action_label="Start requested",
-        ):
-            return False
-        if not clock_driven_run_ready_to_start(run_id):
-            append_clock_driven_start_stopped_log(run_id, "after simulator accepted start")
-            apply_playback_control_for_run(
-                run_id,
-                paused=True,
-                playback_rate=0.0,
-                action_label="Start rollback requested",
-            )
-            return False
-        update_policy_run(run_id, status="RUNNING", phase="CLOCK_RUNNING", progress=0.55, bundle_ready=True)
-        return True
+    raise ProtocolError(
+        410, "scenario_lab_clock_execution_retired", "invalid_request",
+        "Legacy Scenario Lab clock execution was retired. Native event restoration remains tracked under #470.",
+        operation="policy-wind-tunnel-run",
+        details={"runId": run_id, "migrationIssue": "#470"},
+    )
 
 
 def stop_if_clock_driven_activation_should_stop(run_id: str, checkpoint: str) -> bool:
@@ -8500,28 +8212,23 @@ def apply_playback_control_for_run(
     playback_rate: float,
     action_label: str,
 ) -> bool:
-    try:
-        post_json(
-            simulator_url() + "/api/clock/replay",
-            {
-                "expectedRunId": run_id,
-                "playback": {"paused": paused, "rate": 0.0 if paused else playback_rate},
-            },
-        )
-        return True
-    except RuntimeError as exc:
-        if "status 409" in str(exc):
-            append_policy_log(
-                run_id,
-                action_label
-                + ". Simulator playback was not changed because replay ownership changed before the simulator accepted the update.",
-            )
-            return False
-        raise
+    raise ProtocolError(
+        410, "scenario_lab_clock_execution_retired", "invalid_request",
+        "Legacy Scenario Lab clock/Runtime execution is unavailable: its platform APIs were retired. "
+        "Native event restoration remains tracked under #470.",
+        operation="policy-wind-tunnel-lifecycle",
+        details={"runId": run_id, "migrationIssue": "#470"},
+    )
 
 
 def clear_active_agents(run_id: str) -> None:
-    http_json("DELETE", agent_runtime_url() + "/api/agents/simulation-runs/" + quote(run_id, safe=""))
+    raise ProtocolError(
+        410, "scenario_lab_clock_execution_retired", "invalid_request",
+        "Legacy Scenario Lab clock/Runtime execution is unavailable: its platform APIs were retired. "
+        "Native event restoration remains tracked under #470.",
+        operation="policy-wind-tunnel-lifecycle",
+        details={"runId": run_id, "migrationIssue": "#470"},
+    )
 
 
 def load_generated_cohort_agents_for_streaming(
@@ -8722,126 +8429,12 @@ def install_clock_driven_rate_change_plan(
     expected_identity_set_digest: str,
     cohort_artifact_digest: str,
 ) -> None:
-    expected_agent_count = len(expected_agent_ids)
-    operation_id = rate_change_plan_install_operation_id(snapshot)
-    response = post_json(
-        agent_runtime_url() + "/api/domain-control-actions/execute",
-        {
-            "domainId": DOMAIN_ID,
-            "actionId": RATE_CHANGE_PLAN_ACTION_ID,
-            "operationId": operation_id,
-            "simulationRunId": run_id,
-            "target": {
-                "scope": "BROADCAST",
-                "selector": {"simulationRunId": run_id},
-            },
-            "inputs": snapshot.as_dict(),
-            "requestedBy": "banking-python-policy-wind-tunnel-provider",
-            "reason": "Install the launch-pinned day-10 credit-card rate-change plan",
-            "simulationTimeEpochMs": snapshot.plan["simulationStartEpochMs"],
-        },
-    )
-    if not isinstance(response, dict):
-        raise RuntimeError(
-            "Agent runtime did not return an object for intervention plan installation."
-        )
-    matched = exact_nonnegative_response_count(response.get("matchedAgents"), "matchedAgents")
-    succeeded = exact_nonnegative_response_count(response.get("succeeded"), "succeeded")
-    failed = exact_nonnegative_response_count(response.get("failed"), "failed")
-    if (
-        trim(response.get("simulationRunId")) != run_id
-        or trim(response.get("actionId")) != RATE_CHANGE_PLAN_ACTION_ID
-        or trim(response.get("operationId")) != operation_id
-        or matched != expected_agent_count
-        or succeeded != expected_agent_count
-        or failed != 0
-    ):
-        raise RuntimeError(
-            "Agent runtime did not prove exact installation of the clock-driven intervention plan."
-        )
-    raw_results = response.get("results")
-    if not isinstance(raw_results, list) or len(raw_results) != expected_agent_count:
-        raise RuntimeError(
-            "Agent runtime omitted per-agent rate-change installation evidence."
-        )
-    customers: list[RateChangeInstallationCustomer] = []
-    cohort_agent_ids: set[str] = set()
-    provider_runtime_agent_ids: set[str] = set()
-    opportunity_agent_ids: set[str] = set()
-    for raw_result in raw_results:
-        if not isinstance(raw_result, dict):
-            raise RuntimeError(
-                "Agent runtime returned malformed per-agent rate-change installation evidence."
-            )
-        cohort_agent_id = raw_result.get("cohortAgentId")
-        provider_runtime_agent_id = raw_result.get("providerRuntimeAgentId")
-        opportunity_agent_id = raw_result.get("opportunityAgentId")
-        control_action = raw_result.get("controlAction")
-        identities = (
-            cohort_agent_id,
-            provider_runtime_agent_id,
-            opportunity_agent_id,
-        )
-        if any(
-            not isinstance(identity, str)
-            or not identity
-            or identity != identity.strip()
-            for identity in identities
-        ):
-            raise RuntimeError(
-                "Agent runtime returned an invalid installed customer identity."
-            )
-        if (
-            cohort_agent_id in cohort_agent_ids
-            or provider_runtime_agent_id in provider_runtime_agent_ids
-            or opportunity_agent_id in opportunity_agent_ids
-            or not isinstance(control_action, dict)
-        ):
-            raise RuntimeError(
-                "Agent runtime returned contradictory per-agent rate-change installation evidence."
-            )
-        cohort_agent_ids.add(cohort_agent_id)
-        provider_runtime_agent_ids.add(provider_runtime_agent_id)
-        opportunity_agent_ids.add(opportunity_agent_id)
-        eligible_account_count = exact_nonnegative_response_count(
-            control_action.get("eligibleAccountCount"),
-            "eligibleAccountCount",
-        )
-        if (
-            trim(control_action.get("actionId")) != RATE_CHANGE_PLAN_ACTION_ID
-            or trim(control_action.get("operationId")) != operation_id
-            or trim(control_action.get("outcome")) != "PLAN_INSTALLED"
-            or trim(control_action.get("planDigest")) != snapshot.plan_digest
-        ):
-            raise RuntimeError(
-                "Agent runtime returned contradictory per-agent rate-change installation evidence."
-            )
-        customers.append(
-            RateChangeInstallationCustomer(
-                cohort_agent_id=cohort_agent_id,
-                provider_runtime_agent_id=provider_runtime_agent_id,
-                opportunity_agent_id=opportunity_agent_id,
-                eligible_account_count=eligible_account_count,
-            )
-        )
-    if cohort_agent_ids != expected_agent_ids:
-        raise RuntimeError(
-            "Agent runtime installed the rate-change plan for a different customer set."
-        )
-    installation = rate_change_installation_manifest(
-        snapshot,
-        customers,
-        cohort_artifact_digest,
-    )
-    if installation.agent_identity_set_digest != expected_identity_set_digest:
-        raise RuntimeError(
-            "Rate-change installation identity digest contradicts the pinned cohort."
-        )
-    persist_clock_driven_intervention_installation(run_id, installation)
-    append_policy_log(
-        run_id,
-        f"Pinned rate-change plan installed for {succeeded} customers; "
-        "CC001 changes from 19% to 24% at simulated day 10.",
+    raise ProtocolError(
+        410, "scenario_lab_clock_execution_retired", "invalid_request",
+        "Legacy Scenario Lab clock/Runtime execution is unavailable: its platform APIs were retired. "
+        "Native event restoration remains tracked under #470.",
+        operation="policy-wind-tunnel-run",
+        details={"runId": run_id, "migrationIssue": "#470"},
     )
 
 
@@ -9113,18 +8706,13 @@ def activate_agent_chunk(
     chunk_count: int,
     agents: list[dict[str, Any]],
 ) -> None:
-    headers = {
-        "X-Astraform-Run-Id": run_id,
-        "X-Astraform-Cohort-Id": cohort_id,
-        "X-Astraform-Activation-Id": f"{run_id}-chunk-{chunk_number}",
-        "X-Astraform-Init-Max-Concurrency": str(int_env("ASTRAFORM_HYBRID_ACTIVATION_INIT_MAX_CONCURRENCY", 4)),
-    }
-    if trim(cohort_artifact_digest):
-        headers["X-Astraform-Cohort-Artifact-Digest"] = trim(cohort_artifact_digest)
-    post_json(agent_runtime_url() + "/api/agents/init", agents, headers=headers)
-    with _POLICY_WIND_TUNNEL_LOCK:
-        update_policy_run(run_id, increment_fields={"activatedCount": len(agents)})
-    append_policy_log(run_id, f"Activated chunk {chunk_number}/{chunk_count} ({len(agents)} customers).")
+    raise ProtocolError(
+        410, "scenario_lab_clock_execution_retired", "invalid_request",
+        "Legacy Scenario Lab clock/Runtime execution is unavailable: its platform APIs were retired. "
+        "Native event restoration remains tracked under #470.",
+        operation="policy-wind-tunnel-run",
+        details={"runId": run_id, "migrationIssue": "#470"},
+    )
 
 
 def activate_pinned_cohort(
@@ -9135,52 +8723,33 @@ def activate_pinned_cohort(
     parameters: dict[str, Any],
     agent_count: int,
 ) -> None:
-    content = snapshot.get("content")
-    if not isinstance(content, bytes):
-        raise ValueError("Platform-owned pinned cohort bytes are unavailable.")
-    activation_settings = activation_settings_snapshot(parameters)
-    if trim(activation_settings["settings"].get("agentDecisionMode")) != agent_decision_mode:
-        raise ValueError("Platform-owned activation settings do not match the accepted run mode.")
-    activation_id = trim(parameters.get("activationId"))
-    if not activation_id:
-        raise ValueError("Platform-owned activation requires the platform-owned activationId.")
-    headers = {
-        "X-Astraform-Run-Id": run_id,
-        "X-Astraform-Cohort-Id": cohort_id,
-        "X-Astraform-Cohort-Artifact-Digest": trim(snapshot.get("artifactDigest")),
-        "X-Astraform-Activation-Id": activation_id,
-        "X-Astraform-Init-Max-Concurrency": str(int_env("ASTRAFORM_HYBRID_ACTIVATION_INIT_MAX_CONCURRENCY", 4)),
-        "X-Astraform-Activation-Settings": activation_settings["encodedContent"],
-    }
-    post_bytes(
-        agent_runtime_url() + "/api/agents/init/pinned-cohort",
-        content,
-        headers=headers,
+    raise ProtocolError(
+        410, "scenario_lab_clock_execution_retired", "invalid_request",
+        "Legacy Scenario Lab clock/Runtime execution is unavailable: its platform APIs were retired. "
+        "Native event restoration remains tracked under #470.",
+        operation="policy-wind-tunnel-run",
+        details={"runId": run_id, "migrationIssue": "#470"},
     )
-    append_policy_log(run_id, f"Activated pinned cohort ({agent_count} customers).")
 
 
 def fetch_simulation_time_epoch_ms() -> int | None:
-    try:
-        payload = get_json(simulator_url() + "/api/clock/time")
-        if isinstance(payload, (int, float)):
-            return int(payload)
-        if isinstance(payload, dict):
-            for key in ("epochMs", "currentTimeEpochMs", "simulationTimeEpochMs", "time"):
-                value = payload.get(key)
-                if isinstance(value, (int, float, str)) and trim(value):
-                    return int(float(value))
-    except Exception:
-        return None
-    return None
+    raise ProtocolError(
+        410, "scenario_lab_clock_execution_retired", "invalid_request",
+        "Legacy Scenario Lab clock/Runtime execution is unavailable: its platform APIs were retired. "
+        "Native event restoration remains tracked under #470.",
+        operation="policy-wind-tunnel-lifecycle",
+        details={"migrationIssue": "#470"},
+    )
 
 
 def fetch_simulator_replay_context() -> dict[str, Any]:
-    try:
-        payload = get_json(simulator_url() + "/api/clock/replay")
-        return payload if isinstance(payload, dict) else {}
-    except Exception:
-        return {}
+    raise ProtocolError(
+        410, "scenario_lab_clock_execution_retired", "invalid_request",
+        "Legacy Scenario Lab clock/Runtime execution is unavailable: its platform APIs were retired. "
+        "Native event restoration remains tracked under #470.",
+        operation="policy-wind-tunnel-lifecycle",
+        details={"migrationIssue": "#470"},
+    )
 
 
 def clock_driven_simulation_window(run_id: str, parameters: dict[str, Any]) -> dict[str, Any]:
@@ -9227,16 +8796,19 @@ def clock_driven_simulation_window(run_id: str, parameters: dict[str, Any]) -> d
 
 def fetch_simulation_run_record(run_id: str) -> dict[str, Any]:
     try:
-        payload = get_json(experiment_service_url() + "/api/simulation-runs/" + quote(run_id))
-        return payload if isinstance(payload, dict) else {}
+        with ApiClient(Configuration(host=experiment_service_url(), retries=0)) as client:
+            record = SimulationRunsApi(client).get_simulation_run(run_id, _request_timeout=30.0)
+            return json.loads(record.to_json())
     except Exception:
         return {}
 
 
 def fetch_simulation_run_ledger(run_id: str) -> dict[str, Any]:
     try:
-        payload = get_json(experiment_service_url() + "/api/simulation-runs/" + quote(run_id) + "/ledger?limit=1000")
-        return payload if isinstance(payload, dict) else {}
+        with ApiClient(Configuration(host=experiment_service_url(), retries=0)) as client:
+            ledger = SimulationRunsApi(client).inspect_simulation_run_ledger(
+                run_id, limit=100, _request_timeout=30.0)
+            return json.loads(ledger.to_json())
     except Exception:
         return {}
 
@@ -10368,76 +9940,13 @@ def build_clock_driven_domain_scores(
 
 
 def load_runtime_decision_audit(run_id: str | None = None, *, include_decisions: bool = True) -> dict[str, Any]:
-    try:
-        url = agent_runtime_url() + "/api/agents/hybrid-decisions"
-        query: list[str] = []
-        normalized_run_id = trim(run_id)
-        if normalized_run_id:
-            query.append("simulationRunId=" + quote(normalized_run_id, safe=""))
-        if not include_decisions:
-            query.append("includeDecisions=false")
-        if query:
-            url += "?" + "&".join(query)
-        payload = get_json(url)
-        agents = [dict(item) for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
-    except Exception:
-        agents = []
-    decision_count = 0
-    fallback_count = 0
-    decision_window_count = 0
-    decision_opportunity_count = 0
-    decision_admitted_count = 0
-    decision_deferred_count = 0
-    deferred_by_reason: dict[str, int] = {}
-    for agent in agents:
-        decision_count += int_or_default(agent.get("totalDecisionCount"), int_or_default(agent.get("eventCount"), 0))
-        fallback_count += int_or_default(agent.get("fallbackCount"), 0)
-        window_summary = agent.get("decisionWindowSummary") if isinstance(agent.get("decisionWindowSummary"), dict) else {}
-        decision_window_count += int_or_default(agent.get("decisionWindowCount"), int_or_default(window_summary.get("windowCount"), 0))
-        agent_opportunities = int_or_default(agent.get("decisionOpportunityCount"), int_or_default(window_summary.get("opportunityCount"), 0))
-        agent_admitted = int_or_default(agent.get("decisionAdmittedCount"), int_or_default(window_summary.get("admittedCount"), int_or_default(agent.get("totalDecisionCount"), int_or_default(agent.get("eventCount"), 0))))
-        agent_deferred = int_or_default(agent.get("decisionDeferredCount"), int_or_default(window_summary.get("deferredCount"), max(0, agent_opportunities - agent_admitted)))
-        decision_opportunity_count += agent_opportunities
-        decision_admitted_count += agent_admitted
-        decision_deferred_count += agent_deferred
-        reason_counts = agent.get("decisionDeferredByReason")
-        if not isinstance(reason_counts, dict):
-            reason_counts = window_summary.get("deferredByReason") if isinstance(window_summary.get("deferredByReason"), dict) else {}
-        for reason, count in reason_counts.items():
-            normalized_reason = trim(reason) or "unknown"
-            deferred_by_reason[normalized_reason] = deferred_by_reason.get(normalized_reason, 0) + int_or_default(count, 0)
-    opportunity_ledger = build_opportunity_ledger_totals(agents)
-    return {
-        "schemaVersion": "hybrid_decision_audit_live.v1",
-        "source": "agent-runtime",
-        "totals": {
-            "agentCount": len(agents),
-            "decisionCount": decision_count,
-            "fallbackCount": fallback_count,
-            "decisionWindowCount": decision_window_count,
-            "decisionOpportunityCount": decision_opportunity_count,
-            "decisionAdmittedCount": decision_admitted_count,
-            "decisionDeferredCount": decision_deferred_count,
-            "decisionDeferredByReason": deferred_by_reason,
-            "opportunityLedger": opportunity_ledger,
-        },
-        "summary": {
-            "agentCount": len(agents),
-            "decisionCount": decision_count,
-            "fallbackCount": fallback_count,
-            "fallbackRateP50": fallback_count / max(1, decision_count),
-            "dominantDecisionAction": "--",
-            "dominantResponseFormat": "--",
-            "decisionWindowCount": decision_window_count,
-            "decisionOpportunityCount": decision_opportunity_count,
-            "decisionAdmittedCount": decision_admitted_count,
-            "decisionDeferredCount": decision_deferred_count,
-            "decisionDeferredByReason": deferred_by_reason,
-            "opportunityLedger": opportunity_ledger,
-        },
-        "opportunityLedger": opportunity_ledger,
-        "agents": agents,
-    }
+    raise ProtocolError(
+        410, "scenario_lab_clock_execution_retired", "invalid_request",
+        "Legacy Scenario Lab clock/Runtime execution is unavailable: its platform APIs were retired. "
+        "Native event restoration remains tracked under #470.",
+        operation="policy-wind-tunnel-lifecycle",
+        details={"runId": run_id, "migrationIssue": "#470"},
+    )
 
 
 def build_opportunity_ledger_totals(agents: list[dict[str, Any]]) -> dict[str, Any]:
@@ -10629,61 +10138,12 @@ def finalized_runtime_decision_audit(run_id: str, parameters: dict[str, Any]) ->
 
 
 def wait_for_runtime_tick_drain(run_id: str | None = None) -> dict[str, Any]:
-    normalized_run_id = trim(run_id)
-    if not normalized_run_id:
-        return runtime_tick_drain_result(
-            False,
-            "MISSING_RUN_ID",
-            "Runtime tick drain could not be verified because the simulation run id was missing.",
-        )
-    timeout_ms = max(1_000, int_or_default(RUNTIME_TICK_DRAIN_TIMEOUT_MS, 60_000))
-    poll_ms = max(0, int_or_default(HYBRID_DECISION_AUDIT_SETTLE_POLL_MS, 250))
-    required_stable_samples = max(1, int_or_default(RUNTIME_TICK_DRAIN_STABLE_SAMPLES, 20))
-    deadline = time.monotonic() + (timeout_ms / 1000)
-    last_signature: tuple[int, ...] | None = None
-    stable_samples = 0
-    while time.monotonic() < deadline:
-        try:
-            telemetry = http_json(
-                "GET",
-                agent_runtime_url() + "/api/agents/runtime-state?simulationRunId=" + quote(normalized_run_id, safe=""),
-                timeout=2.0,
-            )
-        except Exception:
-            return runtime_tick_drain_result(
-                False,
-                "UNAVAILABLE",
-                "Runtime tick drain could not be verified because agent-runtime runtime-state telemetry was unavailable.",
-            )
-        payload = telemetry if isinstance(telemetry, dict) else {}
-        if not runtime_tick_drain_response_matches_run(payload, normalized_run_id):
-            return runtime_tick_drain_result(
-                False,
-                "UNVERIFIED_SCOPE",
-                "Runtime tick drain could not be verified because agent-runtime returned an unscoped or mismatched runtime-state payload.",
-            )
-        signature = runtime_tick_drain_signature(payload)
-        if runtime_tick_drain_complete(payload):
-            if signature == last_signature:
-                stable_samples += 1
-            else:
-                last_signature = signature
-                stable_samples = 1
-            if stable_samples >= required_stable_samples:
-                return runtime_tick_drain_result(
-                    True,
-                    "DRAINED",
-                    "Runtime tick drain was verified for this simulation run before finalization.",
-                )
-        else:
-            last_signature = signature
-            stable_samples = 0
-        if poll_ms > 0:
-            time.sleep(poll_ms / 1000)
-    return runtime_tick_drain_result(
-        False,
-        "TIMEOUT",
-        "Runtime tick drain could not be verified before the finalization drain timeout.",
+    raise ProtocolError(
+        410, "scenario_lab_clock_execution_retired", "invalid_request",
+        "Legacy Scenario Lab clock/Runtime execution is unavailable: its platform APIs were retired. "
+        "Native event restoration remains tracked under #470.",
+        operation="policy-wind-tunnel-lifecycle",
+        details={"runId": run_id, "migrationIssue": "#470"},
     )
 
 
@@ -10900,14 +10360,6 @@ HYBRID_DECISION_AUDIT_STABLE_SAMPLES = max(
     1,
     int_env("ASTRAFORM_HYBRID_DECISION_AUDIT_STABLE_SAMPLES", 4),
 )
-RUNTIME_TICK_DRAIN_STABLE_SAMPLES = max(
-    1,
-    int_env("ASTRAFORM_RUNTIME_TICK_DRAIN_STABLE_SAMPLES", 20),
-)
-RUNTIME_TICK_DRAIN_TIMEOUT_MS = max(
-    1_000,
-    int_env("ASTRAFORM_RUNTIME_TICK_DRAIN_TIMEOUT_MILLIS", 180_000),
-)
 
 
 def float_or_default(value: Any, default: float) -> float:
@@ -10924,26 +10376,14 @@ def workspace_root() -> Path:
     return Path.cwd().resolve()
 
 
-def agent_runtime_url() -> str:
-    return strip_trailing_slash(os.getenv("AGENT_RUNTIME_URL") or "http://agent-runtime:8082")
-
-
 def fetch_decision_opportunity_reconciliation(run_id: str) -> dict[str, Any]:
-    try:
-        reconciliation_base_url = (
-            agent_runtime_url()
-            + "/api/agents/simulation-runs/"
-            + quote(run_id, safe="")
-            + "/decision-opportunities"
-        )
-        response = get_json(
-            reconciliation_base_url + "/reconciliation"
-        )
-        if not opportunity_reconciliation_is_valid(response, run_id):
-            return unavailable_opportunity_reconciliation(run_id)
-        return dict(response)
-    except Exception:
-        return unavailable_opportunity_reconciliation(run_id)
+    raise ProtocolError(
+        410, "scenario_lab_clock_execution_retired", "invalid_request",
+        "Legacy Scenario Lab clock/Runtime execution is unavailable: its platform APIs were retired. "
+        "Native event restoration remains tracked under #470.",
+        operation="policy-wind-tunnel-lifecycle",
+        details={"runId": run_id, "migrationIssue": "#470"},
+    )
 
 
 def unavailable_opportunity_reconciliation(run_id: str) -> dict[str, Any]:
@@ -11318,78 +10758,12 @@ def assess_opportunity_evidence(
     )
 
 
-def simulator_url() -> str:
-    return strip_trailing_slash(os.getenv("SIMULATOR_URL") or "http://sim:8083")
-
-
 def experiment_service_url() -> str:
     return strip_trailing_slash(os.getenv("EXPERIMENT_SERVICE_URL") or "http://experiment-service:7457")
 
 
 def strip_trailing_slash(value: str) -> str:
     return trim(value).rstrip("/")
-
-
-def http_json(
-    method: str,
-    url: str,
-    payload: Any | None = None,
-    *,
-    headers: dict[str, str] | None = None,
-    timeout: float = 30.0,
-) -> Any:
-    request_headers = {"Accept": "application/json", **(headers or {})}
-    data = None
-    if payload is not None:
-        data = json.dumps(payload).encode("utf-8")
-        request_headers["Content-Type"] = "application/json"
-    request = Request(url, data=data, headers=request_headers, method=method.upper())
-    try:
-        with urlopen(request, timeout=timeout) as response:
-            body = response.read()
-            if not body:
-                return {}
-            text = body.decode("utf-8")
-            try:
-                return json.loads(text)
-            except json.JSONDecodeError:
-                return text
-    except HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"{method.upper()} {url} failed with status {exc.code}: {body}") from exc
-    except URLError as exc:
-        raise RuntimeError(f"{method.upper()} {url} failed: {exc.reason}") from exc
-
-
-def post_json(url: str, payload: Any, *, headers: dict[str, str] | None = None) -> Any:
-    return http_json("POST", url, payload, headers=headers)
-
-
-def post_bytes(
-    url: str,
-    payload: bytes,
-    *,
-    headers: dict[str, str] | None = None,
-    timeout: float = 30.0,
-) -> bytes:
-    request_headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        **(headers or {}),
-    }
-    request = Request(url, data=payload, headers=request_headers, method="POST")
-    try:
-        with urlopen(request, timeout=timeout) as response:
-            return response.read()
-    except HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"POST {url} failed with status {exc.code}: {body}") from exc
-    except URLError as exc:
-        raise RuntimeError(f"POST {url} failed: {exc.reason}") from exc
-
-
-def get_json(url: str) -> Any:
-    return http_json("GET", url)
 
 
 def decimal_amount(value: Any) -> Decimal:
@@ -11484,8 +10858,28 @@ def preset_from_run_id(run_id: str) -> str:
     return WIND_TUNNEL_PRESET_ID
 
 
-def policy_run_record(run_id: str, *, allow_legacy_synthesis: bool = False) -> dict[str, Any]:
+def policy_run_record(
+    run_id: str, *, allow_legacy_synthesis: bool = False, read_only: bool = False
+) -> dict[str, Any]:
     durable_run = load_policy_run_state(run_id)
+    if read_only:
+        with _POLICY_WIND_TUNNEL_LOCK:
+            current = durable_run if durable_run is not None else _POLICY_WIND_TUNNEL_RUNS.get(run_id)
+            view = deep_json_copy(current) if isinstance(current, dict) else None
+        receipt = load_finalization_receipt(run_id)
+        if receipt and (view is None or not is_terminal_phase(view.get("status"))):
+            if view is None or receipt.get("state") == FINALIZATION_RECEIPT_PUBLISHED:
+                # The receipt validator checks identity, status, mode, timestamps
+                # and artifact integrity. Inspect its actual provider snapshot
+                # without restoring it to the cache or durable run state.
+                view = deep_json_copy(receipt["runSnapshot"]["metadata"]["providerRun"])
+        if view is None:
+            raise ProtocolError(
+                404, "unknown_policy_wind_tunnel_run", "not_found",
+                f"Unknown Policy Wind Tunnel runId: {run_id}",
+                operation="policy-wind-tunnel-status", details={"runId": run_id},
+            )
+        return view
     if durable_run is not None:
         with _POLICY_WIND_TUNNEL_LOCK:
             _POLICY_WIND_TUNNEL_RUNS[run_id] = durable_run

@@ -41,7 +41,7 @@ wheels = [
 
 [[package]]
 name = "astraform-remote-domain-author-kit"
-version = "0.3.2"
+version = "0.3.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jsonschema" },
@@ -50,9 +50,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c0/59/62c185b26bc4207c9adf59bc5413c0c59186ce067801c35b32498e06c27d/astraform_remote_domain_author_kit-0.3.2.tar.gz", hash = "sha256:f9526c05364c2b4970ce550f09a615ac48c736bdf030cad332b60a5db9c2d17e", size = 159437, upload-time = "2026-10-11T07:41:12.67Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/60/cb/299460cf88345215b63a83c7baf972fe4a20dd70df14134d1fdf49e80133/astraform_remote_domain_author_kit-0.3.3.tar.gz", hash = "sha256:2f6efb026fa7307ecbaef9dda629180ef0b0944ff10c45d79dc8111f0b974ef8", size = 160669, upload-time = "2026-10-15T00:55:18.655Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e3/b9/7719c70de2fee7ba2218573b44852a92148fd0e3bd7bc3dfbe698fa22b5e/astraform_remote_domain_author_kit-0.3.2-py3-none-any.whl", hash = "sha256:b7a66c86331584806f18d4759e57d949382aeae91cdc57f0128c92677ea64162", size = 297005, upload-time = "2026-10-11T07:41:11.037Z" },
+    { url = "https://files.pythonhosted.org/packages/26/d7/861a48b583fc396f889dc89d46249eb0f0187c38c24a3f45dff57818da2d/astraform_remote_domain_author_kit-0.3.3-py3-none-any.whl", hash = "sha256:f03b97ad5b9ae3b00fbae1c793e1c1aa2900d96760fbd24c5a098097677a9ae1", size = 298057, upload-time = "2026-10-15T00:55:16.855Z" },
 ]
 
 [package.optional-dependencies]
@@ -100,7 +100,7 @@ release = [
 
 [package.metadata]
 requires-dist = [
-    { name = "astraform-remote-domain-author-kit", extras = ["fastapi"], specifier = "==0.3.2" },
+    { name = "astraform-remote-domain-author-kit", extras = ["fastapi"], specifier = "==0.3.3" },
     { name = "fastapi", specifier = ">=0.115,<1.0" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.28,<1.0" },
     { name = "mcp", specifier = ">=1.26,<2" },

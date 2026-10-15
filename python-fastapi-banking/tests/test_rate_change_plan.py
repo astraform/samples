@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import json
 import hashlib
-import threading
 from copy import deepcopy
 from decimal import Decimal
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -429,97 +427,45 @@ def test_unavailable_correlation_audit_aborts_finalization(
 def test_correlation_capability_is_not_forwarded_across_redirects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    requests: list[tuple[str, str | None]] = []
-
-    class RedirectHandler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802
-            requests.append(
-                (
-                    self.path,
-                    self.headers.get(service.OPPORTUNITY_CORRELATION_CAPABILITY_HEADER),
-                )
-            )
-            if self.path == "/redirect-target":
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(b"{}")
-                return
-            self.send_response(302)
-            self.send_header(
-                "Location",
-                f"http://127.0.0.1:{self.server.server_port}/redirect-target",
-            )
-            self.end_headers()
-
-        def log_message(self, _format: str, *args: object) -> None:
-            return
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    import urllib.request
+    requests = []
+    def unexpected(*args, **kwargs):
+        requests.append((args, kwargs))
+        raise AssertionError("Retired Runtime audit must not construct or send HTTP")
+    monkeypatch.setattr(urllib.request, "Request", unexpected)
+    monkeypatch.setattr(urllib.request, "urlopen", unexpected)
+    assert not hasattr(service, "agent_runtime_url")
+    with pytest.raises(service.OpportunityCorrelationAuditUnavailableError, match="private opportunity correlation capability"):
+        service.fetch_decision_opportunity_correlation_audit("run-retired", service.RATE_CHANGE_TRIGGER_TYPE)
     token = service.bind_opportunity_correlation_capability("private-capability")
-    monkeypatch.setattr(
-        service,
-        "agent_runtime_url",
-        lambda: f"http://127.0.0.1:{server.server_port}",
-    )
     try:
-        with pytest.raises(
-            service.OpportunityCorrelationAuditUnavailableError,
-            match="status 302",
-        ):
-            service.fetch_decision_opportunity_correlation_audit(
-                "run-redirect",
-                service.RATE_CHANGE_TRIGGER_TYPE,
-            )
+        with pytest.raises(service.OpportunityCorrelationAuditUnavailableError, match="API was retired"):
+            service.fetch_decision_opportunity_correlation_audit("run-retired", service.RATE_CHANGE_TRIGGER_TYPE)
     finally:
         service.reset_opportunity_correlation_capability(token)
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
-
-    assert len(requests) == 1
-    assert requests[0][0].startswith("/api/agents/simulation-runs/run-redirect/")
-    assert requests[0][1] == "private-capability"
+    assert requests == []
 
 
 def test_malformed_success_audit_remains_retryable_unavailability(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class MalformedAuditHandler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"simulationRunId":"first","simulationRunId":"second"}')
-
-        def log_message(self, _format: str, *args: object) -> None:
-            return
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), MalformedAuditHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    import urllib.request
+    requests = []
+    def unexpected(*args, **kwargs):
+        requests.append((args, kwargs))
+        raise AssertionError("Retired Runtime audit must not construct or send HTTP")
+    monkeypatch.setattr(urllib.request, "Request", unexpected)
+    monkeypatch.setattr(urllib.request, "urlopen", unexpected)
+    assert not hasattr(service, "agent_runtime_url")
+    with pytest.raises(service.OpportunityCorrelationAuditUnavailableError, match="private opportunity correlation capability"):
+        service.fetch_decision_opportunity_correlation_audit("run-retired", service.RATE_CHANGE_TRIGGER_TYPE)
     token = service.bind_opportunity_correlation_capability("private-capability")
-    monkeypatch.setattr(
-        service,
-        "agent_runtime_url",
-        lambda: f"http://127.0.0.1:{server.server_port}",
-    )
     try:
-        with pytest.raises(
-            service.OpportunityCorrelationAuditUnavailableError,
-            match="strict UTF-8 JSON",
-        ):
-            service.fetch_decision_opportunity_correlation_audit(
-                "run-malformed",
-                service.RATE_CHANGE_TRIGGER_TYPE,
-            )
+        with pytest.raises(service.OpportunityCorrelationAuditUnavailableError, match="API was retired"):
+            service.fetch_decision_opportunity_correlation_audit("run-retired", service.RATE_CHANGE_TRIGGER_TYPE)
     finally:
         service.reset_opportunity_correlation_capability(token)
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
+    assert requests == []
 
 
 def canonical_rate_change_cohort_artifact() -> bytes:

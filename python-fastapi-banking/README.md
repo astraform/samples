@@ -1,7 +1,7 @@
 # Python FastAPI Banking Remote Domain
 
 Python banking reference implementation for `remote-domain.v1`, using published
-Python author kit `0.3.2` and shared contract bundle `1.2.0`. The locked SDK comes from
+Python author kit `0.3.3` and shared contract bundle `1.2.1`. The locked SDK comes from
 PyPI; this sample does not require an editable checkout of the SDK or access
 to Astraform's platform source. Use the public
 [platform v0.2.0 bundle](https://github.com/astraform/releases/releases/tag/v0.2.0)
@@ -88,7 +88,7 @@ the bank URL and the deployment's MCP/domain/A2A bindings. The
 [Python endpoint setup](../banking-advice-agent/README.md#python-banking-endpoint-bindings)
 provides the complete binding properties and matching partner startup command.
 The setup helper uses the platform client included in the existing Astraform author
-kit, alongside domain authoring. Both are included in the published `0.3.2` author kit used by
+kit, alongside domain authoring. Both are included in the published `0.3.3` author kit used by
 this sample's registry-resolved lock. Conformance remains separate validation
 tooling. See [SDK dependency setup](../README.md#sdk-development).
 
@@ -145,14 +145,47 @@ Unknown policies, unknown fields, invalid priorities, negative thresholds,
 and non-boolean enablement fail preparation. The Java and Python policies are
 covered by matching V1 event vectors and the live provider parity gate.
 
-Scenario Lab exposes `EVENT_ONLY` as the explicit event-driven activation
-mode. Activated personas receive a zero calendar interval; only durable
-decision triggers can wake them. In the current v1 contract this provider can
+Scenario Lab retains `EVENT_ONLY` as an event-driven activation setting: its
+persona configuration uses a zero calendar interval and decision triggers rather
+than calendar polling. This retained configuration does not establish a supported
+Scenario Lab cohort activation path; see the [migration boundary](#scenario-lab-clock-migration-boundary). In the current v1 contract this provider can
 publish policy triggers from `domain-system-work-window`. Persona
 `execute-work` responses cannot yet carry triggers, and the optional monthly
 review mapping does not itself schedule a review. Native customer scenarios
 configure decision opportunities and domain work separately; enabling this
 policy alone does not make the customer act.
+
+## Scenario Lab clock migration boundary
+
+Astraform's native platform has no global clock runtime. New
+`CLOCK_DRIVEN_HYBRID` requests reject before creating local/Experiment run state,
+admitting work or starting workers. Clock-dependent mutating lifecycle controls
+reject before changing run state; legacy Scenario Lab execution rejects before
+creating output directories, resetting or activating agents. The local source
+physically removes the retired clock and dependent Runtime requests, generic
+raw HTTP helpers and obsolete worker dispatch. It contains no retired endpoint
+URL construction. Supported run/ledger/completion operations keep their native
+SDK owners; useful native Scenario Lab execution still requires restoration. Do not configure clock advance, replay,
+playback, rewind or host-agent activation endpoints to make those paths run.
+An SDK method's presence does not make execution supported.
+
+Pack/preset metadata and valid stored historical run/artifact reads and exports
+remain available. Terminal status/artifact reads retain stored results;
+nonterminal historical refresh can serve an existing stored artifact, otherwise
+it reports unavailability instead of querying a live clock or inventing a
+snapshot. Same-operation SDK reconciliation of already recorded completion also
+remains supported. This removal preserves captured results and does not rerun
+them. It is a migration qualification, not a statement that every Scenario Lab
+API is unavailable. Useful cadence, horizon, cohort, domain intervention and
+pause/resume/cancel/finalization semantics remain required native restoration
+work under #470 and the platform's existing run/evidence owners.
+
+The ordinary customer-simulation path continues to use generated SDK methods,
+the bank's manifest/prepare/work-window operations and Astraform-owned durable
+execution. Its issued/monthly capability requirements are described in the
+[shared banking guide](../banking-advice-agent/README.md); removing obsolete
+requests does not change those flows or their SDK dependency pins. These source
+changes remain local; immutable released images and archives have not changed.
 
 ## Domain Shape
 
@@ -235,10 +268,10 @@ skipped. CI supplies its own PostgreSQL service and runs these checks.
 
 Schema-backed conformance run:
 
-The author kit and conformance SDK `0.3.2` packages are published on PyPI.
+The author kit and conformance SDK `0.3.3` packages are published on PyPI.
 The source installation below uses those versions. Prebuilt images and starter
 archives retain the SDK versions recorded in their image and release metadata;
-a new image must be built from updated source to include SDK `0.3.2`. Record the
+a new image must be built from updated source to include SDK `0.3.3`. Record the
 running provider's source revision or image digest separately from the
 conformance tool version.
 
@@ -247,7 +280,7 @@ cd python-fastapi-banking
 python3 -m venv .venv-conformance
 . .venv-conformance/bin/activate
 pip install -e '.[test]'
-pip install 'astraform-remote-domain-conformance==0.3.2'
+pip install 'astraform-remote-domain-conformance==0.3.3'
 # Start the selected provider image by its actual digest on localhost:8092.
 mkdir -p build
 remote-domain-conformance \

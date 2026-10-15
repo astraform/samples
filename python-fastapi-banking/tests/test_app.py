@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
 import json
 import os
@@ -13,10 +14,14 @@ import zipfile
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from contextlib import contextmanager
+from urllib.parse import parse_qs, unquote, urlparse
 
 import pytest
 from fastapi.testclient import TestClient
+from astraform_platform_client import ApiClient
+from astraform_platform_client.models.simulation_run_update_request import SimulationRunUpdateRequest
+from astraform_platform_client.rest import RESTClientObject
 
 import banking_remote_domain_python.main as main_module
 from banking_remote_domain_python import service
@@ -32,6 +37,13 @@ PACK_ID = "banking-python-policy-pack"
 client = TestClient(app, headers={
     "X-Astraform-Expected-Provider-Revision": service.WIND_TUNNEL_PROVIDER_REVISION,
 })
+
+
+@pytest.fixture(autouse=True)
+def isolated_provider_workspace(tmp_path, monkeypatch) -> None:
+    # Persist actual fixture bytes outside the checkout. A source-derived provider
+    # revision must not encounter another test run's durable provider state.
+    monkeypatch.setenv("ASTRAFORM_WORKSPACE_ROOT", str(tmp_path))
 
 
 def platform_v2_launch_payload(
@@ -484,87 +496,22 @@ def test_deterministic_event_only_cadence_survives_run_normalization() -> None:
     assert normalized["activationId"] == "platform-activation-opaque-123"
 
 
-def test_run_launch_preserves_pinned_finalization_mode_and_gates_event_only(
-    monkeypatch,
-) -> None:
-    captured: list[dict[str, Any]] = []
-    monkeypatch.setattr(
-        service,
-        "start_clock_driven_policy_wind_tunnel_run",
-        lambda _preset, parameters, execution_role=None, launch_digest=None: captured.append(deepcopy(parameters))
-        or parameters,
-    )
-    monkeypatch.setattr(service, "platform_owned_v2_storage_ready", lambda: False)
-
-    with pytest.raises(service.ProtocolError) as unavailable:
-        service.start_policy_wind_tunnel_run(
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                "agentDecisionMode": "STUB_LLM",
-                "agentDecisionCadence": "DAILY",
-                service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_PLATFORM_OWNED_V2,
-            }
-        )
-    assert unavailable.value.code == "platform_owned_v2_storage_unavailable"
-    assert captured == []
-
-    monkeypatch.setattr(service, "platform_owned_v2_storage_ready", lambda: True)
-
-    pinned_v2 = service.start_policy_wind_tunnel_run(
-        {
-            "executionMode": "CLOCK_DRIVEN_HYBRID",
-            "agentDecisionMode": "STUB_LLM",
-            "agentDecisionCadence": "DAILY",
-            service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_PLATFORM_OWNED_V2,
-        }
-    )
-
-    assert pinned_v2[service.FINALIZATION_MODE_FIELD] == service.FINALIZATION_MODE_PLATFORM_OWNED_V2
-    assert captured[-1][service.FINALIZATION_MODE_FIELD] == service.FINALIZATION_MODE_PLATFORM_OWNED_V2
-
-    with pytest.raises(service.ProtocolError, match="historical reads and lifecycle cleanup only"):
-        service.start_policy_wind_tunnel_run(
-            {
-                "executionMode": "FAST_BATCH_COMPARE",
-                service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_PLATFORM_OWNED_V1,
-            }
-        )
-
-    with pytest.raises(service.ProtocolError, match="V1 modes are recovery-only"):
-        service.start_policy_wind_tunnel_run(
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                "agentDecisionMode": "STUB_LLM",
-                "agentDecisionCadence": "DAILY",
-                service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_PLATFORM_OWNED_V1,
-            }
-        )
-    with pytest.raises(service.ProtocolError, match="explicitly pinned"):
-        service.start_policy_wind_tunnel_run(
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                "agentDecisionMode": "STUB_LLM",
-                "agentDecisionCadence": "DAILY",
-            }
-        )
-    with pytest.raises(service.ProtocolError, match="must be LEGACY_V1"):
-        service.start_policy_wind_tunnel_run(
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                "agentDecisionMode": "STUB_LLM",
-                "agentDecisionCadence": "DAILY",
-                service.FINALIZATION_MODE_FIELD: " PLATFORM_OWNED_V2 ",
-            }
-        )
-    with pytest.raises(service.ProtocolError, match="historical reads and lifecycle cleanup only"):
-        service.start_policy_wind_tunnel_run(
-            {
-                "executionMode": "FAST_BATCH_COMPARE",
-                "agentDecisionMode": "STUB_LLM",
-                "agentDecisionCadence": "EVENT_ONLY",
-                service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_PLATFORM_OWNED_V2,
-            }
-        )
+def test_run_configuration_preserves_pinned_mode_but_retired_clock_launch_is_unavailable(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(service, "workspace_root", lambda: tmp_path)
+    payload = platform_v2_launch_payload("retired-pinned-config")
+    payload["agentDecisionCadence"] = "DAILY"
+    normalized = service.normalized_wind_tunnel_parameters(payload, "saver-repricing")
+    assert normalized[service.FINALIZATION_MODE_FIELD] == service.FINALIZATION_MODE_PLATFORM_OWNED_V2
+    assert normalized["agentDecisionCadence"] == "DAILY"
+    for mode in (service.FINALIZATION_MODE_PLATFORM_OWNED_V2, service.FINALIZATION_MODE_PLATFORM_OWNED_V1,
+                 service.FINALIZATION_MODE_LEGACY_V1):
+        with pytest.raises(service.ProtocolError) as error:
+            service.start_policy_wind_tunnel_run({**payload, service.FINALIZATION_MODE_FIELD: mode})
+        assert (error.value.status_code, error.value.code) == (410, "scenario_lab_clock_execution_retired")
+    with pytest.raises(service.ProtocolError) as non_clock:
+        service.start_policy_wind_tunnel_run({**payload, "executionMode": "FAST_BATCH_COMPARE"})
+    assert non_clock.value.status_code == 400
+    assert list(tmp_path.rglob("*")) == []
 
 
 @pytest.mark.parametrize("execution_mode", [None, "FAST_BATCH_COMPARE", "UNKNOWN"])
@@ -594,51 +541,25 @@ def test_new_provider_launch_rejects_non_clock_modes_without_creating_run_or_art
     assert list(tmp_path.rglob("*")) == []
 
 
-def test_independent_process_launches_produce_one_activation_and_preserve_terminal_state(
-    tmp_path,
-    monkeypatch,
-) -> None:
+def test_independent_process_clock_launches_create_no_activation_or_run(tmp_path, monkeypatch) -> None:
     gate = tmp_path / "launch.gate"
     activation_log = tmp_path / "activation.log"
     run_id = "python-cross-process-launch"
-    first = launch_policy_provider_process(
-        tmp_path, tmp_path / "first.ready", gate, activation_log, run_id, "0.08"
-    )
-    second = launch_policy_provider_process(
-        tmp_path, tmp_path / "second.ready", gate, activation_log, run_id, "0.08"
-    )
+    first = launch_policy_provider_process(tmp_path, tmp_path / "first.ready", gate, activation_log, run_id, "0.08")
+    second = launch_policy_provider_process(tmp_path, tmp_path / "second.ready", gate, activation_log, run_id, "0.08")
     await_path(tmp_path / "first.ready")
     await_path(tmp_path / "second.ready")
     gate.write_text("go", encoding="ascii")
-
-    outcomes = {
-        assert_provider_process_succeeded(first).strip(),
-        assert_provider_process_succeeded(second).strip(),
-    }
-    assert outcomes == {"CREATED", "REPLAY"}
-    assert activation_log.read_text(encoding="ascii").splitlines() == ["activation"]
-
-    conflicting = launch_policy_provider_process(
-        tmp_path, tmp_path / "conflict.ready", gate, activation_log, run_id, "0.09"
-    )
-    assert "CONFLICT" in assert_provider_process_succeeded(conflicting)
-    assert activation_log.read_text(encoding="ascii").splitlines() == ["activation"]
-
+    for process in (first, second):
+        completed = process.communicate(timeout=10)
+        assert process.returncode != 0
+        assert "platform clock API was retired" in completed[0]
+    assert not activation_log.exists()
     monkeypatch.setenv("ASTRAFORM_WORKSPACE_ROOT", str(tmp_path))
-    terminal = service.load_policy_run_state(run_id)
-    assert terminal is not None
-    terminal["status"] = "COMPLETED"
-    terminal["phase"] = "COMPLETED"
-    service.store_policy_run_snapshot(run_id, terminal)
-    terminal_replay = launch_policy_provider_process(
-        tmp_path, tmp_path / "terminal.ready", gate, activation_log, run_id, "0.08"
-    )
-    assert_provider_process_succeeded(terminal_replay)
-    assert activation_log.read_text(encoding="ascii").splitlines() == ["activation"]
-    assert service.load_policy_run_state(run_id)["status"] == "COMPLETED"
+    assert service.load_policy_run_state(run_id) is None
 
 
-def test_credit_apr_lift_pins_and_installs_day_ten_plan_before_starting_clock(
+def test_credit_apr_day_ten_plan_and_pinned_cohort_preserved_without_clock_launch(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -719,98 +640,19 @@ def test_credit_apr_lift_pins_and_installs_day_ten_plan_before_starting_clock(
         }
     )
 
-    accepted = service.start_policy_wind_tunnel_run(
-        payload,
-        execution_role="PLATFORM_ADMIN",
-    )
-
-    assert accepted["runId"] == run_id
-    assert queued and queued[0][0] == run_id
-    plan_path = service.clock_driven_intervention_plan_path(run_id)
-    assert plan_path.is_file()
-    plan = service.require_rate_change_plan_bytes(plan_path.read_bytes())
+    normalized = service.normalized_wind_tunnel_parameters(payload, "credit-apr-lift")
+    plan = service.compile_rate_change_plan(run_id, "credit-apr-lift", normalized)
+    assert plan is not None
     assert plan.plan["scheduledOffsetDays"] == 10
-    assert accepted["parameters"][service.CLOCK_DRIVEN_INTERVENTION_PLAN_DIGEST_FIELD] == plan.plan_digest
-
-    monkeypatch.setattr(service, "enforce_real_llm_canary", lambda *_args: None)
-    monkeypatch.setattr(service, "enforce_hybrid_cohort_limit", lambda *_args: None)
-    monkeypatch.setattr(service, "apply_hybrid_replay_contract", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(service, "clear_active_agents", lambda *_args: None)
-    monkeypatch.setattr(service, "activate_pinned_cohort", lambda *_args, **_kwargs: None)
-
-    def post_install(url: str, body: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
-        assert url.endswith("/api/domain-control-actions/execute")
-        operation_id = body["operationId"]
-        digest = body["inputs"]["planDigest"]
-        return {
-            "simulationRunId": run_id,
-            "actionId": service.RATE_CHANGE_PLAN_ACTION_ID,
-            "operationId": operation_id,
-            "matchedAgents": 2,
-            "succeeded": 2,
-            "failed": 0,
-            "results": [
-                {
-                    "agentId": "customer-001",
-                    "cohortAgentId": "customer-001",
-                    "providerRuntimeAgentId": "provider-customer-001",
-                    "opportunityAgentId": "opportunity-customer-001",
-                    "controlAction": {
-                        "actionId": service.RATE_CHANGE_PLAN_ACTION_ID,
-                        "operationId": operation_id,
-                        "outcome": "PLAN_INSTALLED",
-                        "planDigest": digest,
-                        "eligibleAccountCount": 1,
-                    },
-                },
-                {
-                    "agentId": "customer-002",
-                    "cohortAgentId": "customer-002",
-                    "providerRuntimeAgentId": "provider-customer-002",
-                    "opportunityAgentId": "opportunity-customer-002",
-                    "controlAction": {
-                        "actionId": service.RATE_CHANGE_PLAN_ACTION_ID,
-                        "operationId": operation_id,
-                        "outcome": "PLAN_INSTALLED",
-                        "planDigest": digest,
-                        "eligibleAccountCount": 0,
-                    },
-                },
-            ],
-        }
-
-    monkeypatch.setattr(service, "post_json", post_install)
-    clock_started: list[bool] = []
-
-    def start_clock(_run_id: str, _playback_rate: float) -> bool:
-        installation_path = service.clock_driven_intervention_installation_path(run_id)
-        assert installation_path.is_file()
-        installation = service.require_rate_change_installation_manifest_bytes(
-            installation_path.read_bytes(),
-            plan,
-        )
-        assert installation.installed_agent_count == 2
-        assert installation.eligible_customer_count == 1
-        service.update_policy_run(
-            run_id,
-            status="RUNNING",
-            phase="CLOCK_RUNNING",
-            progress=0.55,
-            bundle_ready=True,
-        )
-        clock_started.append(True)
-        return True
-
-    monkeypatch.setattr(service, "start_simulator_clock_after_activation", start_clock)
-    monkeypatch.setattr(service, "start_clock_horizon_monitor", lambda *_args: None)
-
-    service.execute_clock_driven_policy_wind_tunnel_run(
-        run_id,
-        execution_claim_owner=queued[0][1],
-    )
-
-    assert clock_started == [True]
-    assert service.policy_run_record(run_id)["phase"] == "CLOCK_RUNNING"
+    pinned = service.capture_platform_cohort_snapshot(normalized)
+    assert pinned is not None
+    assert normalized["cohortArtifactDigest"] == cohort_artifact_digest
+    assert normalized["cohortAgentIdentitySetDigest"] == cohort_identity_set_digest
+    with pytest.raises(service.ProtocolError) as error:
+        service.start_policy_wind_tunnel_run(payload, execution_role="PLATFORM_ADMIN")
+    assert (error.value.status_code, error.value.code) == (410, "scenario_lab_clock_execution_retired")
+    assert queued == []
+    assert not service.clock_driven_intervention_plan_path(run_id).exists()
 
 
 def test_rate_change_installation_rejects_substituted_customer_identity(
@@ -833,56 +675,12 @@ def test_rate_change_installation_rejects_substituted_customer_identity(
     assert plan is not None
     operation_id = service.rate_change_plan_install_operation_id(plan)
 
-    def substituted_response(_url: str, _body: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
-        return {
-            "simulationRunId": run_id,
-            "actionId": service.RATE_CHANGE_PLAN_ACTION_ID,
-            "operationId": operation_id,
-            "matchedAgents": 2,
-            "succeeded": 2,
-            "failed": 0,
-            "results": [
-                {
-                    "agentId": "customer-a",
-                    "cohortAgentId": "customer-a",
-                    "providerRuntimeAgentId": "provider-customer-a",
-                    "opportunityAgentId": "opportunity-customer-a",
-                    "controlAction": {
-                        "actionId": service.RATE_CHANGE_PLAN_ACTION_ID,
-                        "operationId": operation_id,
-                        "outcome": "PLAN_INSTALLED",
-                        "planDigest": plan.plan_digest,
-                        "eligibleAccountCount": 1,
-                    },
-                },
-                {
-                    "agentId": "substituted-customer",
-                    "cohortAgentId": "substituted-customer",
-                    "providerRuntimeAgentId": "provider-substituted-customer",
-                    "opportunityAgentId": "opportunity-substituted-customer",
-                    "controlAction": {
-                        "actionId": service.RATE_CHANGE_PLAN_ACTION_ID,
-                        "operationId": operation_id,
-                        "outcome": "PLAN_INSTALLED",
-                        "planDigest": plan.plan_digest,
-                        "eligibleAccountCount": 0,
-                    },
-                },
-            ],
-        }
-
-    monkeypatch.setattr(service, "post_json", substituted_response)
     expected_agent_ids = {"customer-a", "customer-b"}
-
-    with pytest.raises(RuntimeError, match="different customer set"):
-        service.install_clock_driven_rate_change_plan(
-            run_id,
-            plan,
-            expected_agent_ids,
-            service.rate_change_agent_identity_set_digest(list(expected_agent_ids)),
-            "c" * 64,
-        )
-
+    assert service.rate_change_agent_identity_set_digest(["customer-a", "substituted-customer"]) != service.rate_change_agent_identity_set_digest(list(expected_agent_ids))
+    with pytest.raises(service.ProtocolError) as error:
+        service.install_clock_driven_rate_change_plan(run_id, plan, expected_agent_ids,
+            service.rate_change_agent_identity_set_digest(list(expected_agent_ids)), "c" * 64)
+    assert (error.value.status_code, error.value.code) == (410, "scenario_lab_clock_execution_retired")
     assert not service.clock_driven_intervention_installation_path(run_id).exists()
 
 
@@ -1043,67 +841,23 @@ def test_launch_digest_uses_canonical_resolved_inputs(monkeypatch) -> None:
     )
 
 
-def test_expired_launch_claim_is_taken_over_and_stale_owner_is_fenced(
-    tmp_path,
-    monkeypatch,
-) -> None:
+def test_expired_clock_launch_claim_is_not_taken_over_and_stale_owner_stays_fenced(tmp_path, monkeypatch) -> None:
     run_id = "python-expired-launch-claim"
-    payload = platform_v2_launch_payload(run_id)
-    fresh_owners: list[str] = []
-    recovery_owners: list[str] = []
-    monkeypatch.setattr(service, "workspace_root", lambda: tmp_path)
-    monkeypatch.setattr(service, "platform_owned_v2_storage_ready", lambda: True)
-    monkeypatch.setattr(
-        service,
-        "start_clock_driven_policy_wind_tunnel_worker",
-        lambda _run_id, _source=None, *, execution_claim_owner=None: fresh_owners.append(
-            execution_claim_owner
-        ),
-    )
-    monkeypatch.setattr(
-        service,
-        "start_clock_driven_policy_wind_tunnel_recovery",
-        lambda _run_id, *, execution_claim_owner: recovery_owners.append(
-            execution_claim_owner
-        ),
-    )
-
-    service.start_policy_wind_tunnel_run(payload, execution_role="PLATFORM_ADMIN")
-    service.start_policy_wind_tunnel_run(payload, execution_role="PLATFORM_ADMIN")
-
-    assert len(fresh_owners) == 1
-    assert recovery_owners == []
-    stale_owner = fresh_owners[0]
-    expired = service.load_policy_run_state(run_id)
-    assert expired is not None
-    expired[service.POLICY_EXECUTION_CLAIM_EXPIRES_AT_FIELD] = 0
-    service.store_policy_run_snapshot(run_id, expired)
-
-    service.start_policy_wind_tunnel_run(payload, execution_role="PLATFORM_ADMIN")
-
-    assert len(fresh_owners) == 1
-    assert len(recovery_owners) == 1
-    assert recovery_owners[0] != stale_owner
-    with service.policy_execution_claim_scope(run_id, stale_owner):
-        with pytest.raises(service.StalePolicyExecutionClaim):
-            service.update_policy_run(run_id, fields={"staleWriter": True})
-        with pytest.raises(service.StalePolicyExecutionClaim):
-            service.store_policy_run_snapshot(
-                run_id,
-                {
-                    **expired,
-                    "status": "FAILED",
-                    "phase": "FAILED",
-                },
-            )
-        with pytest.raises(service.StalePolicyExecutionClaim):
-            service.write_finalization_receipt(run_id, {})
-    with service.policy_execution_claim_scope(run_id, recovery_owners[0]):
-        service.update_policy_run(run_id, fields={"currentWriter": True})
-    durable = service.load_policy_run_state(run_id)
-    assert durable is not None
-    assert "staleWriter" not in durable
-    assert durable["currentWriter"] is True
+    with stored_clock_run(monkeypatch, tmp_path, run_id) as run:
+        run[service.POLICY_EXECUTION_CLAIM_OWNER_FIELD] = "historical-owner"
+        run[service.POLICY_EXECUTION_CLAIM_EXPIRES_AT_FIELD] = 0
+        service.store_policy_run_snapshot(run_id, run)
+        before = service.load_policy_run_state(run_id)
+        for _ in range(2):
+            with pytest.raises(service.ProtocolError) as error:
+                service.start_policy_wind_tunnel_run(platform_v2_launch_payload(run_id), execution_role="PLATFORM_ADMIN")
+            assert error.value.code == "scenario_lab_clock_execution_retired"
+        with service.policy_execution_claim_scope(run_id, "historical-owner"):
+            with pytest.raises(service.StalePolicyExecutionClaim):
+                service.update_policy_run(run_id, fields={"staleWriter": True})
+            with pytest.raises(service.StalePolicyExecutionClaim):
+                service.store_policy_run_snapshot(run_id, {**run, "status": "FAILED", "phase": "FAILED"})
+        assert service.load_policy_run_state(run_id) == before
 
 
 @pytest.mark.parametrize(
@@ -1114,253 +868,60 @@ def test_expired_launch_claim_is_taken_over_and_stale_owner_is_fenced(
         ("RUNNING", "FINALIZING_REPORT"),
     ],
 )
-def test_expired_nonrecoverable_replay_does_not_claim_or_schedule(
-    tmp_path,
-    monkeypatch,
-    status: str,
-    phase: str,
-) -> None:
+def test_expired_nonrecoverable_replay_does_not_claim_or_schedule(tmp_path, monkeypatch, status: str, phase: str) -> None:
     run_id = "python-nonrecoverable-replay-" + phase.lower()
-    payload = platform_v2_launch_payload(run_id)
-    fresh_owners: list[str] = []
-    recovery_owners: list[str] = []
-    monkeypatch.setattr(service, "workspace_root", lambda: tmp_path)
-    monkeypatch.setattr(service, "platform_owned_v2_storage_ready", lambda: True)
-    monkeypatch.setattr(
-        service,
-        "start_clock_driven_policy_wind_tunnel_worker",
-        lambda _run_id, _source=None, *, execution_claim_owner=None: fresh_owners.append(
-            execution_claim_owner
-        ),
-    )
-    monkeypatch.setattr(
-        service,
-        "start_clock_driven_policy_wind_tunnel_recovery",
-        lambda _run_id, *, execution_claim_owner: recovery_owners.append(
-            execution_claim_owner
-        ),
-    )
-
-    service.start_policy_wind_tunnel_run(payload, execution_role="PLATFORM_ADMIN")
-    durable = service.load_policy_run_state(run_id)
-    assert durable is not None
-    original_owner = durable[service.POLICY_EXECUTION_CLAIM_OWNER_FIELD]
-    durable["status"] = status
-    durable["phase"] = phase
-    durable[service.POLICY_EXECUTION_CLAIM_EXPIRES_AT_FIELD] = 0
-    service.store_policy_run_snapshot(run_id, durable)
-
-    service.start_policy_wind_tunnel_run(payload, execution_role="PLATFORM_ADMIN")
-
-    replay = service.load_policy_run_state(run_id)
-    assert len(fresh_owners) == 1
-    assert recovery_owners == []
-    assert replay is not None
-    assert replay[service.POLICY_EXECUTION_CLAIM_OWNER_FIELD] == original_owner
-    assert replay[service.POLICY_EXECUTION_CLAIM_EXPIRES_AT_FIELD] == 0
+    with stored_clock_run(monkeypatch, tmp_path, run_id, status=status, phase=phase) as run:
+        run[service.POLICY_EXECUTION_CLAIM_OWNER_FIELD] = "historical-owner"
+        run[service.POLICY_EXECUTION_CLAIM_EXPIRES_AT_FIELD] = 0
+        service.store_policy_run_snapshot(run_id, run)
+        before = service.load_policy_run_state(run_id)
+        with pytest.raises(service.ProtocolError) as error:
+            service.start_policy_wind_tunnel_run(platform_v2_launch_payload(run_id), execution_role="PLATFORM_ADMIN")
+        assert error.value.status_code == 410
+        assert service.load_policy_run_state(run_id) == before
 
 
-def test_expired_activation_recovery_never_repeats_activation(
-    tmp_path,
-    monkeypatch,
-) -> None:
+def test_expired_activation_recovery_never_repeats_activation(tmp_path, monkeypatch) -> None:
     run_id = "python-expired-activation-recovery"
-    payload = platform_v2_launch_payload(run_id)
-    fresh_owners: list[str] = []
-    recovery_owners: list[str] = []
-    monkeypatch.setattr(service, "workspace_root", lambda: tmp_path)
-    monkeypatch.setattr(service, "platform_owned_v2_storage_ready", lambda: True)
-    monkeypatch.setattr(
-        service,
-        "start_clock_driven_policy_wind_tunnel_worker",
-        lambda _run_id, _source=None, *, execution_claim_owner=None: fresh_owners.append(
-            execution_claim_owner
-        ),
-    )
-
-    def recover_now(recovered_run_id: str, *, execution_claim_owner: str) -> None:
-        recovery_owners.append(execution_claim_owner)
-        service.recover_existing_clock_driven_policy_wind_tunnel_run(
-            recovered_run_id,
-            execution_claim_owner,
-        )
-
-    monkeypatch.setattr(
-        service,
-        "start_clock_driven_policy_wind_tunnel_recovery",
-        recover_now,
-    )
-    monkeypatch.setattr(
-        service,
-        "apply_playback_control_for_run",
-        lambda *_args, **_kwargs: True,
-    )
-    monkeypatch.setattr(service, "clear_hybrid_runtime_cohort", lambda _run_id: None)
-    monkeypatch.setattr(
-        service,
-        "activate_pinned_cohort",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("expired replay must not repeat pinned activation")
-        ),
-    )
-    monkeypatch.setattr(
-        service,
-        "activate_agent_chunk",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("expired replay must not repeat chunk activation")
-        ),
-    )
-
-    service.start_policy_wind_tunnel_run(payload, execution_role="PLATFORM_ADMIN")
-    activating = service.load_policy_run_state(run_id)
-    assert activating is not None
-    activating["status"] = "RUNNING"
-    activating["phase"] = "ACTIVATING_COHORT"
-    activating[service.POLICY_EXECUTION_CLAIM_EXPIRES_AT_FIELD] = 0
-    service.store_policy_run_snapshot(run_id, activating)
-
-    service.start_policy_wind_tunnel_run(payload, execution_role="PLATFORM_ADMIN")
-
-    recovered = service.load_policy_run_state(run_id)
-    assert len(fresh_owners) == 1
-    assert len(recovery_owners) == 1
-    assert recovered is not None
-    assert recovered["status"] == "FAILED"
-    assert recovered["phase"] == "FAILED"
-    assert (
-        recovered["error"]["message"]
-        == "Provider ownership expired during cohort activation; activation was not replayed because its committed boundary is ambiguous."
-    )
-
-    service.start_policy_wind_tunnel_run(payload, execution_role="PLATFORM_ADMIN")
-
-    assert len(fresh_owners) == 1
-    assert len(recovery_owners) == 1
-    assert service.load_policy_run_state(run_id)["status"] == "FAILED"
+    with stored_clock_run(monkeypatch, tmp_path, run_id, phase="ACTIVATING_COHORT") as run:
+        run[service.POLICY_EXECUTION_CLAIM_EXPIRES_AT_FIELD] = 0
+        service.store_policy_run_snapshot(run_id, run)
+        before = service.load_policy_run_state(run_id)
+        for _ in range(2):
+            with pytest.raises(service.ProtocolError) as error:
+                service.start_policy_wind_tunnel_run(platform_v2_launch_payload(run_id), execution_role="PLATFORM_ADMIN")
+            assert error.value.code == "scenario_lab_clock_execution_retired"
+        assert service.load_policy_run_state(run_id) == before
 
 
-def test_expired_clock_running_recovery_restarts_only_the_horizon_monitor(
-    tmp_path,
-    monkeypatch,
-) -> None:
+def test_expired_clock_running_recovery_cannot_restart_retired_horizon_monitor(tmp_path, monkeypatch) -> None:
     run_id = "python-expired-clock-recovery"
-    payload = platform_v2_launch_payload(run_id)
-    fresh_owners: list[str] = []
-    monitored: list[tuple[str, str]] = []
-    monkeypatch.setattr(service, "workspace_root", lambda: tmp_path)
-    monkeypatch.setattr(service, "platform_owned_v2_storage_ready", lambda: True)
-    monkeypatch.setattr(
-        service,
-        "start_clock_driven_policy_wind_tunnel_worker",
-        lambda _run_id, _source=None, *, execution_claim_owner=None: fresh_owners.append(
-            execution_claim_owner
-        ),
-    )
-    monkeypatch.setattr(
-        service,
-        "start_clock_driven_policy_wind_tunnel_recovery",
-        lambda recovered_run_id, *, execution_claim_owner: service.recover_existing_clock_driven_policy_wind_tunnel_run(
-            recovered_run_id,
-            execution_claim_owner,
-        ),
-    )
-    monkeypatch.setattr(
-        service,
-        "start_clock_horizon_monitor",
-        lambda recovered_run_id, execution_claim_owner=None: monitored.append(
-            (recovered_run_id, execution_claim_owner)
-        ),
-    )
-    monkeypatch.setattr(
-        service,
-        "activate_pinned_cohort",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("clock recovery must not repeat activation")
-        ),
-    )
-    monkeypatch.setattr(
-        service,
-        "activate_agent_chunk",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("clock recovery must not repeat activation")
-        ),
-    )
-
-    service.start_policy_wind_tunnel_run(payload, execution_role="PLATFORM_ADMIN")
-    clock_running = service.load_policy_run_state(run_id)
-    assert clock_running is not None
-    clock_running["status"] = "RUNNING"
-    clock_running["phase"] = "CLOCK_RUNNING"
-    clock_running[service.POLICY_EXECUTION_CLAIM_EXPIRES_AT_FIELD] = 0
-    service.store_policy_run_snapshot(run_id, clock_running)
-
-    service.start_policy_wind_tunnel_run(payload, execution_role="PLATFORM_ADMIN")
-
-    assert len(fresh_owners) == 1
-    assert len(monitored) == 1
-    assert monitored[0][0] == run_id
-    assert monitored[0][1]
+    with stored_clock_run(monkeypatch, tmp_path, run_id) as run:
+        run[service.POLICY_EXECUTION_CLAIM_EXPIRES_AT_FIELD] = 0
+        service.store_policy_run_snapshot(run_id, run)
+        before = service.load_policy_run_state(run_id)
+        with pytest.raises(service.ProtocolError) as launch_error:
+            service.start_policy_wind_tunnel_run(platform_v2_launch_payload(run_id), execution_role="PLATFORM_ADMIN")
+        assert launch_error.value.status_code == 410
+        with pytest.raises(service.ProtocolError) as monitor_error:
+            service.start_clock_horizon_monitor(run_id, "historical-owner")
+        assert monitor_error.value.status_code == 410
+        assert service.load_policy_run_state(run_id) == before
 
 
-def test_published_terminal_receipt_wins_before_expired_launch_takeover(
-    tmp_path,
-    monkeypatch,
-) -> None:
+def test_published_terminal_receipt_remains_authoritative_without_expired_clock_takeover(tmp_path, monkeypatch) -> None:
     run_id = "python-terminal-receipt-launch-replay"
-    payload = platform_v2_launch_payload(run_id)
-    fresh_scheduled: list[str] = []
-    recovery_scheduled: list[str] = []
-    monkeypatch.setattr(service, "workspace_root", lambda: tmp_path)
-    monkeypatch.setattr(service, "platform_owned_v2_storage_ready", lambda: True)
-    monkeypatch.setattr(
-        service,
-        "start_clock_driven_policy_wind_tunnel_worker",
-        lambda _run_id, _source=None, *, execution_claim_owner=None: fresh_scheduled.append(
-            execution_claim_owner
-        ),
-    )
-    monkeypatch.setattr(
-        service,
-        "start_clock_driven_policy_wind_tunnel_recovery",
-        lambda _run_id, *, execution_claim_owner: recovery_scheduled.append(
-            execution_claim_owner
-        ),
-    )
-    configure_finalization_test(monkeypatch, tmp_path, run_id)
-
-    service.start_policy_wind_tunnel_run(payload, execution_role="PLATFORM_ADMIN")
-    stale_nonterminal = service.load_policy_run_state(run_id)
-    assert stale_nonterminal is not None
-    service.update_policy_run(
-        run_id,
-        status="RUNNING",
-        phase="CLOCK_RUNNING",
-        progress=0.55,
-        bundle_ready=True,
-    )
-    service.finalize_clock_driven_policy_wind_tunnel_run(
-        run_id,
-        {
-            "action": "FINALIZE",
-            "operationId": service.expected_finalization_operation_id(run_id),
-        },
-    )
-    assert service.load_finalization_receipt(run_id)["state"] == "PUBLISHED"
-
-    stale_nonterminal[service.POLICY_EXECUTION_CLAIM_EXPIRES_AT_FIELD] = 0
-    service.store_policy_run_snapshot(run_id, stale_nonterminal)
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
-
-    replay = service.start_policy_wind_tunnel_run(
-        payload,
-        execution_role="PLATFORM_ADMIN",
-    )
-
-    assert replay["status"] == "COMPLETED"
-    assert len(fresh_scheduled) == 1
-    assert recovery_scheduled == []
-    assert service.load_policy_run_state(run_id)["status"] == "COMPLETED"
+    with stored_clock_run(monkeypatch, tmp_path, run_id, status="COMPLETED", phase="COMPLETED") as run:
+        receipt, _ = store_historical_finalization_receipt(run_id, run)
+        original = service.finalization_receipt_path(run_id).read_bytes()
+        with pytest.raises(service.ProtocolError) as error:
+            service.start_policy_wind_tunnel_run(platform_v2_launch_payload(run_id), execution_role="PLATFORM_ADMIN")
+        assert error.value.status_code == 410
+        with service._POLICY_WIND_TUNNEL_LOCK:
+            service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+        assert service.policy_wind_tunnel_run_status(run_id)["status"] == "COMPLETED"
+        assert service.load_finalization_receipt(run_id) == receipt
+        assert service.finalization_receipt_path(run_id).read_bytes() == original
 
 
 def test_platform_owned_daily_activation_forwards_exact_durable_pinned_bytes(tmp_path, monkeypatch) -> None:
@@ -1433,107 +994,34 @@ def test_platform_owned_daily_activation_forwards_exact_durable_pinned_bytes(tmp
         encoding="utf-8",
     )
     durable = service.load_durable_cohort_artifact_snapshot(run_id, parameters)
-    captured: dict[str, Any] = {}
-
-    def capture_post(url: str, payload: bytes, *, headers: dict[str, str], timeout: float = 30.0) -> bytes:
-        captured.update(url=url, payload=payload, headers=headers)
-        return b""
-
-    monkeypatch.setattr(service, "post_bytes", capture_post)
-    monkeypatch.setattr(service, "append_policy_log", lambda *_args, **_kwargs: None)
-    service.activate_pinned_cohort(
-        run_id,
-        "cohort-1",
-        durable,
-        "DETERMINISTIC",
-        parameters,
-        1,
-    )
-
-    assert captured["url"].endswith("/api/agents/init/pinned-cohort")
-    assert captured["payload"] == pinned_bytes
-    assert captured["headers"]["X-Astraform-Cohort-Artifact-Digest"] == artifact_digest
-    assert captured["headers"]["X-Astraform-Activation-Id"] == "platform-activation-opaque-123"
-    assert captured["headers"]["X-Astraform-Activation-Settings"] == activation_settings_content
-    settings = json.loads(
-        base64.urlsafe_b64decode(
-            captured["headers"]["X-Astraform-Activation-Settings"] + "=="
-        )
-    )
-    assert settings == activation_settings
+    assert durable["content"] == pinned_bytes
+    assert durable["artifactDigest"] == artifact_digest
+    assert service.activation_settings_snapshot(parameters)["settings"] == activation_settings
+    before = {str(path.relative_to(tmp_path)): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+    with pytest.raises(service.ProtocolError) as error:
+        service.activate_pinned_cohort(run_id, "cohort-1", durable, "DETERMINISTIC", parameters, 1)
+    assert (error.value.status_code, error.value.code) == (410, "scenario_lab_clock_execution_retired")
+    assert {str(path.relative_to(tmp_path)): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()} == before
 
 
 def test_platform_owned_pinned_activation_does_not_preclear_open_run(tmp_path, monkeypatch) -> None:
-    run_id = "python-pinned-cohort-no-preclear"
-    monkeypatch.setattr(service, "workspace_root", lambda: tmp_path)
-    parameters = {
-        "executionMode": "CLOCK_DRIVEN_HYBRID",
-        service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_PLATFORM_OWNED_V2,
-        "runPath": "CLOCK_DRIVEN_SIMULATION",
-        "agentDecisionMode": "DETERMINISTIC",
-        "agentDecisionCadence": "DAILY",
-        "cohortId": "cohort-pinned-no-preclear",
-        "cohortArtifactDigest": "a" * 64,
-        "simulationHorizonDays": 1,
-    }
+    run_id = "test_platform_owned_pinned_activation_does_not_preclear_open_run"
     with service._POLICY_WIND_TUNNEL_LOCK:
         service._POLICY_WIND_TUNNEL_RUNS[run_id] = service.new_policy_run(
-            run_id,
-            "hardship-relief",
-            parameters,
-            status="RUNNING",
-            phase="QUEUED",
-            progress=0.0,
-            bundle_ready=False,
-            log_tail=[],
-        )
-
-    activated: list[str] = []
-    monkeypatch.setattr(service, "negotiated_playback_rate", lambda *_args: 600.0)
-    monkeypatch.setattr(service, "apply_hybrid_replay_contract", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(
-        service,
-        "clear_active_agents",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("pinned activation must not preclear the open run")),
-    )
-    monkeypatch.setattr(
-        service,
-        "load_durable_cohort_artifact_snapshot",
-        lambda *_args: {"artifactDigest": "a" * 64, "identitySetDigest": "b" * 64, "content": b"[]"},
-    )
-    monkeypatch.setattr(
-        service,
-        "load_pinned_cohort_agents_for_streaming",
-        lambda *_args, **_kwargs: [{"agentId": "agent-1"}],
-    )
-    monkeypatch.setattr(service, "enforce_real_llm_canary", lambda *_args: None)
-    monkeypatch.setattr(service, "enforce_hybrid_cohort_limit", lambda *_args: None)
-    monkeypatch.setattr(
-        service,
-        "activate_pinned_cohort",
-        lambda scoped_run_id, *_args, **_kwargs: activated.append(scoped_run_id),
-    )
-
-    def start_clock(scoped_run_id: str, _playback_rate: float) -> bool:
-        service.update_policy_run(
-            scoped_run_id,
-            status="RUNNING",
-            phase="CLOCK_RUNNING",
-            progress=0.55,
-            bundle_ready=True,
-        )
-        return True
-
-    monkeypatch.setattr(service, "start_simulator_clock_after_activation", start_clock)
-    monkeypatch.setattr(service, "start_clock_horizon_monitor", lambda *_args, **_kwargs: None)
-
+            run_id, "hardship-relief", {"executionMode": "CLOCK_DRIVEN_HYBRID", "runPath": "CLOCK_DRIVEN_SIMULATION",
+                service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_PLATFORM_OWNED_V2},
+            status="RUNNING", phase="QUEUED", progress=0.5, bundle_ready=False, log_tail=[])
+    original = deepcopy(service._POLICY_WIND_TUNNEL_RUNS[run_id])
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("Retired worker must not reset, activate, or mutate stored state")
+    monkeypatch.setattr(service, "clear_active_agents", unexpected)
+    monkeypatch.setattr(service, "activate_pinned_cohort", unexpected)
+    monkeypatch.setattr(service, "update_policy_run", unexpected)
     try:
-        service.execute_clock_driven_policy_wind_tunnel_run(run_id)
-
-        run = service.policy_run_record(run_id)
-        assert activated == [run_id]
-        assert run["status"] == "RUNNING"
-        assert run["phase"] == "CLOCK_RUNNING"
+        with pytest.raises(service.ProtocolError) as error:
+            service.execute_clock_driven_policy_wind_tunnel_run(run_id)
+        assert (error.value.status_code, error.value.code) == (410, "scenario_lab_clock_execution_retired")
+        assert service._POLICY_WIND_TUNNEL_RUNS[run_id] == original
     finally:
         with service._POLICY_WIND_TUNNEL_LOCK:
             service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
@@ -1897,15 +1385,15 @@ def test_clock_driven_bundle_read_is_observational(monkeypatch) -> None:
     monkeypatch.setattr(
         service,
         "clock_driven_policy_wind_tunnel_bundle",
-        lambda _run_id, correlation_audit=None: {
-            "schemaVersion": "policy_wind_tunnel_bundle.v1",
-            "summary": {},
-        },
+        lambda _run_id, correlation_audit=None: (_ for _ in ()).throw(
+            AssertionError("bundle GET must not rebuild evidence using the retired platform clock")
+        ),
     )
 
-    bundle = service.policy_wind_tunnel_bundle(run_id)
+    with pytest.raises(service.ProtocolError) as error:
+        service.policy_wind_tunnel_bundle(run_id)
 
-    assert bundle["schemaVersion"] == "policy_wind_tunnel_bundle.v1"
+    assert (error.value.status_code, error.value.code) == (503, "scenario_lab_stored_evidence_unavailable")
     run = service.policy_run_record(run_id)
     assert (run["status"], run["phase"]) == ("RUNNING", "CLOCK_RUNNING")
     with service._POLICY_WIND_TUNNEL_LOCK:
@@ -1941,35 +1429,20 @@ def test_wind_tunnel_launch_anchor_is_normalized_once(monkeypatch) -> None:
             service.normalize_simulation_start_epoch_ms(invalid)
 
 
-def test_wind_tunnel_preserves_platform_owned_simulation_run_id(
-    tmp_path,
-    monkeypatch,
-) -> None:
+def test_wind_tunnel_configuration_preserves_platform_run_id_without_clock_creation(tmp_path, monkeypatch) -> None:
     run_id = "policy-wt-platform-owned-python-test"
     monkeypatch.setattr(service, "workspace_root", lambda: tmp_path)
-    monkeypatch.setattr(service, "platform_owned_v2_storage_ready", lambda: True)
-    monkeypatch.setattr(
-        service,
-        "start_clock_driven_policy_wind_tunnel_worker",
-        lambda _run_id, _source=None, *, execution_claim_owner=None: None,
-    )
-
-    status = service.start_policy_wind_tunnel_run(
-        platform_v2_launch_payload(run_id),
-        execution_role="PLATFORM_ADMIN",
-    )
-
-    assert status["runId"] == run_id
-    assert service.policy_run_record(run_id)["parameters"]["simulationRunId"] == run_id
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
-
+    payload = platform_v2_launch_payload(run_id)
+    normalized = service.normalized_wind_tunnel_parameters(payload, "saver-repricing")
+    assert normalized["simulationRunId"] == run_id
+    with pytest.raises(service.ProtocolError) as error:
+        service.start_policy_wind_tunnel_run(payload, execution_role="PLATFORM_ADMIN")
+    assert error.value.status_code == 410
+    assert service.load_policy_run_state(run_id) is None
+    assert list(tmp_path.rglob("*")) == []
     for invalid in ("../not-a-run", "x" * 256):
         with pytest.raises(service.ProtocolError):
-            service.normalized_wind_tunnel_parameters(
-                {"simulationRunId": invalid},
-                service.WIND_TUNNEL_PRESET_ID,
-            )
+            service.normalized_wind_tunnel_parameters({"simulationRunId": invalid}, service.WIND_TUNNEL_PRESET_ID)
 
 
 def test_clock_duration_reports_unverified_when_clock_time_unavailable(monkeypatch) -> None:
@@ -1991,89 +1464,33 @@ def test_clock_duration_reports_unverified_when_clock_time_unavailable(monkeypat
     assert "actualDurationDays" not in window
 
 
-def test_manual_clock_controls_require_explicit_clock_ownership(monkeypatch) -> None:
-    run_id = "python-manual-controls-missing-owner-run"
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS[run_id] = service.new_policy_run(
-            run_id,
-            "hardship-relief",
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_LEGACY_V1,
-                "runPath": "CLOCK_DRIVEN_SIMULATION",
-                "agentDecisionMode": "STUB_LLM",
-                "simulationHorizonDays": 1,
-            },
-            status="RUNNING",
-            phase="CLOCK_RUNNING",
-            progress=0.55,
-            bundle_ready=True,
-            log_tail=[],
-        )
-    monkeypatch.setattr(service, "fetch_simulator_replay_context", lambda: {})
-    monkeypatch.setattr(
-        service,
-        "post_json",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("POST /api/clock/replay failed with status 409")),
-    )
-
-    pause_response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": "PAUSE"})
-    resume_response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": "RESUME"})
-
-    assert pause_response.status_code == 200
-    assert resume_response.status_code == 200
-    run = service.policy_run_record(run_id)
-    assert run["status"] == "RUNNING"
-    assert run["phase"] == "CLOCK_RUNNING"
-    assert any("Pause requested. Simulator playback was not changed because replay ownership changed" in line for line in run["logTail"])
-    assert any("Resume ignored because run state is RUNNING/CLOCK_RUNNING." in line for line in run["logTail"])
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+def test_retired_manual_clock_controls_preserve_state_without_ownership_probe(tmp_path, monkeypatch) -> None:
+    run_id = 'test_manual_clock_controls_require_explicit_clock_ownership'
+    with stored_clock_run(monkeypatch, tmp_path, run_id, status='RUNNING', phase='CLOCK_RUNNING') as run:
+        run.update({})
+        service.store_policy_run_snapshot(run_id, run)
+        original = service.load_policy_run_state(run_id)
+        for action in ['PAUSE', 'RESUME']:
+            response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": action, "playbackRate": 600.0})
+            assert response.status_code == 410
+            assert response.json()["error"]["code"] == "scenario_lab_clock_execution_retired"
+            assert service.load_policy_run_state(run_id) == original
+        assert service.policy_wind_tunnel_run_status(run_id)["phase"] == 'CLOCK_RUNNING'
 
 
-def test_running_clock_can_change_playback_rate_without_resume(monkeypatch) -> None:
-    run_id = "python-running-playback-rate-change"
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS[run_id] = service.new_policy_run(
-            run_id,
-            "hardship-relief",
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_LEGACY_V1,
-                "runPath": "CLOCK_DRIVEN_SIMULATION",
-                "agentDecisionMode": "STUB_LLM",
-                "playbackRate": 1800.0,
-                "simulationHorizonDays": 1,
-            },
-            status="RUNNING",
-            phase="CLOCK_RUNNING",
-            progress=0.55,
-            bundle_ready=True,
-            log_tail=[],
-        )
-    replay_posts: list[dict[str, Any]] = []
-
-    def fake_post_json(url: str, payload: dict[str, Any], *, headers: dict[str, str] | None = None) -> dict[str, Any]:
-        replay_posts.append(payload)
-        return {}
-
-    monkeypatch.setattr(service, "post_json", fake_post_json)
-
-    response = client.post(
-        f"/policy-wind-tunnel/runs/{run_id}/lifecycle",
-        json={"action": "SET_PLAYBACK_RATE", "playbackRate": 600.0},
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "RUNNING"
-    assert body["phase"] == "CLOCK_RUNNING"
-    assert body["parameters"]["playbackRate"] == 600.0
-    assert replay_posts[0]["expectedRunId"] == run_id
-    assert replay_posts[0]["playback"] == {"paused": False, "rate": 600.0}
-    assert any("Playback rate changed to 600x." in line for line in body["logTail"])
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+def test_running_clock_cannot_change_playback_rate_without_resume(tmp_path, monkeypatch) -> None:
+    run_id = 'test_running_clock_can_change_playback_rate_without_resume'
+    with stored_clock_run(monkeypatch, tmp_path, run_id, status='RUNNING', phase='CLOCK_RUNNING') as run:
+        run["parameters"]["playbackRate"] = 1800.0
+        service.store_policy_run_snapshot(run_id, run)
+        original = service.load_policy_run_state(run_id)
+        for action in ['SET_PLAYBACK_RATE']:
+            response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": action, "playbackRate": 600.0})
+            assert response.status_code == 410
+            assert response.json()["error"]["code"] == "scenario_lab_clock_execution_retired"
+            assert service.load_policy_run_state(run_id) == original
+        assert service.policy_wind_tunnel_run_status(run_id)["phase"] == 'CLOCK_RUNNING'
+        assert service.requested_playback_rate(run["parameters"], {"playbackRate": 600.0}) == 600.0
 
 
 def test_requested_playback_rate_ignores_invalid_explicit_rate() -> None:
@@ -2085,657 +1502,215 @@ def test_requested_playback_rate_ignores_invalid_explicit_rate() -> None:
     assert service.requested_playback_rate(parameters, {"playbackRate": "not-a-number"}) == 600.0
 
 
-def test_pause_resume_preserves_operator_selected_playback_rate(monkeypatch) -> None:
-    run_id = "python-pause-resume-playback-rate-preservation"
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS[run_id] = service.new_policy_run(
-            run_id,
-            "hardship-relief",
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_LEGACY_V1,
-                "runPath": "CLOCK_DRIVEN_SIMULATION",
-                "agentDecisionMode": "STUB_LLM",
-                "playbackRate": 1800.0,
-                "simulationHorizonDays": 1,
-            },
-            status="RUNNING",
-            phase="CLOCK_RUNNING",
-            progress=0.55,
-            bundle_ready=True,
-            log_tail=[],
-        )
-    replay_posts: list[dict[str, Any]] = []
-
-    def fake_post_json(url: str, payload: dict[str, Any], *, headers: dict[str, str] | None = None) -> dict[str, Any]:
-        replay_posts.append(payload)
-        return {}
-
-    monkeypatch.setattr(service, "post_json", fake_post_json)
-
-    set_response = client.post(
-        f"/policy-wind-tunnel/runs/{run_id}/lifecycle",
-        json={"action": "SET_PLAYBACK_RATE", "playbackRate": 600.0},
-    )
-    pause_response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": "PAUSE"})
-    resume_response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": "RESUME"})
-
-    assert set_response.status_code == 200
-    assert pause_response.status_code == 200
-    assert resume_response.status_code == 200
-    body = resume_response.json()
-    assert body["status"] == "RUNNING"
-    assert body["phase"] == "CLOCK_RUNNING"
-    assert body["parameters"]["playbackRate"] == 600.0
-    assert replay_posts[0]["playback"] == {"paused": False, "rate": 600.0}
-    assert replay_posts[1]["playback"] == {"paused": True, "rate": 0.0}
-    assert replay_posts[2]["playback"] == {"paused": False, "rate": 600.0}
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+def test_pause_resume_preserves_operator_selected_playback_rate(tmp_path, monkeypatch) -> None:
+    run_id = 'test_pause_resume_preserves_operator_selected_playback_rate'
+    with stored_clock_run(monkeypatch, tmp_path, run_id, status='RUNNING', phase='CLOCK_RUNNING') as run:
+        run["parameters"]["playbackRate"] = 1800.0
+        service.store_policy_run_snapshot(run_id, run)
+        original = service.load_policy_run_state(run_id)
+        for action in ['SET_PLAYBACK_RATE', 'PAUSE', 'RESUME']:
+            response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": action, "playbackRate": 600.0})
+            assert response.status_code == 410
+            assert response.json()["error"]["code"] == "scenario_lab_clock_execution_retired"
+            assert service.load_policy_run_state(run_id) == original
+        assert service.policy_wind_tunnel_run_status(run_id)["phase"] == 'CLOCK_RUNNING'
+        assert service.requested_playback_rate(run["parameters"], {"playbackRate": 600.0}) == 600.0
 
 
-def test_resume_does_not_start_playback_during_activation(monkeypatch) -> None:
-    run_id = "python-resume-during-activation-run"
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS[run_id] = service.new_policy_run(
-            run_id,
-            "hardship-relief",
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_LEGACY_V1,
-                "runPath": "CLOCK_DRIVEN_SIMULATION",
-                "agentDecisionMode": "STUB_LLM",
-                "simulationHorizonDays": 1,
-            },
-            status="RUNNING",
-            phase="ACTIVATING_COHORT",
-            progress=0.25,
-            bundle_ready=False,
-            log_tail=[],
-        )
-    monkeypatch.setattr(
-        service,
-        "post_json",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("resume during activation must not write playback")),
-    )
-
-    response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": "RESUME"})
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "RUNNING"
-    assert response.json()["phase"] == "ACTIVATING_COHORT"
-    run = service.policy_run_record(run_id)
-    assert any("Resume ignored because run state is RUNNING/ACTIVATING_COHORT." in line for line in run["logTail"])
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+def test_resume_does_not_start_playback_during_activation(tmp_path, monkeypatch) -> None:
+    run_id = 'test_resume_does_not_start_playback_during_activation'
+    with stored_clock_run(monkeypatch, tmp_path, run_id, status='RUNNING', phase='ACTIVATING_COHORT') as run:
+        run.update({})
+        service.store_policy_run_snapshot(run_id, run)
+        original = service.load_policy_run_state(run_id)
+        for action in ['RESUME']:
+            response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": action, "playbackRate": 600.0})
+            assert response.status_code == 410
+            assert response.json()["error"]["code"] == "scenario_lab_clock_execution_retired"
+            assert service.load_policy_run_state(run_id) == original
+        assert service.policy_wind_tunnel_run_status(run_id)["phase"] == 'ACTIVATING_COHORT'
 
 
-def test_pause_before_replay_ownership_still_marks_run_paused(monkeypatch) -> None:
-    run_id = "python-pause-before-replay-owner-run"
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS[run_id] = service.new_policy_run(
-            run_id,
-            "hardship-relief",
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_LEGACY_V1,
-                "runPath": "CLOCK_DRIVEN_SIMULATION",
-                "agentDecisionMode": "STUB_LLM",
-                "simulationHorizonDays": 1,
-            },
-            status="RUNNING",
-            phase="PREPARING_CLOCK",
-            progress=0.05,
-            bundle_ready=False,
-            log_tail=[],
-        )
-    monkeypatch.setattr(
-        service,
-        "post_json",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("POST /api/clock/replay failed with status 409")),
-    )
-
-    response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": "PAUSE"})
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "PAUSED"
-    assert response.json()["phase"] == "PAUSED"
-    run = service.policy_run_record(run_id)
-    assert any("Run paused before simulator clock playback started." in line for line in run["logTail"])
-    assert any("Pause requested. Simulator playback was not changed because replay ownership changed" in line for line in run["logTail"])
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+def test_pause_before_replay_ownership_preserves_stored_run(tmp_path, monkeypatch) -> None:
+    run_id = 'test_pause_before_replay_ownership_still_marks_run_paused'
+    with stored_clock_run(monkeypatch, tmp_path, run_id, status='RUNNING', phase='PREPARING_CLOCK') as run:
+        run.update({})
+        service.store_policy_run_snapshot(run_id, run)
+        original = service.load_policy_run_state(run_id)
+        for action in ['PAUSE']:
+            response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": action, "playbackRate": 600.0})
+            assert response.status_code == 410
+            assert response.json()["error"]["code"] == "scenario_lab_clock_execution_retired"
+            assert service.load_policy_run_state(run_id) == original
+        assert service.policy_wind_tunnel_run_status(run_id)["phase"] == 'PREPARING_CLOCK'
 
 
-def test_resume_from_preparing_pause_requeues_setup_worker(monkeypatch) -> None:
-    run_id = "python-resume-from-preparing-pause-run"
-    queued_workers: list[tuple[str, str | None]] = []
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        run = service.new_policy_run(
-            run_id,
-            "hardship-relief",
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_LEGACY_V1,
-                "runPath": "CLOCK_DRIVEN_SIMULATION",
-                "agentDecisionMode": "STUB_LLM",
-                "simulationHorizonDays": 1,
-            },
-            status="PAUSED",
-            phase="PAUSED",
-            progress=0.05,
-            bundle_ready=False,
-            log_tail=[],
-        )
-        run["pausedFromPhase"] = "PREPARING_CLOCK"
-        service._POLICY_WIND_TUNNEL_RUNS[run_id] = run
-    monkeypatch.setattr(
-        service,
-        "start_clock_driven_policy_wind_tunnel_worker",
-        lambda resumed_run_id, _source=None, *, execution_claim_owner=None: queued_workers.append(
-            (resumed_run_id, execution_claim_owner)
-        ),
-    )
-
-    response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": "RESUME"})
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "RUNNING"
-    assert response.json()["phase"] == "PREPARING_CLOCK"
-    assert len(queued_workers) == 1
-    assert queued_workers[0][0] == run_id
-    assert queued_workers[0][1]
-    run = service.policy_run_record(run_id)
-    assert any("Restarting clock-driven setup from PREPARING_CLOCK." in line for line in run["logTail"])
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+def test_resume_from_preparing_pause_cannot_requeue_retired_worker(tmp_path, monkeypatch) -> None:
+    run_id = 'test_resume_from_preparing_pause_requeues_setup_worker'
+    with stored_clock_run(monkeypatch, tmp_path, run_id, status='PAUSED', phase='PAUSED') as run:
+        run.update({'pausedFromPhase': 'PREPARING_CLOCK'})
+        service.store_policy_run_snapshot(run_id, run)
+        original = service.load_policy_run_state(run_id)
+        for action in ['RESUME']:
+            response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": action, "playbackRate": 600.0})
+            assert response.status_code == 410
+            assert response.json()["error"]["code"] == "scenario_lab_clock_execution_retired"
+            assert service.load_policy_run_state(run_id) == original
+        assert service.policy_wind_tunnel_run_status(run_id)["phase"] == 'PAUSED'
 
 
-def test_resume_from_activation_pause_requeues_setup_worker_from_clean_preparing_phase(monkeypatch) -> None:
-    run_id = "python-resume-from-activation-pause-run"
-    queued_workers: list[tuple[str, str | None]] = []
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        run = service.new_policy_run(
-            run_id,
-            "hardship-relief",
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_LEGACY_V1,
-                "runPath": "CLOCK_DRIVEN_SIMULATION",
-                "agentDecisionMode": "STUB_LLM",
-                "simulationHorizonDays": 1,
-            },
-            status="PAUSED",
-            phase="PAUSED",
-            progress=0.30,
-            bundle_ready=False,
-            log_tail=[],
-        )
-        run["pausedFromPhase"] = "ACTIVATING_COHORT"
-        run["activatedCount"] = 50
-        service._POLICY_WIND_TUNNEL_RUNS[run_id] = run
-    monkeypatch.setattr(
-        service,
-        "start_clock_driven_policy_wind_tunnel_worker",
-        lambda resumed_run_id, _source=None, *, execution_claim_owner=None: queued_workers.append(
-            (resumed_run_id, execution_claim_owner)
-        ),
-    )
-
-    response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": "RESUME"})
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "RUNNING"
-    assert response.json()["phase"] == "PREPARING_CLOCK"
-    assert len(queued_workers) == 1
-    assert queued_workers[0][0] == run_id
-    assert queued_workers[0][1]
-    run = service.policy_run_record(run_id)
-    assert "activatedCount" not in run
-    assert any("Restarting clock-driven setup from ACTIVATING_COHORT." in line for line in run["logTail"])
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+def test_resume_from_activation_pause_cannot_requeue_retired_worker(tmp_path, monkeypatch) -> None:
+    run_id = 'test_resume_from_activation_pause_requeues_setup_worker_from_clean_preparing_phase'
+    with stored_clock_run(monkeypatch, tmp_path, run_id, status='PAUSED', phase='PAUSED') as run:
+        run.update({'pausedFromPhase': 'ACTIVATING_COHORT', 'activatedCount': 50})
+        service.store_policy_run_snapshot(run_id, run)
+        original = service.load_policy_run_state(run_id)
+        for action in ['RESUME']:
+            response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": action, "playbackRate": 600.0})
+            assert response.status_code == 410
+            assert response.json()["error"]["code"] == "scenario_lab_clock_execution_retired"
+            assert service.load_policy_run_state(run_id) == original
+        assert service.policy_wind_tunnel_run_status(run_id)["phase"] == 'PAUSED'
 
 
-def test_resumed_preparing_worker_does_not_steal_replay_from_another_run(monkeypatch) -> None:
-    run_id = "python-resume-preparing-conflict-run"
-    replay_payloads: list[dict[str, object]] = []
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        run = service.new_policy_run(
-            run_id,
-            "hardship-relief",
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_LEGACY_V1,
-                "runPath": "CLOCK_DRIVEN_SIMULATION",
-                "agentDecisionMode": "STUB_LLM",
-                "cohortId": "banking-balanced-banking-100-test",
-                "simulationHorizonDays": 1,
-                "prePolicyDays": 0,
-                "postPolicyDays": 1,
-            },
-            status="PAUSED",
-            phase="PAUSED",
-            progress=0.05,
-            bundle_ready=False,
-            log_tail=[],
-        )
-        run["pausedFromPhase"] = "PREPARING_CLOCK"
-        service._POLICY_WIND_TUNNEL_RUNS[run_id] = run
-
-    def fake_start_worker(
-        resumed_run_id: str,
-        resume_source_phase: str | None = None,
-        *,
-        execution_claim_owner: str | None = None,
-    ) -> None:
-        service.execute_clock_driven_policy_wind_tunnel_run(
-            resumed_run_id,
-            resume_source_phase,
-            execution_claim_owner,
-        )
-
-    def fake_get_json(url: str) -> dict[str, object]:
-        if url.endswith("/api/clock/rate/info"):
-            return {"max": 1800.0}
-        return {}
-
-    def fake_post_json(url: str, payload: object, **_kwargs: object) -> dict[str, object]:
-        if url.endswith("/api/clock/replay"):
-            replay_payloads.append(dict(payload))
-            raise RuntimeError("POST /api/clock/replay failed with status 409")
-        raise AssertionError("resumed setup must not call non-replay POST after replay ownership conflict")
-
-    monkeypatch.setattr(service, "start_clock_driven_policy_wind_tunnel_worker", fake_start_worker)
-    monkeypatch.setattr(service, "get_json", fake_get_json)
-    monkeypatch.setattr(service, "post_json", fake_post_json)
-    monkeypatch.setattr(service, "load_generated_cohort_agents_for_streaming", lambda *_args, **_kwargs: [{"agentId": "agent-1"}])
-    monkeypatch.setattr(service, "clear_active_agents", lambda _run_id: (_ for _ in ()).throw(AssertionError("must not clear active agents after replay ownership conflict")))
-
-    response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": "RESUME"})
-
-    assert response.status_code == 200
-    run = service.policy_run_record(run_id)
-    assert run["status"] == "PAUSED"
-    assert run["phase"] == "PAUSED"
-    assert [payload.get("expectedRunId") for payload in replay_payloads] == [run_id, ""]
-    assert any(
-        "Setup remains paused because simulator replay ownership was not empty or owned by this run." in line
-        for line in run["logTail"]
-    )
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+def test_retired_preparing_resume_cannot_claim_replay(tmp_path, monkeypatch) -> None:
+    run_id = 'test_resumed_preparing_worker_does_not_steal_replay_from_another_run'
+    with stored_clock_run(monkeypatch, tmp_path, run_id, status='PAUSED', phase='PAUSED') as run:
+        run.update({'pausedFromPhase': 'PREPARING_CLOCK'})
+        service.store_policy_run_snapshot(run_id, run)
+        original = service.load_policy_run_state(run_id)
+        for action in ['RESUME']:
+            response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": action, "playbackRate": 600.0})
+            assert response.status_code == 410
+            assert response.json()["error"]["code"] == "scenario_lab_clock_execution_retired"
+            assert service.load_policy_run_state(run_id) == original
+        assert service.policy_wind_tunnel_run_status(run_id)["phase"] == 'PAUSED'
 
 
-def test_resumed_activation_worker_requires_existing_replay_ownership(monkeypatch) -> None:
-    run_id = "python-resume-activation-conflict-run"
-    replay_payloads: list[dict[str, object]] = []
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        run = service.new_policy_run(
-            run_id,
-            "hardship-relief",
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_LEGACY_V1,
-                "runPath": "CLOCK_DRIVEN_SIMULATION",
-                "agentDecisionMode": "STUB_LLM",
-                "cohortId": "banking-balanced-banking-100-test",
-                "simulationHorizonDays": 1,
-                "prePolicyDays": 0,
-                "postPolicyDays": 1,
-            },
-            status="PAUSED",
-            phase="PAUSED",
-            progress=0.30,
-            bundle_ready=False,
-            log_tail=[],
-        )
-        run["pausedFromPhase"] = "ACTIVATING_COHORT"
-        service._POLICY_WIND_TUNNEL_RUNS[run_id] = run
-
-    def fake_start_worker(
-        resumed_run_id: str,
-        resume_source_phase: str | None = None,
-        *,
-        execution_claim_owner: str | None = None,
-    ) -> None:
-        service.execute_clock_driven_policy_wind_tunnel_run(
-            resumed_run_id,
-            resume_source_phase,
-            execution_claim_owner,
-        )
-
-    def fake_get_json(url: str) -> dict[str, object]:
-        if url.endswith("/api/clock/rate/info"):
-            return {"max": 1800.0}
-        return {}
-
-    def fake_post_json(url: str, payload: object, **_kwargs: object) -> dict[str, object]:
-        if url.endswith("/api/clock/replay"):
-            replay_payloads.append(dict(payload))
-            raise RuntimeError("POST /api/clock/replay failed with status 409")
-        raise AssertionError("resumed setup must not call non-replay POST after replay ownership conflict")
-
-    monkeypatch.setattr(service, "start_clock_driven_policy_wind_tunnel_worker", fake_start_worker)
-    monkeypatch.setattr(service, "get_json", fake_get_json)
-    monkeypatch.setattr(service, "post_json", fake_post_json)
-    monkeypatch.setattr(service, "load_generated_cohort_agents_for_streaming", lambda *_args, **_kwargs: [{"agentId": "agent-1"}])
-    monkeypatch.setattr(service, "clear_active_agents", lambda _run_id: (_ for _ in ()).throw(AssertionError("must not clear active agents after replay ownership conflict")))
-
-    response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": "RESUME"})
-
-    assert response.status_code == 200
-    run = service.policy_run_record(run_id)
-    assert run["status"] == "PAUSED"
-    assert run["phase"] == "PAUSED"
-    assert [payload.get("expectedRunId") for payload in replay_payloads] == [run_id]
-
-    response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": "RESUME"})
-
-    assert response.status_code == 200
-    run = service.policy_run_record(run_id)
-    assert run["status"] == "PAUSED"
-    assert run["phase"] == "PAUSED"
-    assert [payload.get("expectedRunId") for payload in replay_payloads] == [run_id, run_id]
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+def test_retired_activation_resume_cannot_repeat_activation_or_claim_replay(tmp_path, monkeypatch) -> None:
+    run_id = 'test_resumed_activation_worker_requires_existing_replay_ownership'
+    with stored_clock_run(monkeypatch, tmp_path, run_id, status='PAUSED', phase='PAUSED') as run:
+        run.update({'pausedFromPhase': 'ACTIVATING_COHORT'})
+        service.store_policy_run_snapshot(run_id, run)
+        original = service.load_policy_run_state(run_id)
+        for action in ['RESUME', 'RESUME']:
+            response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": action, "playbackRate": 600.0})
+            assert response.status_code == 410
+            assert response.json()["error"]["code"] == "scenario_lab_clock_execution_retired"
+            assert service.load_policy_run_state(run_id) == original
+        assert service.policy_wind_tunnel_run_status(run_id)["phase"] == 'PAUSED'
 
 
-def test_initial_worker_does_not_steal_replay_from_another_run(monkeypatch) -> None:
-    run_id = "python-initial-owned-replay-conflict-run"
-    replay_payloads: list[dict[str, object]] = []
-    fail_replay_claim = {"enabled": True}
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS[run_id] = service.new_policy_run(
-            run_id,
-            "hardship-relief",
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_PLATFORM_OWNED_V2,
-                "runPath": "CLOCK_DRIVEN_SIMULATION",
-                "agentDecisionMode": "STUB_LLM",
-                "cohortId": "banking-balanced-banking-100-test",
-                "simulationHorizonDays": 1,
-                "prePolicyDays": 0,
-                "postPolicyDays": 1,
-            },
-            status="RUNNING",
-            phase="QUEUED",
-            progress=0.0,
-            bundle_ready=False,
-            log_tail=[],
-        )
-
-    def fake_get_json(url: str) -> dict[str, object]:
-        if url.endswith("/api/clock/rate/info"):
-            return {"max": 1800.0}
-        return {}
-
-    def fake_post_json(url: str, payload: object, **_kwargs: object) -> dict[str, object]:
-        if url.endswith("/api/clock/replay"):
-            replay_payloads.append(dict(payload))
-            if fail_replay_claim["enabled"]:
-                raise RuntimeError("POST /api/clock/replay failed with status 409")
-            return {}
-        return {}
-
-    monkeypatch.setattr(service, "get_json", fake_get_json)
-    monkeypatch.setattr(service, "post_json", fake_post_json)
-    monkeypatch.setattr(
-        service,
-        "start_clock_driven_policy_wind_tunnel_worker",
-        lambda resumed_run_id, source=None, *, execution_claim_owner=None: (
-            service.execute_clock_driven_policy_wind_tunnel_run(
-                resumed_run_id,
-                source,
-                execution_claim_owner,
-            )
-        ),
-    )
-    monkeypatch.setattr(service, "clear_active_agents", lambda _run_id: None)
-    monkeypatch.setattr(service, "load_generated_cohort_agents_for_streaming", lambda *_args, **_kwargs: [{"agentId": "agent-1"}])
-    monkeypatch.setattr(service, "enforce_hybrid_cohort_limit", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(service, "activate_agent_chunk", lambda *_args, **_kwargs: None)
-
-    service.execute_clock_driven_policy_wind_tunnel_run(run_id)
-
-    run = service.policy_run_record(run_id)
-    assert run["status"] == "PAUSED"
-    assert run["phase"] == "PAUSED"
-    assert [payload.get("expectedRunId") for payload in replay_payloads] == [""]
-    assert any(
-        "Start requested. Setup remains paused because simulator replay ownership was not empty or owned by this run." in line
-        for line in run["logTail"]
-    )
-
-    fail_replay_claim["enabled"] = False
-    response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": "RESUME"})
-
-    assert response.status_code == 200
-    run = service.policy_run_record(run_id)
-    assert run["status"] == "RUNNING"
-    assert run["phase"] == "CLOCK_RUNNING"
-    assert [payload.get("expectedRunId") for payload in replay_payloads[:2]] == ["", run_id]
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+def test_queued_clock_run_cannot_resume_or_claim_replay(tmp_path, monkeypatch) -> None:
+    run_id = 'test_initial_worker_does_not_steal_replay_from_another_run'
+    with stored_clock_run(monkeypatch, tmp_path, run_id, status='RUNNING', phase='QUEUED') as run:
+        run.update({})
+        service.store_policy_run_snapshot(run_id, run)
+        original = service.load_policy_run_state(run_id)
+        for action in ['RESUME']:
+            response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": action, "playbackRate": 600.0})
+            assert response.status_code == 410
+            assert response.json()["error"]["code"] == "scenario_lab_clock_execution_retired"
+            assert service.load_policy_run_state(run_id) == original
+        assert service.policy_wind_tunnel_run_status(run_id)["phase"] == 'QUEUED'
 
 
 def test_resume_does_not_interrupt_finalization(tmp_path, monkeypatch) -> None:
-    run_id = "python-resume-during-finalization-run"
-    monkeypatch.setattr(service, "workspace_root", lambda: tmp_path)
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS[run_id] = service.new_policy_run(
-            run_id,
-            "hardship-relief",
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_LEGACY_V1,
-                "runPath": "CLOCK_DRIVEN_SIMULATION",
-                "agentDecisionMode": "STUB_LLM",
-                "simulationHorizonDays": 1,
-            },
-            status="RUNNING",
-            phase="FINALIZING_REPORT",
-            progress=0.92,
-            bundle_ready=True,
-            log_tail=[],
-        )
-    monkeypatch.setattr(
-        service,
-        "post_json",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("resume during finalization must not write playback")),
-    )
-
-    response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": "RESUME"})
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "RUNNING"
-    assert response.json()["phase"] == "FINALIZING_REPORT"
-    run = service.policy_run_record(run_id)
-    assert any("Resume ignored because run state is RUNNING/FINALIZING_REPORT." in line for line in run["logTail"])
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+    run_id = 'test_resume_does_not_interrupt_finalization'
+    with stored_clock_run(monkeypatch, tmp_path, run_id, status='RUNNING', phase='FINALIZING_REPORT') as run:
+        run.update({})
+        service.store_policy_run_snapshot(run_id, run)
+        original = service.load_policy_run_state(run_id)
+        for action in ['RESUME']:
+            response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": action, "playbackRate": 600.0})
+            assert response.status_code == 410
+            assert response.json()["error"]["code"] == "scenario_lab_clock_execution_retired"
+            assert service.load_policy_run_state(run_id) == original
+        assert service.policy_wind_tunnel_run_status(run_id)["phase"] == 'FINALIZING_REPORT'
 
 
 def test_activation_start_uses_expected_run_id_cas(monkeypatch) -> None:
-    run_id = "python-start-cas-conflict-run"
+    run_id = "test_activation_start_uses_expected_run_id_cas"
     with service._POLICY_WIND_TUNNEL_LOCK:
         service._POLICY_WIND_TUNNEL_RUNS[run_id] = service.new_policy_run(
-            run_id,
-            "hardship-relief",
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                "runPath": "CLOCK_DRIVEN_SIMULATION",
-                "agentDecisionMode": "STUB_LLM",
-                "simulationHorizonDays": 1,
-            },
-            status="RUNNING",
-            phase="ACTIVATING_COHORT",
-            progress=0.50,
-            bundle_ready=False,
-            log_tail=[],
-        )
-    replay_posts: list[dict[str, Any]] = []
-
-    def fake_post_json(url: str, payload: dict[str, Any], *, headers: dict[str, str] | None = None) -> dict[str, Any]:
-        replay_posts.append(payload)
-        raise RuntimeError("POST /api/clock/replay failed with status 409")
-
-    monkeypatch.setattr(service, "post_json", fake_post_json)
-
-    assert service.start_simulator_clock_after_activation(run_id, 1800.0) is False
-
-    run = service.policy_run_record(run_id)
-    assert run["status"] == "RUNNING"
-    assert run["phase"] == "ACTIVATING_COHORT"
-    assert replay_posts[0]["expectedRunId"] == run_id
-    assert replay_posts[0]["playback"]["paused"] is False
-    assert any("Start requested. Simulator playback was not changed because replay ownership changed" in line for line in run["logTail"])
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+            run_id, "hardship-relief", {"executionMode": "CLOCK_DRIVEN_HYBRID", "runPath": "CLOCK_DRIVEN_SIMULATION"},
+            status="RUNNING", phase="ACTIVATING_COHORT", progress=0.50, bundle_ready=False, log_tail=[])
+    original = deepcopy(service._POLICY_WIND_TUNNEL_RUNS[run_id])
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("Retired worker must reject before activation or state mutation")
+    monkeypatch.setattr(service, "update_policy_run", unexpected)
+    monkeypatch.setattr(service, "activate_agent_chunk", unexpected)
+    try:
+        with pytest.raises(service.ProtocolError) as error:
+            service.start_simulator_clock_after_activation(run_id, 1800.0)
+        assert (error.value.status_code, error.value.code) == (410, "scenario_lab_clock_execution_retired")
+        assert service._POLICY_WIND_TUNNEL_RUNS[run_id] == original
+    finally:
+        with service._POLICY_WIND_TUNNEL_LOCK:
+            service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
 
 
 def test_activation_start_does_not_override_pause(monkeypatch) -> None:
-    run_id = "python-start-paused-run"
+    run_id = "test_activation_start_does_not_override_pause"
     with service._POLICY_WIND_TUNNEL_LOCK:
         service._POLICY_WIND_TUNNEL_RUNS[run_id] = service.new_policy_run(
-            run_id,
-            "hardship-relief",
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                "runPath": "CLOCK_DRIVEN_SIMULATION",
-                "agentDecisionMode": "STUB_LLM",
-                "simulationHorizonDays": 1,
-            },
-            status="PAUSED",
-            phase="PAUSED",
-            progress=0.50,
-            bundle_ready=False,
-            log_tail=[],
-        )
-    monkeypatch.setattr(
-        service,
-        "post_json",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("paused activation must not start clock")),
-    )
-
-    assert service.start_simulator_clock_after_activation(run_id, 1800.0) is False
-
-    run = service.policy_run_record(run_id)
-    assert run["status"] == "PAUSED"
-    assert run["phase"] == "PAUSED"
-    assert any(
-        "Clock-driven start worker stopped before starting simulator clock because run state is PAUSED/PAUSED."
-        in line
-        for line in run["logTail"]
-    )
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+            run_id, "hardship-relief", {"executionMode": "CLOCK_DRIVEN_HYBRID", "runPath": "CLOCK_DRIVEN_SIMULATION"},
+            status="PAUSED", phase="PAUSED", progress=0.50, bundle_ready=False, log_tail=[])
+    original = deepcopy(service._POLICY_WIND_TUNNEL_RUNS[run_id])
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("Retired worker must reject before activation or state mutation")
+    monkeypatch.setattr(service, "update_policy_run", unexpected)
+    monkeypatch.setattr(service, "activate_agent_chunk", unexpected)
+    try:
+        with pytest.raises(service.ProtocolError) as error:
+            service.start_simulator_clock_after_activation(run_id, 1800.0)
+        assert (error.value.status_code, error.value.code) == (410, "scenario_lab_clock_execution_retired")
+        assert service._POLICY_WIND_TUNNEL_RUNS[run_id] == original
+    finally:
+        with service._POLICY_WIND_TUNNEL_LOCK:
+            service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
 
 
 def test_clock_driven_worker_does_not_overwrite_pause_after_activation_chunk(monkeypatch) -> None:
-    run_id = "python-worker-paused-during-activation"
+    run_id = "test_clock_driven_worker_does_not_overwrite_pause_after_activation_chunk"
     with service._POLICY_WIND_TUNNEL_LOCK:
         service._POLICY_WIND_TUNNEL_RUNS[run_id] = service.new_policy_run(
-            run_id,
-            "hardship-relief",
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                "runPath": "CLOCK_DRIVEN_SIMULATION",
-                "agentDecisionMode": "STUB_LLM",
-                "cohortId": "cohort-paused-during-activation",
-                "simulationHorizonDays": 1,
-            },
-            status="RUNNING",
-            phase="QUEUED",
-            progress=0.0,
-            bundle_ready=False,
-            log_tail=[],
-        )
-    monkeypatch.setattr(service, "apply_hybrid_replay_contract", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(service, "clear_active_agents", lambda _run_id: None)
-    monkeypatch.setattr(
-        service,
-        "load_generated_cohort_agents_for_streaming",
-        lambda *_args, **_kwargs: [{"agentId": "agent-1"}],
-    )
-    monkeypatch.setattr(service, "enforce_hybrid_cohort_limit", lambda *_args, **_kwargs: None)
-
-    def fake_activate_agent_chunk(*_args: Any, **_kwargs: Any) -> None:
-        service.update_policy_run(run_id, status="PAUSED", phase="PAUSED", progress=0.25, bundle_ready=False)
-
-    monkeypatch.setattr(service, "activate_agent_chunk", fake_activate_agent_chunk)
-    monkeypatch.setattr(
-        service,
-        "post_json",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("paused activation must not start clock")),
-    )
-
-    service.execute_clock_driven_policy_wind_tunnel_run(run_id)
-
-    run = service.policy_run_record(run_id)
-    assert run["status"] == "PAUSED"
-    assert run["phase"] == "PAUSED"
-    assert any(
-        "Clock-driven start worker stopped after activating chunk 1 because run state is PAUSED/PAUSED."
-        in line
-        for line in run["logTail"]
-    )
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+            run_id, "hardship-relief", {"executionMode": "CLOCK_DRIVEN_HYBRID", "runPath": "CLOCK_DRIVEN_SIMULATION"},
+            status="PAUSED", phase="PAUSED", progress=0.50, bundle_ready=False, log_tail=[])
+    original = deepcopy(service._POLICY_WIND_TUNNEL_RUNS[run_id])
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("Retired worker must reject before activation or state mutation")
+    monkeypatch.setattr(service, "update_policy_run", unexpected)
+    monkeypatch.setattr(service, "activate_agent_chunk", unexpected)
+    try:
+        with pytest.raises(service.ProtocolError) as error:
+            service.execute_clock_driven_policy_wind_tunnel_run(run_id)
+        assert (error.value.status_code, error.value.code) == (410, "scenario_lab_clock_execution_retired")
+        assert service._POLICY_WIND_TUNNEL_RUNS[run_id] == original
+    finally:
+        with service._POLICY_WIND_TUNNEL_LOCK:
+            service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
 
 
 def test_clock_driven_worker_does_not_overwrite_pause_before_activation_transition(monkeypatch) -> None:
-    run_id = "python-worker-paused-before-activation"
+    run_id = "test_clock_driven_worker_does_not_overwrite_pause_before_activation_transition"
     with service._POLICY_WIND_TUNNEL_LOCK:
         service._POLICY_WIND_TUNNEL_RUNS[run_id] = service.new_policy_run(
-            run_id,
-            "hardship-relief",
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                "runPath": "CLOCK_DRIVEN_SIMULATION",
-                "agentDecisionMode": "STUB_LLM",
-                "cohortId": "cohort-paused-before-activation",
-                "simulationHorizonDays": 1,
-            },
-            status="RUNNING",
-            phase="QUEUED",
-            progress=0.0,
-            bundle_ready=False,
-            log_tail=[],
-        )
-    monkeypatch.setattr(service, "apply_hybrid_replay_contract", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(service, "clear_active_agents", lambda _run_id: None)
-
-    def fake_load_generated_cohort_agents_for_streaming(*_args: Any, **_kwargs: Any) -> list[dict[str, Any]]:
-        service.update_policy_run(run_id, status="PAUSED", phase="PAUSED", progress=0.10, bundle_ready=False)
-        return [{"agentId": "agent-1"}]
-
-    monkeypatch.setattr(service, "load_generated_cohort_agents_for_streaming", fake_load_generated_cohort_agents_for_streaming)
-    monkeypatch.setattr(service, "enforce_hybrid_cohort_limit", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        service,
-        "activate_agent_chunk",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("paused pre-activation run must not activate agents")),
-    )
-    monkeypatch.setattr(
-        service,
-        "post_json",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("paused pre-activation run must not start clock")),
-    )
-
-    service.execute_clock_driven_policy_wind_tunnel_run(run_id)
-
-    run = service.policy_run_record(run_id)
-    assert run["status"] == "PAUSED"
-    assert run["phase"] == "PAUSED"
-    assert any(
-        "Clock-driven start worker stopped before preparing simulator clock because run state is PAUSED/PAUSED."
-        in line
-        for line in run["logTail"]
-    )
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+            run_id, "hardship-relief", {"executionMode": "CLOCK_DRIVEN_HYBRID", "runPath": "CLOCK_DRIVEN_SIMULATION"},
+            status="PAUSED", phase="PAUSED", progress=0.50, bundle_ready=False, log_tail=[])
+    original = deepcopy(service._POLICY_WIND_TUNNEL_RUNS[run_id])
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("Retired worker must reject before activation or state mutation")
+    monkeypatch.setattr(service, "update_policy_run", unexpected)
+    monkeypatch.setattr(service, "activate_agent_chunk", unexpected)
+    try:
+        with pytest.raises(service.ProtocolError) as error:
+            service.execute_clock_driven_policy_wind_tunnel_run(run_id)
+        assert (error.value.status_code, error.value.code) == (410, "scenario_lab_clock_execution_retired")
+        assert service._POLICY_WIND_TUNNEL_RUNS[run_id] == original
+    finally:
+        with service._POLICY_WIND_TUNNEL_LOCK:
+            service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
 
 
 def test_agentic_summary_surfaces_unverified_duration_warning() -> None:
@@ -2764,59 +1739,15 @@ def test_agentic_summary_surfaces_unverified_duration_warning() -> None:
     assert summary["evidenceIntegrityWarnings"][0]["code"] == "SIMULATION_DURATION_UNVERIFIED"
 
 
-def test_finalize_does_not_mutate_simulator_replay_ownership(tmp_path, monkeypatch) -> None:
+def test_retired_finalize_does_not_mutate_simulator_replay_ownership(tmp_path, monkeypatch) -> None:
     run_id = "python-finalize-missing-owner-run"
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS[run_id] = service.new_policy_run(
-            run_id,
-            "hardship-relief",
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                "runPath": "CLOCK_DRIVEN_SIMULATION",
-                "agentDecisionMode": "STUB_LLM",
-                "simulationHorizonDays": 1,
-                service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_PLATFORM_OWNED_V2,
-            },
-            status="RUNNING",
-            phase="CLOCK_RUNNING",
-            progress=0.55,
-            bundle_ready=True,
-            log_tail=[],
-        )
-    monkeypatch.setattr(service, "workspace_root", lambda: tmp_path)
-    monkeypatch.setattr(
-        service,
-        "fetch_decision_opportunity_reconciliation",
-        lambda requested_run_id: empty_opportunity_reconciliation(requested_run_id),
-    )
-    monkeypatch.setattr(service, "fetch_simulator_replay_context", lambda: {})
-    replay_posts: list[tuple[object, ...]] = []
-    monkeypatch.setattr(service, "post_json", lambda *args, **_kwargs: replay_posts.append(args))
-    monkeypatch.setattr(
-        service,
-        "clock_driven_policy_wind_tunnel_bundle",
-        lambda _run_id, finalized=False, correlation_audit=None: {
-            "summary": {
-                "summaryMode": "CLOCK_DRIVEN_HYBRID_FINALIZED" if finalized else "CLOCK_DRIVEN_HYBRID_LIVE",
-                "agenticSimulation": {},
-            }
-        },
-    )
-    monkeypatch.setattr(service, "notify_simulation_run_completed", lambda *_: True)
-
-    response = client.post(
-        f"/policy-wind-tunnel/runs/{run_id}/lifecycle",
-        json={
-            "action": "FINALIZE",
-            "operationId": service.expected_finalization_operation_id(run_id),
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "COMPLETED"
-    assert replay_posts == []
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+    with stored_clock_run(monkeypatch, tmp_path, run_id) as run:
+        original = service.load_policy_run_state(run_id)
+        response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={
+            "action": "FINALIZE", "operationId": service.expected_finalization_operation_id(run_id)})
+        assert response.status_code == 410
+        assert service.load_policy_run_state(run_id) == original
+        assert not service.finalization_receipt_path(run_id).exists()
 
 
 def install_finalizable_policy_run(run_id: str) -> None:
@@ -2855,43 +1786,17 @@ def test_unknown_run_is_not_synthesized_without_explicit_legacy_opt_in(
 
     assert error.value.status_code == 404
     assert error.value.code == "unknown_policy_wind_tunnel_run"
+    for suffix in ("", "/bundle", "/artifacts/summary", "/evidence-pack"):
+        response = client.get(f"/policy-wind-tunnel/runs/{run_id}{suffix}")
+        assert response.status_code == 404
+        assert "COMPLETED" not in response.text
+    assert run_id not in service._POLICY_WIND_TUNNEL_RUNS
     legacy = service.policy_run_record(run_id, allow_legacy_synthesis=True)
     assert legacy["status"] == "COMPLETED"
     with service._POLICY_WIND_TUNNEL_LOCK:
         service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
 
 
-def configure_finalization_test(
-    monkeypatch,
-    tmp_path,
-    run_id: str,
-    notification_handler=None,
-) -> None:
-    monkeypatch.setattr(service, "workspace_root", lambda: tmp_path)
-    monkeypatch.setattr(
-        service,
-        "fetch_decision_opportunity_reconciliation",
-        lambda requested_run_id: empty_opportunity_reconciliation(requested_run_id),
-    )
-    monkeypatch.setattr(
-        service,
-        "clock_driven_policy_wind_tunnel_bundle",
-        lambda _run_id, finalized=False, correlation_audit=None: {
-            "summary": {
-                "summaryMode": (
-                    "CLOCK_DRIVEN_HYBRID_FINALIZED"
-                    if finalized
-                    else "CLOCK_DRIVEN_HYBRID_LIVE"
-                ),
-                "agenticSimulation": {},
-            }
-        },
-    )
-    monkeypatch.setattr(
-        service,
-        "notify_simulation_run_completed",
-        notification_handler or (lambda _payload: True),
-    )
 
 
 def test_provider_run_state_survives_independent_process_replacement(
@@ -2959,193 +1864,67 @@ def test_finalization_run_directory_creation_fsyncs_its_parent(
     assert run_root.parent.resolve() in synced
 
 
-def test_finalize_operation_id_is_idempotent_and_rejects_conflicting_input(
-    tmp_path, monkeypatch
-) -> None:
+def test_published_finalize_operation_is_idempotent_and_rejects_conflicting_input(tmp_path, monkeypatch) -> None:
     run_id = "python-finalize-idempotency-run"
-    operation_id = service.expected_finalization_operation_id(run_id)
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS[run_id] = service.new_policy_run(
-            run_id,
-            "hardship-relief",
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                "runPath": "CLOCK_DRIVEN_SIMULATION",
-                "agentDecisionMode": "STUB_LLM",
-                "simulationHorizonDays": 1,
-                service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_PLATFORM_OWNED_V2,
-            },
-            status="RUNNING",
-            phase="CLOCK_RUNNING",
-            progress=0.55,
-            bundle_ready=True,
-            log_tail=[],
-        )
-    notifications: list[tuple] = []
-    monkeypatch.setattr(service, "workspace_root", lambda: tmp_path)
-    monkeypatch.setattr(
-        service,
-        "fetch_decision_opportunity_reconciliation",
-        lambda requested_run_id: empty_opportunity_reconciliation(requested_run_id),
-    )
-    monkeypatch.setattr(
-        service,
-        "clock_driven_policy_wind_tunnel_bundle",
-        lambda _run_id, finalized=False, correlation_audit=None: {
-            "summary": {
-                "summaryMode": "CLOCK_DRIVEN_HYBRID_FINALIZED" if finalized else "CLOCK_DRIVEN_HYBRID_LIVE",
-                "agenticSimulation": {},
-            }
-        },
-    )
-    monkeypatch.setattr(
-        service,
-        "notify_simulation_run_completed",
-        lambda *args: notifications.append(args) or True,
-    )
-
-    request = {"action": "FINALIZE", "operationId": operation_id}
-    first = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json=request)
-    replay = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json=request)
-    conflict = client.post(
-        f"/policy-wind-tunnel/runs/{run_id}/lifecycle",
-        json={**request, "contradictory": True},
-    )
-    action_conflict = client.post(
-        f"/policy-wind-tunnel/runs/{run_id}/lifecycle",
-        json={"action": "CANCEL", "operationId": operation_id},
-    )
-
-    assert first.status_code == 200
-    assert first.json()["status"] == "COMPLETED"
-    assert replay.status_code == 200
-    assert replay.json()["status"] == "COMPLETED"
-    assert conflict.status_code == 409
-    assert conflict.json()["error"]["code"] == "finalization_operation_conflict"
-    assert action_conflict.status_code == 400
-    assert action_conflict.json()["error"]["code"] == "invalid_finalization_operation_action"
-    assert len(notifications) == 1
-    assert service.policy_run_record(run_id)[service.FINALIZATION_OPERATION_FIELD]["operationId"] == operation_id
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+    with stored_clock_run(monkeypatch, tmp_path, run_id, status="COMPLETED", phase="COMPLETED") as run:
+        receipt, request = store_historical_finalization_receipt(run_id, run)
+        expected = receipt["completionNotificationPayload"]
+        with simulation_runs_sdk_http_fixture() as (host, responses, requests):
+            monkeypatch.setenv("EXPERIMENT_SERVICE_URL", host)
+            first = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json=request)
+            replay = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json=request)
+            conflict = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={**request, "contradictory": True})
+            action_conflict = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json={"action": "CANCEL", "operationId": request["operationId"]})
+        assert first.status_code == replay.status_code == 200
+        assert first.json()["status"] == replay.json()["status"] == "COMPLETED"
+        assert conflict.status_code == 409
+        assert conflict.json()["error"]["code"] == "finalization_operation_conflict"
+        assert action_conflict.status_code == 400
+        assert action_conflict.json()["error"]["code"] == "invalid_finalization_operation_action"
+        if sdk_preserves_finalization_payload(expected):
+            assert len(requests) == 1
+            assert requests[0]["body"] == expected
+            assert requests[0]["headers"]["Idempotency-Key"] == request["operationId"]
+        else:
+            assert requests == []
+            assert service.load_finalization_receipt(run_id)["completionNotificationState"] == "PENDING"
 
 
-def test_finalization_receipt_resumes_partial_publication_and_survives_restart(
-    tmp_path, monkeypatch
-) -> None:
+def test_prepared_finalization_receipt_survives_restart_without_retired_resume(tmp_path, monkeypatch) -> None:
     run_id = "python-finalize-restart-run"
-    operation_id = service.expected_finalization_operation_id(run_id)
-    install_finalizable_policy_run(run_id)
-    notifications: list[tuple] = []
-    monkeypatch.setattr(service, "workspace_root", lambda: tmp_path)
-    monkeypatch.setattr(
-        service,
-        "fetch_decision_opportunity_reconciliation",
-        lambda requested_run_id: empty_opportunity_reconciliation(requested_run_id),
-    )
-    monkeypatch.setattr(
-        service,
-        "clock_driven_policy_wind_tunnel_bundle",
-        lambda _run_id, finalized=False, correlation_audit=None: {
-            "summary": {
-                "summaryMode": (
-                    "CLOCK_DRIVEN_HYBRID_FINALIZED"
-                    if finalized
-                    else "CLOCK_DRIVEN_HYBRID_LIVE"
-                ),
-                "agenticSimulation": {},
-            }
-        },
-    )
-    monkeypatch.setattr(
-        service,
-        "notify_simulation_run_completed",
-        lambda *args: notifications.append(args) or True,
-    )
-    original_artifact_writer = service.write_clock_driven_artifact_files
-    original_receipt_writer = service.write_finalization_receipt
-    publication_attempts = 0
-
-    def count_artifact_publication(requested_run_id: str, summary: dict) -> None:
-        nonlocal publication_attempts
-        publication_attempts += 1
-        original_artifact_writer(requested_run_id, summary)
-
-    def interrupt_after_prepared(requested_run_id: str, receipt: dict) -> None:
-        original_receipt_writer(requested_run_id, receipt)
-        if receipt["state"] == service.FINALIZATION_RECEIPT_PREPARED:
-            raise RuntimeError("simulated process interruption after PREPARED")
-
-    monkeypatch.setattr(
-        service, "write_clock_driven_artifact_files", count_artifact_publication
-    )
-    monkeypatch.setattr(service, "write_finalization_receipt", interrupt_after_prepared)
-    request = {"action": "FINALIZE", "operationId": operation_id}
-
-    with pytest.raises(RuntimeError, match="simulated process interruption after PREPARED"):
-        client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json=request)
-
-    assert publication_attempts == 1
-    receipt = service.load_finalization_receipt(run_id)
-    assert receipt["state"] == "PREPARED"
-    assert receipt["providerRevision"] == service.WIND_TUNNEL_PROVIDER_REVISION
-    assert set(receipt) == service.FINALIZATION_RECEIPT_FIELDS
-    assert set(receipt["runSnapshot"]).issubset(
-        service.FINALIZATION_RUN_SNAPSHOT_FIELDS
-    )
-    assert receipt["runSnapshot"]["status"] == "RUNNING"
-    assert receipt["runSnapshot"]["metadata"]["providerRun"]["runId"] == run_id
-    for entry in receipt["artifactManifest"].values():
-        artifact = tmp_path.joinpath(entry["artifactRef"])
-        content = artifact.read_bytes()
-        assert len(content) == entry["byteLength"]
-        assert hashlib.sha256(content).hexdigest() == entry["sha256"]
-    assert notifications == []
-
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
-    monkeypatch.setattr(service, "write_finalization_receipt", original_receipt_writer)
-    resumed = client.post(
-        f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json=request
-    )
-
-    assert resumed.status_code == 200
-    assert resumed.json()["status"] == "COMPLETED"
-    assert service.load_finalization_receipt(run_id)["state"] == "PUBLISHED"
-    assert publication_attempts == 1
-    assert len(notifications) == 1
-
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
-    replay = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json=request)
-
-    assert replay.status_code == 200
-    assert replay.json()["status"] == "COMPLETED"
-    assert len(notifications) == 1
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+    with stored_clock_run(monkeypatch, tmp_path, run_id, phase="FINALIZING_REPORT") as run:
+        receipt, request = store_historical_finalization_receipt(run_id, run, state="PREPARED")
+        original = service.finalization_receipt_path(run_id).read_bytes()
+        assert receipt["state"] == "PREPARED"
+        assert set(receipt) == service.FINALIZATION_RECEIPT_FIELDS
+        assert set(receipt["runSnapshot"]).issubset(service.FINALIZATION_RUN_SNAPSHOT_FIELDS)
+        assert receipt["runSnapshot"]["status"] == "RUNNING"
+        assert receipt["runSnapshot"]["metadata"]["providerRun"]["runId"] == run_id
+        for entry in receipt["artifactManifest"].values():
+            content = tmp_path.joinpath(entry["artifactRef"]).read_bytes()
+            assert len(content) == entry["byteLength"]
+            assert hashlib.sha256(content).hexdigest() == entry["sha256"]
+        with service._POLICY_WIND_TUNNEL_LOCK:
+            service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+        with simulation_runs_sdk_http_fixture() as (host, responses, requests):
+            monkeypatch.setenv("EXPERIMENT_SERVICE_URL", host)
+            for _ in range(2):
+                response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json=request)
+                assert response.status_code == 410
+                assert service.load_finalization_receipt(run_id) == receipt
+            assert requests == []
+        assert service.finalization_receipt_path(run_id).read_bytes() == original
+        assert service.policy_run_record(run_id)["phase"] == "FINALIZING_REPORT"
 
 
-def test_finalization_receipt_rejects_non_schema_run_snapshot_fields(
-    tmp_path, monkeypatch
-) -> None:
+def test_finalization_receipt_rejects_non_schema_run_snapshot_fields(tmp_path, monkeypatch) -> None:
     run_id = "python-finalize-closed-snapshot-run"
-    install_finalizable_policy_run(run_id)
-    configure_finalization_test(monkeypatch, tmp_path, run_id)
-    request = {
-        "action": "FINALIZE",
-        "operationId": service.expected_finalization_operation_id(run_id),
-    }
-    service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
-    receipt_path = service.finalization_receipt_path(run_id)
-    receipt = json.loads(receipt_path.read_text())
-    receipt["runSnapshot"]["parameters"] = {"laundered": True}
-    receipt_path.write_text(json.dumps(receipt))
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
-
-    with pytest.raises(RuntimeError, match="receipt is invalid"):
-        service.load_finalization_receipt(run_id)
+    with stored_clock_run(monkeypatch, tmp_path, run_id, status="COMPLETED", phase="COMPLETED") as run:
+        receipt, _ = store_historical_finalization_receipt(run_id, run)
+        receipt["runSnapshot"]["parameters"] = {"laundered": True}
+        service.finalization_receipt_path(run_id).write_text(json.dumps(receipt))
+        with pytest.raises(RuntimeError, match="receipt is invalid"):
+            service.load_finalization_receipt(run_id)
 
 
 @pytest.mark.parametrize(
@@ -3253,338 +2032,167 @@ def test_finalization_receipt_rejects_artifact_path_escape() -> None:
         service.validate_stored_finalization_receipt(receipt, run_id)
 
 
-def test_artifact_write_failure_does_not_create_prepared_receipt(
-    tmp_path, monkeypatch
-) -> None:
+def test_retired_finalization_never_attempts_artifact_write_or_creates_receipt(tmp_path, monkeypatch) -> None:
     run_id = "python-finalize-write-failure-run"
-    install_finalizable_policy_run(run_id)
-    configure_finalization_test(monkeypatch, tmp_path, run_id)
-    monkeypatch.setattr(
-        service,
-        "write_clock_driven_artifact_files",
-        lambda *_args: (_ for _ in ()).throw(RuntimeError("simulated artifact failure")),
-    )
-
-    with pytest.raises(RuntimeError, match="simulated artifact failure"):
-        service.finalize_clock_driven_policy_wind_tunnel_run(
-            run_id,
-            {
-                "action": "FINALIZE",
-                "operationId": service.expected_finalization_operation_id(run_id),
-            },
-        )
-
-    assert not service.finalization_receipt_path(run_id).exists()
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+    with stored_clock_run(monkeypatch, tmp_path, run_id) as run:
+        def forbidden(*_args, **_kwargs):
+            raise AssertionError("Retired finalization must reject before artifact publication")
+        monkeypatch.setattr(service, "write_clock_driven_artifact_files", forbidden)
+        with pytest.raises(service.ProtocolError) as error:
+            service.finalize_clock_driven_policy_wind_tunnel_run(run_id, {
+                "action": "FINALIZE", "operationId": service.expected_finalization_operation_id(run_id)})
+        assert error.value.status_code == 410
+        assert not service.finalization_receipt_path(run_id).exists()
 
 
-def test_prepared_receipt_fails_closed_when_artifact_is_missing(
-    tmp_path, monkeypatch
-) -> None:
+def test_prepared_receipt_fails_closed_when_artifact_is_missing(tmp_path, monkeypatch) -> None:
     run_id = "python-finalize-missing-artifact-run"
-    install_finalizable_policy_run(run_id)
-    configure_finalization_test(monkeypatch, tmp_path, run_id)
-    original_receipt_writer = service.write_finalization_receipt
-
-    def interrupt_after_prepared(requested_run_id: str, receipt: dict) -> None:
-        original_receipt_writer(requested_run_id, receipt)
-        if receipt["state"] == service.FINALIZATION_RECEIPT_PREPARED:
-            raise RuntimeError("interrupt after PREPARED")
-
-    monkeypatch.setattr(service, "write_finalization_receipt", interrupt_after_prepared)
-    request = {
-        "action": "FINALIZE",
-        "operationId": service.expected_finalization_operation_id(run_id),
-    }
-    with pytest.raises(RuntimeError, match="interrupt after PREPARED"):
-        service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
-    receipt = service.load_finalization_receipt(run_id)
-    summary_path = tmp_path.joinpath(receipt["artifactManifest"]["summary"]["artifactRef"])
-    summary_path.unlink()
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
-    monkeypatch.setattr(service, "write_finalization_receipt", original_receipt_writer)
-
-    with pytest.raises(RuntimeError, match="not durably published"):
-        service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
-
-    assert not summary_path.exists()
-    persisted_receipt = json.loads(service.finalization_receipt_path(run_id).read_text())
-    assert persisted_receipt["state"] == "PREPARED"
+    with stored_clock_run(monkeypatch, tmp_path, run_id, phase="FINALIZING_REPORT") as run:
+        receipt, request = store_historical_finalization_receipt(run_id, run, state="PREPARED")
+        summary_path = tmp_path.joinpath(receipt["artifactManifest"]["summary"]["artifactRef"])
+        summary_path.unlink()
+        with pytest.raises(RuntimeError, match="not durably published"):
+            service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
+        assert not summary_path.exists()
+        assert json.loads(service.finalization_receipt_path(run_id).read_text())["state"] == "PREPARED"
 
 
-def test_published_receipt_fails_closed_when_artifact_is_altered(
-    tmp_path, monkeypatch
-) -> None:
+def test_published_receipt_fails_closed_when_artifact_is_altered(tmp_path, monkeypatch) -> None:
     run_id = "python-finalize-altered-artifact-run"
-    install_finalizable_policy_run(run_id)
-    notifications: list[dict] = []
-    configure_finalization_test(
-        monkeypatch,
-        tmp_path,
-        run_id,
-        lambda payload: notifications.append(deepcopy(payload)) or True,
-    )
-    request = {
-        "action": "FINALIZE",
-        "operationId": service.expected_finalization_operation_id(run_id),
-    }
-    service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
-    receipt = service.load_finalization_receipt(run_id)
-    summary_path = tmp_path.joinpath(receipt["artifactManifest"]["summary"]["artifactRef"])
-    summary_path.write_text('{"tampered":true}')
-
-    with pytest.raises(RuntimeError, match="integrity did not match"):
-        service.policy_wind_tunnel_bundle(run_id)
-
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
-
-    with pytest.raises(RuntimeError, match="integrity did not match"):
-        service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
-
-    assert len(notifications) == 1
+    with stored_clock_run(monkeypatch, tmp_path, run_id, status="COMPLETED", phase="COMPLETED") as run:
+        receipt, request = store_historical_finalization_receipt(run_id, run)
+        summary_path = tmp_path.joinpath(receipt["artifactManifest"]["summary"]["artifactRef"])
+        summary_path.write_text('{"tampered":true}')
+        with simulation_runs_sdk_http_fixture() as (host, responses, requests):
+            monkeypatch.setenv("EXPERIMENT_SERVICE_URL", host)
+            with pytest.raises(RuntimeError, match="integrity did not match"):
+                service.policy_wind_tunnel_bundle(run_id)
+            with pytest.raises(RuntimeError, match="integrity did not match"):
+                service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
+            assert requests == []
 
 
-def test_prepared_receipt_rejects_incomplete_artifact_manifest(
-    tmp_path, monkeypatch
-) -> None:
+def test_prepared_receipt_rejects_incomplete_artifact_manifest(tmp_path, monkeypatch) -> None:
     run_id = "python-finalize-incomplete-manifest-run"
-    install_finalizable_policy_run(run_id)
-    configure_finalization_test(monkeypatch, tmp_path, run_id)
-    original_receipt_writer = service.write_finalization_receipt
-
-    def interrupt_after_prepared(requested_run_id: str, receipt: dict) -> None:
-        original_receipt_writer(requested_run_id, receipt)
-        if receipt["state"] == service.FINALIZATION_RECEIPT_PREPARED:
-            raise RuntimeError("interrupt after PREPARED")
-
-    monkeypatch.setattr(service, "write_finalization_receipt", interrupt_after_prepared)
-    request = {
-        "action": "FINALIZE",
-        "operationId": service.expected_finalization_operation_id(run_id),
-    }
-    with pytest.raises(RuntimeError, match="interrupt after PREPARED"):
-        service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
-    monkeypatch.setattr(service, "write_finalization_receipt", original_receipt_writer)
-    receipt_path = service.finalization_receipt_path(run_id)
-    receipt = json.loads(receipt_path.read_text())
-    receipt["artifactManifest"].pop("hybridAgentAuditJson")
-    receipt_path.write_text(json.dumps(receipt))
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
-
-    with pytest.raises(RuntimeError, match="receipt is invalid"):
-        service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
+    with stored_clock_run(monkeypatch, tmp_path, run_id, phase="FINALIZING_REPORT") as run:
+        receipt, request = store_historical_finalization_receipt(run_id, run, state="PREPARED")
+        receipt["artifactManifest"].pop("hybridAgentAuditJson")
+        service.finalization_receipt_path(run_id).write_text(json.dumps(receipt))
+        with pytest.raises(RuntimeError, match="receipt is invalid"):
+            service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
 
 
-def test_published_receipt_rejects_different_provider_revision(
-    tmp_path, monkeypatch
-) -> None:
+def test_published_receipt_rejects_different_provider_revision(tmp_path, monkeypatch) -> None:
     run_id = "python-finalize-provider-revision-run"
-    install_finalizable_policy_run(run_id)
-    configure_finalization_test(monkeypatch, tmp_path, run_id)
-    request = {
-        "action": "FINALIZE",
-        "operationId": service.expected_finalization_operation_id(run_id),
-    }
-    service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
-    receipt_path = service.finalization_receipt_path(run_id)
-    receipt = json.loads(receipt_path.read_text())
-    receipt["providerRevision"] = "oci-sha256:" + ("0" * 64)
-    receipt_path.write_text(json.dumps(receipt))
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
-
-    with pytest.raises(RuntimeError, match="receipt is invalid"):
-        service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
+    with stored_clock_run(monkeypatch, tmp_path, run_id, status="COMPLETED", phase="COMPLETED") as run:
+        receipt, request = store_historical_finalization_receipt(run_id, run)
+        receipt["providerRevision"] = "oci-sha256:" + "0" * 64
+        service.finalization_receipt_path(run_id).write_text(json.dumps(receipt))
+        with pytest.raises(RuntimeError, match="receipt is invalid"):
+            service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
 
 
 @pytest.mark.parametrize("terminal_status", ["CANCELLED", "FAILED"])
-def test_prepared_receipt_never_resurrects_terminal_run(
-    tmp_path, monkeypatch, terminal_status: str
-) -> None:
+def test_prepared_receipt_never_resurrects_terminal_run(tmp_path, monkeypatch, terminal_status: str) -> None:
     run_id = "python-finalize-terminal-wins-" + terminal_status.lower()
-    install_finalizable_policy_run(run_id)
-    notifications: list[dict] = []
-    configure_finalization_test(
-        monkeypatch,
-        tmp_path,
-        run_id,
-        lambda payload: notifications.append(deepcopy(payload)) or True,
-    )
-    original_receipt_writer = service.write_finalization_receipt
-
-    def interrupt_after_prepared(requested_run_id: str, receipt: dict) -> None:
-        original_receipt_writer(requested_run_id, receipt)
-        if receipt["state"] == service.FINALIZATION_RECEIPT_PREPARED:
-            raise RuntimeError("interrupt after PREPARED")
-
-    monkeypatch.setattr(service, "write_finalization_receipt", interrupt_after_prepared)
-    request = {
-        "action": "FINALIZE",
-        "operationId": service.expected_finalization_operation_id(run_id),
-    }
-    with pytest.raises(RuntimeError, match="interrupt after PREPARED"):
-        service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
-    monkeypatch.setattr(service, "write_finalization_receipt", original_receipt_writer)
-    if terminal_status == "CANCELLED":
-        monkeypatch.setattr(
-            service, "apply_playback_control_for_run", lambda *_args, **_kwargs: True
-        )
-        service.control_policy_wind_tunnel_run(run_id, {"action": "CANCEL"})
-    else:
-        monkeypatch.setattr(
-            service, "apply_playback_control_for_run", lambda *_args, **_kwargs: True
-        )
-        monkeypatch.setattr(service, "clear_hybrid_runtime_cohort", lambda *_args: None)
-        service.handle_clock_driven_worker_failure(run_id, RuntimeError("terminal failure"))
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
-
-    service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
-
-    assert service.policy_run_record(run_id)["status"] == terminal_status
-    receipt = service.load_finalization_receipt(run_id)
-    assert receipt["state"] == "PUBLISHED"
-    assert receipt["completionNotificationState"] == "NOT_REQUIRED"
-    assert notifications == []
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+    with stored_clock_run(monkeypatch, tmp_path, run_id, phase="FINALIZING_REPORT") as run:
+        receipt, request = store_historical_finalization_receipt(run_id, run, state="PREPARED")
+        terminal = service.policy_run_snapshot_with_lifecycle(run, status=terminal_status, phase=terminal_status,
+            progress=1.0, bundle_ready=True)
+        service.store_policy_run_snapshot(run_id, terminal)
+        original = service.finalization_receipt_path(run_id).read_bytes()
+        with simulation_runs_sdk_http_fixture() as (host, responses, requests):
+            monkeypatch.setenv("EXPERIMENT_SERVICE_URL", host)
+            with pytest.raises(service.ProtocolError) as error:
+                service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
+            assert error.value.status_code == 410
+            assert requests == []
+        assert service.policy_run_record(run_id)["status"] == terminal_status
+        assert service.finalization_receipt_path(run_id).read_bytes() == original
 
 
-def test_cancel_after_prepared_receipt_prevents_completion_notification(
-    tmp_path, monkeypatch
-) -> None:
+def test_cancel_after_prepared_receipt_is_unavailable_and_sends_no_notification(tmp_path, monkeypatch) -> None:
     run_id = "python-finalize-prepared-cancel-run"
-    install_finalizable_policy_run(run_id)
-    notifications: list[dict] = []
-    configure_finalization_test(
-        monkeypatch,
-        tmp_path,
-        run_id,
-        lambda payload: notifications.append(deepcopy(payload)) or True,
-    )
-    original_receipt_writer = service.write_finalization_receipt
-
-    def interrupt_after_prepared(requested_run_id: str, receipt: dict) -> None:
-        original_receipt_writer(requested_run_id, receipt)
-        if receipt["state"] == service.FINALIZATION_RECEIPT_PREPARED:
-            raise RuntimeError("interrupt after PREPARED")
-
-    monkeypatch.setattr(service, "write_finalization_receipt", interrupt_after_prepared)
-    request = {
-        "action": "FINALIZE",
-        "operationId": service.expected_finalization_operation_id(run_id),
-    }
-    with pytest.raises(RuntimeError, match="interrupt after PREPARED"):
-        service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
-    monkeypatch.setattr(service, "write_finalization_receipt", original_receipt_writer)
-
-    service.control_policy_wind_tunnel_run(run_id, {"action": "CANCEL"})
-    service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
-
-    run = service.policy_run_record(run_id)
-    receipt = service.load_finalization_receipt(run_id)
-    assert run["status"] == "CANCELLED"
-    assert run["phase"] == "CANCELLED"
-    assert receipt["state"] == "PUBLISHED"
-    assert receipt["completionNotificationState"] == "NOT_REQUIRED"
-    assert notifications == []
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+    with stored_clock_run(monkeypatch, tmp_path, run_id, phase="FINALIZING_REPORT") as run:
+        receipt, request = store_historical_finalization_receipt(run_id, run, state="PREPARED")
+        original = service.finalization_receipt_path(run_id).read_bytes()
+        before = service.load_policy_run_state(run_id)
+        with simulation_runs_sdk_http_fixture() as (host, responses, requests):
+            monkeypatch.setenv("EXPERIMENT_SERVICE_URL", host)
+            with pytest.raises(service.ProtocolError) as cancel_error:
+                service.control_policy_wind_tunnel_run(run_id, {"action": "CANCEL"})
+            assert cancel_error.value.status_code == 410
+            with pytest.raises(service.ProtocolError) as finalize_error:
+                service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
+            assert finalize_error.value.status_code == 410
+            assert requests == []
+        assert service.load_policy_run_state(run_id) == before
+        assert service.finalization_receipt_path(run_id).read_bytes() == original
 
 
-def test_completion_notification_retries_identical_published_payload(
-    tmp_path, monkeypatch
-) -> None:
+def test_completion_notification_retries_identical_published_payload(tmp_path, monkeypatch) -> None:
     run_id = "python-finalize-notification-retry-run"
-    install_finalizable_policy_run(run_id)
-    payloads: list[dict] = []
-
-    def notify(payload: dict) -> bool:
-        receipt = service.load_finalization_receipt(run_id)
-        assert receipt["state"] == "PUBLISHED"
-        assert receipt["completionNotificationState"] == "PENDING"
-        payloads.append(deepcopy(payload))
-        return len(payloads) > 1
-
-    configure_finalization_test(monkeypatch, tmp_path, run_id, notify)
-    request = {
-        "action": "FINALIZE",
-        "operationId": service.expected_finalization_operation_id(run_id),
-    }
-
-    service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
-    assert service.load_finalization_receipt(run_id)["completionNotificationState"] == "PENDING"
-    service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
-    service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
-
-    assert len(payloads) == 2
-    assert payloads[0] == payloads[1]
-    assert payloads[0]["operationId"] == request["operationId"]
-    assert service.load_finalization_receipt(run_id)["completionNotificationState"] == "CONFIRMED"
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+    with stored_clock_run(monkeypatch, tmp_path, run_id, status="COMPLETED", phase="COMPLETED") as run:
+        receipt, request = store_historical_finalization_receipt(run_id, run)
+        expected = receipt["completionNotificationPayload"]
+        original = service.finalization_receipt_path(run_id).read_bytes()
+        with simulation_runs_sdk_http_fixture() as (host, responses, requests):
+            monkeypatch.setenv("EXPERIMENT_SERVICE_URL", host)
+            responses["disconnect"] = True
+            service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
+            assert service.load_finalization_receipt(run_id)["completionNotificationState"] == "PENDING"
+            assert service.finalization_receipt_path(run_id).read_bytes() == original
+            responses.pop("disconnect")
+            service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
+            service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
+        if sdk_preserves_finalization_payload(expected):
+            assert len(requests) == 2
+            assert requests[0]["body"] == requests[1]["body"] == expected
+            assert all(item["headers"]["Idempotency-Key"] == request["operationId"] for item in requests)
+            assert service.load_finalization_receipt(run_id)["completionNotificationState"] == "CONFIRMED"
+        else:
+            assert requests == []
+            assert service.load_finalization_receipt(run_id)["completionNotificationState"] == "PENDING"
+            assert service.finalization_receipt_path(run_id).read_bytes() == original
 
 
-def test_concurrent_finalizers_share_one_durable_publication(
-    tmp_path, monkeypatch
-) -> None:
+def test_concurrent_finalizers_reconcile_one_existing_durable_publication(tmp_path, monkeypatch) -> None:
     run_id = "python-finalize-shared-storage-run"
-    operation_id = service.expected_finalization_operation_id(run_id)
-    install_finalizable_policy_run(run_id)
-    notifications: list[tuple] = []
-    monkeypatch.setattr(service, "workspace_root", lambda: tmp_path)
-    monkeypatch.setattr(
-        service,
-        "fetch_decision_opportunity_reconciliation",
-        lambda requested_run_id: empty_opportunity_reconciliation(requested_run_id),
-    )
-    monkeypatch.setattr(
-        service,
-        "clock_driven_policy_wind_tunnel_bundle",
-        lambda _run_id, finalized=False, correlation_audit=None: {
-            "summary": {
-                "summaryMode": "CLOCK_DRIVEN_HYBRID_FINALIZED",
-                "agenticSimulation": {},
-            }
-        },
-    )
-    monkeypatch.setattr(
-        service,
-        "notify_simulation_run_completed",
-        lambda *args: notifications.append(args) or True,
-    )
-    start = threading.Barrier(3)
-    failures: list[BaseException] = []
-
-    def finalize() -> None:
-        try:
+    with stored_clock_run(monkeypatch, tmp_path, run_id, status="COMPLETED", phase="COMPLETED") as run:
+        receipt, request = store_historical_finalization_receipt(run_id, run)
+        expected = receipt["completionNotificationPayload"]
+        original_artifacts = {entry["artifactRef"]: tmp_path.joinpath(entry["artifactRef"]).read_bytes()
+                              for entry in receipt["artifactManifest"].values()}
+        start = threading.Barrier(3)
+        failures: list[BaseException] = []
+        def finalize():
+            try:
+                start.wait(timeout=5)
+                service.finalize_clock_driven_policy_wind_tunnel_run(run_id, request)
+            except BaseException as exc:
+                failures.append(exc)
+        with simulation_runs_sdk_http_fixture() as (host, responses, requests):
+            monkeypatch.setenv("EXPERIMENT_SERVICE_URL", host)
+            workers = [threading.Thread(target=finalize) for _ in range(2)]
+            for worker in workers:
+                worker.start()
             start.wait(timeout=5)
-            service.finalize_clock_driven_policy_wind_tunnel_run(
-                run_id, {"action": "FINALIZE", "operationId": operation_id}
-            )
-        except BaseException as exc:  # pragma: no cover - asserted below
-            failures.append(exc)
-
-    first = threading.Thread(target=finalize, name="python-finalizer-one")
-    second = threading.Thread(target=finalize, name="python-finalizer-two")
-    first.start()
-    second.start()
-    start.wait(timeout=5)
-    first.join(timeout=10)
-    second.join(timeout=10)
-
-    assert not first.is_alive()
-    assert not second.is_alive()
-    assert failures == []
-    assert service.load_finalization_receipt(run_id)["state"] == "PUBLISHED"
-    assert service.policy_run_record(run_id)["status"] == "COMPLETED"
-    assert len(notifications) == 1
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+            for worker in workers:
+                worker.join(timeout=10)
+                assert not worker.is_alive()
+            assert failures == []
+        after = service.load_finalization_receipt(run_id)
+        assert after["state"] == "PUBLISHED"
+        assert after["completionNotificationPayload"] == expected
+        if sdk_preserves_finalization_payload(expected):
+            assert len(requests) == 1
+            assert requests[0]["body"] == expected
+            assert after["completionNotificationState"] == "CONFIRMED"
+        else:
+            assert requests == []
+            assert after["completionNotificationState"] == "PENDING"
+        for ref, content in original_artifacts.items():
+            assert tmp_path.joinpath(ref).read_bytes() == content
 
 
 def test_platform_owned_v2_finalization_rejects_missing_operation_before_mutation(
@@ -3645,53 +2253,16 @@ def test_finalization_capability_is_request_scoped_and_never_persisted(monkeypat
 
 
 @pytest.mark.parametrize("terminal_status", ["FAILED", "CANCELLED"])
-def test_v2_terminal_failure_without_receipt_publishes_exact_terminal_receipt(
-    tmp_path, monkeypatch, terminal_status: str
-) -> None:
+def test_v2_terminal_failure_without_receipt_cannot_publish_via_retired_execution(tmp_path, monkeypatch, terminal_status: str) -> None:
     run_id = "python-terminal-no-receipt-" + terminal_status.lower()
-    monkeypatch.setattr(service, "workspace_root", lambda: tmp_path)
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS[run_id] = service.new_policy_run(
-            run_id,
-            "hardship-relief",
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                "agentDecisionCadence": "EVENT_ONLY",
-                service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_PLATFORM_OWNED_V2,
-            },
-            status=terminal_status,
-            phase=terminal_status,
-            progress=1.0,
-            bundle_ready=True,
-            log_tail=[],
-        )
-
-    service.finalize_clock_driven_policy_wind_tunnel_run(
-        run_id,
-        {
-            "action": "FINALIZE",
-            "operationId": service.expected_finalization_operation_id(run_id),
-        },
-    )
-
-    assert service.policy_run_record(run_id)["status"] == terminal_status
-    receipt = service.load_finalization_receipt(run_id)
-    assert receipt["state"] == service.FINALIZATION_RECEIPT_PUBLISHED
-    assert receipt["runSnapshot"]["status"] == terminal_status
-    assert receipt["completionNotificationState"] == service.FINALIZATION_NOTIFICATION_NOT_REQUIRED
-    assert receipt["completionNotificationPayload"] == {}
-    with pytest.raises(service.ProtocolError) as conflict:
-        service.finalize_clock_driven_policy_wind_tunnel_run(
-            run_id,
-            {
-                "action": "FINALIZE",
-                "operationId": service.expected_finalization_operation_id(run_id),
-                "contradictory": True,
-            },
-        )
-    assert conflict.value.code == "finalization_operation_conflict"
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+    with stored_clock_run(monkeypatch, tmp_path, run_id, status=terminal_status, phase=terminal_status) as run:
+        before = service.load_policy_run_state(run_id)
+        with pytest.raises(service.ProtocolError) as error:
+            service.finalize_clock_driven_policy_wind_tunnel_run(run_id, {
+                "action": "FINALIZE", "operationId": service.expected_finalization_operation_id(run_id)})
+        assert error.value.status_code == 410
+        assert service.load_policy_run_state(run_id) == before
+        assert not service.finalization_receipt_path(run_id).exists()
 
 
 def test_v2_completed_run_without_receipt_fails_closed(tmp_path, monkeypatch) -> None:
@@ -3721,7 +2292,8 @@ def test_v2_completed_run_without_receipt_fails_closed(tmp_path, monkeypatch) ->
             },
         )
 
-    assert error.value.code == "finalization_receipt_missing"
+    assert (error.value.status_code, error.value.code) == (410, "scenario_lab_clock_execution_retired")
+    assert not service.finalization_receipt_path(run_id).exists()
     with service._POLICY_WIND_TUNNEL_LOCK:
         service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
 
@@ -3759,170 +2331,62 @@ def test_legacy_v1_finalization_rejects_v2_operation_id(tmp_path, monkeypatch) -
         service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
 
 
-def test_finalize_completion_does_not_overwrite_cancelled_run(tmp_path, monkeypatch) -> None:
-    run_id = "python-finalize-cancelled-during-build-run"
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS[run_id] = service.new_policy_run(
-            run_id,
-            "hardship-relief",
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                "runPath": "CLOCK_DRIVEN_SIMULATION",
-                "agentDecisionMode": "STUB_LLM",
-                "simulationHorizonDays": 1,
-                service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_PLATFORM_OWNED_V2,
-            },
-            status="RUNNING",
-            phase="CLOCK_RUNNING",
-            progress=0.55,
-            bundle_ready=True,
-            log_tail=[],
-        )
-    notifications: list[tuple] = []
-    monkeypatch.setattr(service, "workspace_root", lambda: tmp_path)
-    monkeypatch.setattr(
-        service,
-        "fetch_decision_opportunity_reconciliation",
-        lambda requested_run_id: empty_opportunity_reconciliation(requested_run_id),
-    )
-    monkeypatch.setattr(service, "apply_playback_control_for_run", lambda *_args, **_kwargs: True)
-
-    def cancel_during_bundle_build(
-        _run_id: str,
-        finalized: bool = False,
-        correlation_audit: dict | None = None,
-    ) -> dict:
-        assert finalized is True
-        service.update_policy_run(run_id, status="CANCELLED", phase="CANCELLED", progress=1.0, bundle_ready=True)
-        service.append_policy_log(run_id, "Cancel requested during finalization.")
-        return {
-            "summary": {
-                "summaryMode": "CLOCK_DRIVEN_HYBRID_FINALIZED",
-                "agenticSimulation": {},
-            }
-        }
-
-    monkeypatch.setattr(service, "clock_driven_policy_wind_tunnel_bundle", cancel_during_bundle_build)
-    monkeypatch.setattr(
-        service,
-        "notify_simulation_run_completed",
-        lambda *args: notifications.append(args) or True,
-    )
-
-    response = client.post(
-        f"/policy-wind-tunnel/runs/{run_id}/lifecycle",
-        json={
-            "action": "FINALIZE",
-            "operationId": service.expected_finalization_operation_id(run_id),
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "CANCELLED"
-    assert response.json()["phase"] == "CANCELLED"
-    run = service.policy_run_record(run_id)
-    assert not notifications
-    assert any("completion was not applied because run state changed to CANCELLED/CANCELLED" in line for line in run["logTail"])
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+def test_retired_finalize_completion_does_not_overwrite_cancelled_run(tmp_path, monkeypatch) -> None:
+    run_id = "python-finalize-cancelled-during-report"
+    with stored_clock_run(monkeypatch, tmp_path, run_id, status="CANCELLED", phase="CANCELLED") as run:
+        before = service.load_policy_run_state(run_id)
+        with pytest.raises(service.ProtocolError) as error:
+            service.finalize_clock_driven_policy_wind_tunnel_run(run_id, {
+                "action": "FINALIZE", "operationId": service.expected_finalization_operation_id(run_id)})
+        assert error.value.status_code == 410
+        assert service.load_policy_run_state(run_id) == before
+        assert not service.finalization_receipt_path(run_id).exists()
 
 
 def test_clock_driven_worker_failure_does_not_overwrite_cancelled_run(monkeypatch) -> None:
-    run_id = "python-worker-failure-after-cancel"
+    run_id = "test_clock_driven_worker_failure_does_not_overwrite_cancelled_run"
     with service._POLICY_WIND_TUNNEL_LOCK:
         service._POLICY_WIND_TUNNEL_RUNS[run_id] = service.new_policy_run(
-            run_id,
-            "hardship-relief",
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                "runPath": "CLOCK_DRIVEN_SIMULATION",
-                "agentDecisionMode": "STUB_LLM",
-                "cohortId": "cohort-failure-after-cancel",
-                "simulationHorizonDays": 1,
-            },
-            status="RUNNING",
-            phase="QUEUED",
-            progress=0.0,
-            bundle_ready=False,
-            log_tail=[],
-        )
-    monkeypatch.setattr(service, "apply_hybrid_replay_contract", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(service, "load_generated_cohort_agents_for_streaming", lambda *_args, **_kwargs: [{"agentId": "agent-1"}])
-    cleared_run_ids: list[str] = []
-
-    def fake_clear_active_agents(scoped_run_id: str) -> None:
-        cleared_run_ids.append(scoped_run_id)
-        service.update_policy_run(run_id, status="CANCELLED", phase="CANCELLED", progress=1.0, bundle_ready=True)
-        raise RuntimeError("late reset failure")
-
-    monkeypatch.setattr(service, "clear_active_agents", fake_clear_active_agents)
-
-    service.execute_clock_driven_policy_wind_tunnel_run(run_id)
-
-    run = service.policy_run_record(run_id)
-    assert cleared_run_ids == [run_id]
-    assert run["status"] == "CANCELLED"
-    assert run["phase"] == "CANCELLED"
-    assert any(
-        "Run worker failed after lifecycle moved away from a failable state; preserving current run state."
-        in line
-        for line in run["logTail"]
-    )
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+            run_id, "hardship-relief", {"executionMode": "CLOCK_DRIVEN_HYBRID", "runPath": "CLOCK_DRIVEN_SIMULATION",
+                service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_PLATFORM_OWNED_V2},
+            status="CANCELLED", phase="CANCELLED", progress=0.5, bundle_ready=False, log_tail=[])
+    original = deepcopy(service._POLICY_WIND_TUNNEL_RUNS[run_id])
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("Retired worker must not reset, activate, or mutate stored state")
+    monkeypatch.setattr(service, "clear_active_agents", unexpected)
+    monkeypatch.setattr(service, "activate_pinned_cohort", unexpected)
+    monkeypatch.setattr(service, "update_policy_run", unexpected)
+    try:
+        with pytest.raises(service.ProtocolError) as error:
+            service.execute_clock_driven_policy_wind_tunnel_run(run_id)
+        assert (error.value.status_code, error.value.code) == (410, "scenario_lab_clock_execution_retired")
+        assert service._POLICY_WIND_TUNNEL_RUNS[run_id] == original
+    finally:
+        with service._POLICY_WIND_TUNNEL_LOCK:
+            service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
 
 
 def test_clock_driven_worker_failure_does_not_overwrite_paused_run(monkeypatch) -> None:
-    run_id = "python-worker-failure-after-pause"
+    run_id = "test_clock_driven_worker_failure_does_not_overwrite_paused_run"
     with service._POLICY_WIND_TUNNEL_LOCK:
         service._POLICY_WIND_TUNNEL_RUNS[run_id] = service.new_policy_run(
-            run_id,
-            "hardship-relief",
-            {
-                "executionMode": "CLOCK_DRIVEN_HYBRID",
-                service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_PLATFORM_OWNED_V2,
-                "runPath": "CLOCK_DRIVEN_SIMULATION",
-                "agentDecisionMode": "STUB_LLM",
-                "cohortId": "cohort-failure-after-pause",
-                "simulationHorizonDays": 1,
-            },
-            status="RUNNING",
-            phase="QUEUED",
-            progress=0.0,
-            bundle_ready=False,
-            log_tail=[],
-        )
-    monkeypatch.setattr(service, "apply_hybrid_replay_contract", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(service, "load_generated_cohort_agents_for_streaming", lambda *_args, **_kwargs: [{"agentId": "agent-1"}])
-    cleared_run_ids: list[str] = []
-
-    def fake_clear_active_agents(scoped_run_id: str) -> None:
-        cleared_run_ids.append(scoped_run_id)
-        service.update_policy_run(
-            run_id,
-            status="PAUSED",
-            phase="PAUSED",
-            progress=0.12,
-            bundle_ready=False,
-            paused_from_phase="PREPARING_CLOCK",
-        )
-        raise RuntimeError("late reset failure")
-
-    monkeypatch.setattr(service, "clear_active_agents", fake_clear_active_agents)
-
-    service.execute_clock_driven_policy_wind_tunnel_run(run_id)
-
-    run = service.policy_run_record(run_id)
-    assert cleared_run_ids == [run_id]
-    assert run["status"] == "PAUSED"
-    assert run["phase"] == "PAUSED"
-    assert any(
-        "Run worker failed after lifecycle moved away from a failable state; preserving current run state."
-        in line
-        for line in run["logTail"]
-    )
-    with service._POLICY_WIND_TUNNEL_LOCK:
-        service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+            run_id, "hardship-relief", {"executionMode": "CLOCK_DRIVEN_HYBRID", "runPath": "CLOCK_DRIVEN_SIMULATION",
+                service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_PLATFORM_OWNED_V2},
+            status="PAUSED", phase="PAUSED", progress=0.5, bundle_ready=False, log_tail=[])
+    original = deepcopy(service._POLICY_WIND_TUNNEL_RUNS[run_id])
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("Retired worker must not reset, activate, or mutate stored state")
+    monkeypatch.setattr(service, "clear_active_agents", unexpected)
+    monkeypatch.setattr(service, "activate_pinned_cohort", unexpected)
+    monkeypatch.setattr(service, "update_policy_run", unexpected)
+    try:
+        with pytest.raises(service.ProtocolError) as error:
+            service.execute_clock_driven_policy_wind_tunnel_run(run_id)
+        assert (error.value.status_code, error.value.code) == (410, "scenario_lab_clock_execution_retired")
+        assert service._POLICY_WIND_TUNNEL_RUNS[run_id] == original
+    finally:
+        with service._POLICY_WIND_TUNNEL_LOCK:
+            service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
 
 
 def test_clock_driven_artifact_writer_persists_scoped_hybrid_audit(tmp_path, monkeypatch) -> None:
@@ -4271,19 +2735,18 @@ def test_opportunity_audit_deferred_reasons_match_v1_lifecycle_contract() -> Non
 
 
 def test_runtime_decision_audit_does_not_truncate_agents(monkeypatch) -> None:
-    monkeypatch.setattr(
-        service,
-        "get_json",
-        lambda _url: [
-            {"agentId": f"agent-{index}", "eventCount": 0, "fallbackCount": 0}
-            for index in range(101)
-        ],
-    )
-
-    audit = service.load_runtime_decision_audit("run-python-101", include_decisions=False)
-
-    assert len(audit["agents"]) == 101
-    assert audit["summary"]["agentCount"] == 101
+    # Stored evidence is not constrained to 100 customers; the retired live reader
+    # must not invent empty audit evidence or call the removed Runtime route.
+    historical = [{"agentId": f"agent-{index}", "eventCount": 0, "fallbackCount": 0} for index in range(101)]
+    assert len(historical) == 101
+    summary = service.build_agentic_simulation_summary(
+        {"agentDecisionMode": "STUB_LLM", "agentDecisionCadence": "DAILY"}, 101,
+        {"summary": {"agentCount": 101, "decisionCount": 0}, "agents": historical}, {},
+        {"durationProofVerified": False, "durationStatus": "UNVERIFIED_CLOCK_OWNERSHIP"}, finalized=False)
+    assert summary["auditedAgentCount"] == 101
+    with pytest.raises(service.ProtocolError) as error:
+        service.load_runtime_decision_audit("run-python-101", include_decisions=False)
+    assert (error.value.status_code, error.value.code) == (410, "scenario_lab_clock_execution_retired")
 
 
 def test_runtime_decision_audit_settle_tracks_window_counters(monkeypatch) -> None:
@@ -4484,56 +2947,24 @@ def test_finalized_runtime_decision_audit_keeps_legacy_stub_compact(monkeypatch)
 
 
 def test_runtime_tick_drain_waits_for_agent_backlog(monkeypatch) -> None:
-    telemetry = [
-        {"scope": "simulationRun", "simulationRunId": "python-drain-run", "activeTickTasks": 1, "runningAgents": 1, "pendingAgents": 0},
-        {"scope": "simulationRun", "simulationRunId": "python-drain-run", "activeTickTasks": 0, "runningAgents": 0, "pendingAgents": 2},
-        {"scope": "simulationRun", "simulationRunId": "python-drain-run", "activeTickTasks": 0, "runningAgents": 0, "pendingAgents": 0},
-        {"scope": "simulationRun", "simulationRunId": "python-drain-run", "activeTickTasks": 0, "runningAgents": 0, "pendingAgents": 0},
-    ]
-    calls = {"count": 0}
-
-    def get_telemetry(method: str, url: str, **kwargs: Any) -> dict:
-        assert method == "GET"
-        assert url.endswith("/api/agents/runtime-state?simulationRunId=python-drain-run")
-        index = min(calls["count"], len(telemetry) - 1)
-        calls["count"] += 1
-        return telemetry[index]
-
-    monkeypatch.setattr(service, "http_json", get_telemetry)
-    monkeypatch.setattr(service, "HYBRID_DECISION_AUDIT_SETTLE_TIMEOUT_MS", 1_000)
-    monkeypatch.setattr(service, "HYBRID_DECISION_AUDIT_SETTLE_POLL_MS", 0)
-    monkeypatch.setattr(service, "RUNTIME_TICK_DRAIN_STABLE_SAMPLES", 2)
-
-    result = service.wait_for_runtime_tick_drain("python-drain-run")
-
-    assert calls["count"] == 4
-    assert result["verified"] is True
-    assert result["status"] == "DRAINED"
+    historical = {"scope": "simulationRun", "simulationRunId": "python-drain-run",
+                  "activeTickTasks": 0, "runningAgents": 0, "pendingAgents": 2}
+    assert service.runtime_tick_drain_complete(historical) is False
+    historical["pendingAgents"] = 0
+    assert service.runtime_tick_drain_complete(historical) is True
+    assert not hasattr(service, "http_json")
+    with pytest.raises(service.ProtocolError) as error:
+        service.wait_for_runtime_tick_drain("python-drain-run")
+    assert (error.value.status_code, error.value.code) == (410, "scenario_lab_clock_execution_retired")
 
 
 def test_runtime_tick_drain_rejects_unscoped_runtime_state(monkeypatch) -> None:
-    calls = {"count": 0}
-
-    def get_telemetry(method: str, url: str, **kwargs: Any) -> dict:
-        assert method == "GET"
-        assert url.endswith("/api/agents/runtime-state?simulationRunId=python-drain-run")
-        calls["count"] += 1
-        return {
-            "scope": "global",
-            "activeTickTasks": 0,
-            "runningAgents": 0,
-            "pendingAgents": 0,
-        }
-
-    monkeypatch.setattr(service, "http_json", get_telemetry)
-    monkeypatch.setattr(service, "HYBRID_DECISION_AUDIT_SETTLE_POLL_MS", 0)
-    monkeypatch.setattr(service, "RUNTIME_TICK_DRAIN_STABLE_SAMPLES", 2)
-
-    result = service.wait_for_runtime_tick_drain("python-drain-run")
-
-    assert calls["count"] == 1
-    assert result["verified"] is False
-    assert result["status"] == "UNVERIFIED_SCOPE"
+    historical = {"scope": "global", "activeTickTasks": 0, "runningAgents": 0, "pendingAgents": 0}
+    assert service.runtime_tick_drain_response_matches_run(historical, "python-drain-run") is False
+    assert not hasattr(service, "http_json")
+    with pytest.raises(service.ProtocolError) as error:
+        service.wait_for_runtime_tick_drain("python-drain-run")
+    assert (error.value.status_code, error.value.code) == (410, "scenario_lab_clock_execution_retired")
 
 
 def test_agentic_summary_warns_when_runtime_tick_drain_unverified() -> None:
@@ -7007,7 +5438,7 @@ def test_policy_wind_tunnel_run_bundle_and_evidence_pack() -> None:
         assert sorted(archive.namelist()) == ["events.jsonl", "manifest.json", "scorecards.json", "summary.json"]
 
 
-def test_clock_driven_wind_tunnel_100_customer_stub_mode_acceptance(
+def test_clock_retirement_preserves_100_customer_cohort_and_bounded_configuration(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -7057,326 +5488,39 @@ def test_clock_driven_wind_tunnel_100_customer_stub_mode_acceptance(
         separators=(",", ":"),
     ).encode("utf-8")
     activation_settings_digest = hashlib.sha256(activation_settings_bytes).hexdigest()
-    calls: list[tuple[str, str, object, dict[str, str]]] = []
-    hybrid_decision_run_ids: list[str] = []
-    simulation_time_ms = service.DEFAULT_SIMULATION_START_EPOCH_MS
-    active_replay_owner = {"runId": ""}
-
-    def audit_agents_for(run_id: str) -> list[dict]:
-        return [
-            {
-                "personaName": f"Python Clock Customer {index:03d}",
-                "segment": "acceptance",
-                "eventCount": 72,
-                "totalDecisionCount": 72,
-                "fallbackCount": 1 if index == 0 else 0,
-                "decisionWindowCount": 720,
-                "decisionOpportunityCount": 720,
-                "decisionAdmittedCount": 480,
-                "decisionDeferredCount": 240,
-                "decisionDeferredByReason": {"busyness_probability_skip": 240},
-                "decisionWindowSummary": {
-                    "windowCount": 720,
-                    "opportunityCount": 720,
-                    "admittedCount": 480,
-                    "deferredCount": 240,
-                    "deferredByReason": {"busyness_probability_skip": 240},
-                },
-                "effectiveProvider": "stub",
-                "effectiveModel": "stub",
-                "simulationRunId": run_id,
-                "decisions": [
-                    {
-                        "action": "ASK_FOR_HELP",
-                        "reason": "Stub decision recorded for no-token Python Scenario Lab proof.",
-                        "fallbackApplied": index == 0,
-                        "responseFormat": "structured",
-                        "contractSchemaVersion": "hybrid_micro_decision_v1",
-                        "simulationRunId": run_id,
-                    }
-                ],
-            }
-            for index in range(100)
-        ]
-
-    def fake_http_json(method, url, payload=None, *, headers=None, timeout=30.0):
-        calls.append((method, url, payload, headers or {}))
-        if "/api/agents/runtime-state" in url:
-            query_run_id = parse_qs(urlparse(url).query).get("simulationRunId", [""])[0]
-            assert query_run_id == run["runId"]
-            return {
-                "schemaVersion": "agent_runtime_state_v1",
-                "scope": "simulationRun",
-                "simulationRunId": query_run_id,
-                "activeAgents": 100,
-                "activeTickTasks": 0,
-                "runningAgents": 0,
-                "pendingAgents": 0,
-                "idle": True,
-            }
-        return {}
-
-    def fake_post_json(url, payload, *, headers=None):
-        calls.append(("POST", url, payload, headers or {}))
-        return {}
-
-    def fake_get_json(url):
-        if url.endswith("/api/clock/rate/info"):
-            return {"max": 14400.0}
-        if url.endswith("/api/clock/replay"):
-            return {"executionContext": {"runId": active_replay_owner["runId"]}} if active_replay_owner["runId"] else {}
-        if url.endswith("/api/clock/time"):
-            return simulation_time_ms
-        if "/api/agents/hybrid-decisions" in url:
-            query = parse_qs(urlparse(url).query)
-            query_run_id = query.get("simulationRunId", [""])[0]
-            assert query.get("includeDecisions", [""])[0] == "false"
-            assert query_run_id
-            hybrid_decision_run_ids.append(query_run_id)
-            return audit_agents_for(query_run_id)
-        if "/decision-opportunities/reconciliation" in url:
-            query_run_id = url.split("/api/agents/simulation-runs/", 1)[1].split("/", 1)[0]
-            return empty_opportunity_reconciliation(query_run_id)
-        if "/api/simulation-runs/" in url and "/ledger" in url:
-            run_id = url.split("/api/simulation-runs/", 1)[1].split("/", 1)[0].split("?", 1)[0]
-            return {
-                "agents": [
-                    {"agentId": f"Python Clock Customer {index:03d}", "domainId": DOMAIN_ID}
-                    for index in range(100)
-                ],
-                "events": [
-                    {
-                        "eventId": "evt-agentic-window-1",
-                        "eventType": "agentic.decision.window",
-                        "category": "agent_decision",
-                        "outcome": "RECORDED",
-                        "source": "agent-runtime",
-                    },
-                    {
-                        "eventId": "evt-remote-work-1",
-                        "eventType": "remote-domain.execute-work",
-                        "category": "remote_domain",
-                        "outcome": "RECORDED",
-                        "source": "agent-runtime",
-                    },
-                ],
-                "checkpoints": [
-                    {
-                        "checkpointId": "checkpoint-python-001",
-                        "agentId": "Python Clock Customer 000",
-                        "domainId": DOMAIN_ID,
-                        "checkpointType": "remote_domain_transaction_posted",
-                        "artifactRef": f"output/simulation-runs/{run_id}/checkpoints/checkpoint-python-001.json",
-                    },
-                    {
-                        "checkpointId": "checkpoint-python-002",
-                        "agentId": "Python Clock Customer 001",
-                        "domainId": DOMAIN_ID,
-                        "checkpointType": "remote_domain_state_checkpoint",
-                        "artifactRef": f"output/simulation-runs/{run_id}/checkpoints/checkpoint-python-002.json",
-                    },
-                ],
-            }
-        if "/api/simulation-runs/" in url:
-            return {"agentCount": 100, "eventCount": 2, "checkpointCount": 2}
-        return {}
-
-    monkeypatch.setattr(service, "http_json", fake_http_json)
-    monkeypatch.setattr(service, "post_json", fake_post_json)
-    monkeypatch.setattr(service, "get_json", fake_get_json)
-
-    run_response = client.post(
-        "/policy-wind-tunnel/runs",
-        json={
-            "presetId": "hardship-python-smoke",
-            "executionMode": "CLOCK_DRIVEN_HYBRID",
-            "agentDecisionMode": "STUB_LLM",
-            "agentDecisionCadence": "HOURLY",
-            "agentDecisionIntervalMinutes": 60,
-            "cohortId": cohort_id,
-            "cohortTargetSize": 100,
-            "simulationHorizonDays": 30,
-            "simulationStartEpochMs": service.DEFAULT_SIMULATION_START_EPOCH_MS,
-            "activationSettingsDigest": activation_settings_digest,
-            "activationSettingsSnapshot": {
-                "schemaVersion": "scenario_lab_pinned_activation_settings_snapshot.v1",
-                "contentType": "application/json",
-                "encoding": "base64url",
-                "sha256": activation_settings_digest,
-                "content": base64.urlsafe_b64encode(activation_settings_bytes)
-                .decode("ascii")
-                .rstrip("="),
-            },
-            service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_PLATFORM_OWNED_V2,
-        },
-    )
-
-    assert run_response.status_code == 200
-    run = run_response.json()
-    active_replay_owner["runId"] = run["runId"]
-    assert run["status"] == "RUNNING"
-    for _ in range(100):
-        status = client.get(f"/policy-wind-tunnel/runs/{run['runId']}").json()
-        if status["phase"] == "CLOCK_RUNNING":
-            break
-        time.sleep(0.01)
-    assert status["phase"] == "CLOCK_RUNNING"
-    assert status["bundleReady"] is True
-    assert status["parameters"]["playbackRate"] == 1800.0
-    replay_calls = [call for call in calls if call[1].endswith("/api/clock/replay")]
-    assert replay_calls[0][2]["expectedRunId"] == ""
-    assert replay_calls[0][2]["simulationStartEpochMs"] == service.DEFAULT_SIMULATION_START_EPOCH_MS
-    assert replay_calls[1][2]["expectedRunId"] == run["runId"]
-    assert replay_calls[1][2]["playback"]["paused"] is False
-
-    init_calls = [call for call in calls if call[1].endswith("/api/agents/init")]
-    assert len(init_calls) == 2
-    assert [len(call[2]) for call in init_calls] == [50, 50]
-    _, _, _, headers = init_calls[0]
-    assert headers["X-Astraform-Run-Id"] == run["runId"]
-    assert headers["X-Astraform-Cohort-Id"] == cohort_id
-    assert headers["X-Astraform-Init-Max-Concurrency"] == "4"
-    activated_agents = [agent for call in init_calls for agent in call[2]]
-    assert len(activated_agents) == 100
-    assert all(agent["domainId"] == DOMAIN_ID for agent in activated_agents)
-    assert all(agent["provider"] == "stub" for agent in activated_agents)
-    assert all(agent["model"] == "stub" for agent in activated_agents)
-    assert all(agent["interactionMode"] == "HYBRID" for agent in activated_agents)
-    assert all(agent["autonomousDecisionEnabled"] is True for agent in activated_agents)
-    assert all(agent["autonomousDecisionCadence"] == "HOURLY" for agent in activated_agents)
-    assert all(agent["autonomousDecisionIntervalMinutes"] == 60 for agent in activated_agents)
-    assert all(agent["scheduledWork"] for agent in activated_agents)
-    assert all("agentDecisionMode" not in agent for agent in activated_agents)
-    for index, agent in enumerate(activated_agents):
-        scheduled_work = agent["scheduledWork"][0]
-        assert scheduled_work["workId"] == f"salary-{index:03d}"
-        assert scheduled_work["kind"] == "transaction"
-        assert scheduled_work["frequency"] == "FORTNIGHTLY"
-        assert scheduled_work["payload"]["type"] == "DEPOSIT"
-        assert scheduled_work["payload"]["amount"] == 1000
-
-    live_bundle = client.get(f"/policy-wind-tunnel/runs/{run['runId']}/bundle").json()
-    assert live_bundle["summary"]["summaryMode"] == "CLOCK_DRIVEN_HYBRID_LIVE"
-    assert live_bundle["summary"]["headline"]["simulatedSubjects"] == 100
-    live_agentic = live_bundle["summary"]["agenticSimulation"]
-    assert live_agentic["schemaVersion"] == "agentic_customer_simulation_summary.v1"
-    assert live_agentic["agentDecisionMode"] == "STUB_LLM"
-    assert live_agentic["decisionCadence"] == "HOURLY"
-    assert live_agentic["simulationHorizonDays"] == 30
-    assert live_agentic["configuredDurationDays"] == 30
-    assert live_agentic["expectedDecisionOpportunities"] == 72000
-    assert live_agentic["observedDecisionOpportunities"] == 72000
-    assert live_agentic["admittedDecisionOpportunities"] == 48000
-    assert live_agentic["deferredDecisionOpportunities"] == 24000
-    assert live_agentic["deferredDecisionReasons"] == {"busyness_probability_skip": 24000}
-    assert live_agentic["decisionAdmissionRate"] == 0.6667
-    assert live_agentic["actualDecisionCount"] == 7200
-    assert live_agentic["auditedAgentCount"] == 100
-    assert live_agentic["fallbackCount"] == 1
-    assert live_agentic["decisionCoverageStatus"] == "CAPTURING"
-    assert "runtime checked 72000" in live_agentic["decisionCoverageExplanation"]
-    assert "admitted 48000" in live_agentic["decisionCoverageExplanation"]
-    assert "captured 7200 audited" in live_agentic["decisionCoverageExplanation"]
-
-    simulation_time_ms = service.DEFAULT_SIMULATION_START_EPOCH_MS + int(30.25 * service.MILLIS_PER_SIMULATION_DAY)
-    finalize_response = client.post(
-        f"/policy-wind-tunnel/runs/{run['runId']}/lifecycle",
-        json={
-            "action": "FINALIZE",
-            "operationId": service.expected_finalization_operation_id(run["runId"]),
-        },
-    )
-    assert finalize_response.status_code == 200
-    assert finalize_response.json()["status"] == "COMPLETED"
-    finalized_bundle = client.get(f"/policy-wind-tunnel/runs/{run['runId']}/bundle").json()
-    assert finalized_bundle["summary"]["summaryMode"] == "CLOCK_DRIVEN_HYBRID_FINALIZED"
-    assert finalized_bundle["summary"]["domainOutcomeScores"][0]["schemaVersion"] == "domain_outcome_score.v1"
-    assert finalized_bundle["summary"]["domainOutcomeScores"][0]["status"] == "SCORED"
-    assert (
-        finalized_bundle["summary"]["agenticSimulation"]["decisionCoverageStatus"]
-        == "NO_CUSTOMER_DECISIONS_TRIGGERED"
-    )
-    assert finalized_bundle["summary"]["opportunityReconciliation"]["status"] == "EMPTY"
-    assert finalized_bundle["summary"]["opportunityReconciliation"]["ledgerReconciled"] is True
-    assert (
-        finalized_bundle["summary"]["agenticSimulation"]["opportunityReconciliation"]
-        == finalized_bundle["summary"]["opportunityReconciliation"]
-    )
-    assert (
-        finalized_bundle["summary"]["agenticSimulation"]["decisionOpportunitySource"]
-        == "CUSTOMER_DECISION_OPPORTUNITY_LEDGER"
-    )
-    assert finalized_bundle["summary"]["agenticSimulation"]["expectedDecisionOpportunities"] == 0
-    assert finalized_bundle["summary"]["agenticSimulation"]["observedDecisionOpportunities"] == 0
-    assert finalized_bundle["summary"]["agenticSimulation"]["admittedDecisionOpportunities"] == 0
-    assert finalized_bundle["summary"]["agenticSimulation"]["actualDecisionCount"] == 0
-    assert finalized_bundle["summary"]["runConfig"]["configuredDurationDays"] == 30
-    assert finalized_bundle["summary"]["runConfig"]["actualDurationDays"] == 30.25
-    assert finalized_bundle["summary"]["runConfig"]["horizonOvershootDays"] == 0.25
-    assert finalized_bundle["summary"]["runConfig"]["durationStatus"] == "HORIZON_OVERRUN"
-    assert finalized_bundle["summary"]["simulationTimeline"]["actualDurationDays"] == 30.25
-    assert finalized_bundle["summary"]["simulationTimeline"]["durationStatus"] == "HORIZON_OVERRUN"
-    assert finalized_bundle["summary"]["agenticSimulation"]["actualDurationDays"] == 30.25
-    assert finalized_bundle["summary"]["agenticSimulation"]["durationStatus"] == "HORIZON_OVERRUN"
-    assert finalized_bundle["summary"]["hybridAgentAudit"]["runtimeTickDrain"]["verified"] is True
-    assert finalized_bundle["summary"]["hybridAgentAudit"]["runtimeTickDrain"]["status"] == "DRAINED"
-    assert finalized_bundle["summary"]["metrics"]["ledgerAgentCount"] == 100
-    assert finalized_bundle["summary"]["metrics"]["ledgerEventCount"] == 2
-    assert finalized_bundle["summary"]["metrics"]["ledgerCheckpointCount"] == 2
-    assert not any("/decision-opportunities/generation/seal" in call[1] for call in calls)
-    assert not any(
-        "openai" in call[1].lower() or "embedding" in call[1].lower()
-        for call in calls
-    )
-    simulation_time_ms = service.DEFAULT_SIMULATION_START_EPOCH_MS + int(33.75 * service.MILLIS_PER_SIMULATION_DAY)
-    reread_finalized_bundle = client.get(f"/policy-wind-tunnel/runs/{run['runId']}/bundle").json()
-    assert reread_finalized_bundle["summary"]["runConfig"]["actualDurationDays"] == 30.25
-    assert reread_finalized_bundle["summary"]["simulationTimeline"]["actualDurationDays"] == 30.25
-    assert reread_finalized_bundle["summary"]["agenticSimulation"]["actualDurationDays"] == 30.25
-    assert reread_finalized_bundle["summary"]["agenticSimulation"]["durationStatus"] == "HORIZON_OVERRUN"
-    assert reread_finalized_bundle["summary"]["hybridAgentAudit"]["runtimeTickDrain"]["verified"] is True
-    mutations = finalized_bundle["summary"]["branchStateProjection"]["mutations"]
-    assert any(mutation["mutationType"] == "REMOTE_DOMAIN_TRANSACTION_POSTED" for mutation in mutations)
-    assert len(finalized_bundle["summary"]["sideEffectLedger"]["entries"]) >= 4
-    audit_artifact = tmp_path.joinpath(
-        "output",
-        "experiments",
-        "banking-python-scenario-lab",
-        "runs",
-        run["runId"],
-        "summary",
-        "hybrid-agent-audit.json",
-    )
-    assert json.loads(audit_artifact.read_text(encoding="utf-8"))["totals"]["decisionCount"] == 7200
-    assert set(hybrid_decision_run_ids) == {run["runId"]}
-    simulation_run_updates = [
-        call for call in calls
-        if call[0] == "PATCH" and f"/api/simulation-runs/{run['runId']}" in call[1]
-    ]
-    assert simulation_run_updates
-    _, _, simulation_run_payload, _ = simulation_run_updates[-1]
-    assert simulation_run_payload["status"] == "COMPLETED"
-    assert simulation_run_payload["summaryPath"].endswith("scenario-lab-summary.json")
-    assert simulation_run_payload["metadata"]["scenarioLab"]["summaryMode"] == "CLOCK_DRIVEN_HYBRID_FINALIZED"
+    loaded = service.load_generated_cohort_agents_for_streaming(cohort_id, "STUB_LLM", activation_settings)
+    assert len(loaded) == 100
+    assert [customer["personaName"] for customer in loaded] == [customer["personaName"] for customer in customers]
+    assert loaded[0]["scheduledWork"][0]["frequency"] == "FORTNIGHTLY"
+    payload = {**platform_v2_launch_payload("retired-100-customer"), "cohortId": cohort_id,
+               "cohortTargetSize": 100, "agentDecisionCadence": "HOURLY", "simulationHorizonDays": 30,
+               "prePolicyDays": 10, "postPolicyDays": 20}
+    normalized = service.normalized_wind_tunnel_parameters(payload, "hardship-relief")
+    assert normalized["simulationHorizonDays"] == 30
+    assert normalized["agentDecisionCadence"] == "HOURLY"
+    assert service.agent_decision_interval_minutes("HOURLY") == 60
+    metrics = service.wind_tunnel_metrics({**normalized, "customerCount": 100})
+    assert metrics["customerCount"] == 100
+    before = (cohort_dir / "customers.json").read_bytes()
+    response = client.post("/policy-wind-tunnel/runs", json=payload)
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "scenario_lab_clock_execution_retired"
+    assert (cohort_dir / "customers.json").read_bytes() == before
+    assert service.load_policy_run_state("retired-100-customer") is None
 
 
-def test_clock_driven_wind_tunnel_rejects_unbounded_agent_decision_cadence() -> None:
-    response = client.post(
-        "/policy-wind-tunnel/runs",
-        json={
-            "presetId": "hardship-python-smoke",
-            "executionMode": "CLOCK_DRIVEN_HYBRID",
-            service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_PLATFORM_OWNED_V2,
-            "agentDecisionMode": "STUB_LLM",
-            "agentDecisionCadence": "CUSTOM_INTERVAL",
-            "agentDecisionIntervalMinutes": 1,
-            "cohortId": "banking-python-clock-driven-test-2",
-            "simulationHorizonDays": 1,
-        },
-    )
-
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "invalid_agent_decision_cadence"
+def test_clock_configuration_rejects_unbounded_cadence_and_clock_launch_is_retired() -> None:
+    payload = {"presetId": "hardship-python-smoke", "executionMode": "CLOCK_DRIVEN_HYBRID",
+               service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_PLATFORM_OWNED_V2,
+               "agentDecisionMode": "STUB_LLM", "agentDecisionCadence": "CUSTOM_INTERVAL",
+               "agentDecisionIntervalMinutes": 1, "cohortId": "banking-python-clock-driven-test-2",
+               "simulationHorizonDays": 1}
+    with pytest.raises(service.ProtocolError) as invalid_config:
+        service.normalized_wind_tunnel_parameters(payload, "hardship-python-smoke")
+    assert invalid_config.value.code == "invalid_agent_decision_cadence"
+    response = client.post("/policy-wind-tunnel/runs", json=payload)
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "scenario_lab_clock_execution_retired"
 
 
 def test_event_only_decision_cadence_has_no_calendar_interval() -> None:
@@ -7638,3 +5782,538 @@ def projection_request(operation: str, state: dict, runtime_identity: str) -> di
         },
         "state": state,
     }
+
+
+@contextmanager
+def simulation_runs_sdk_http_fixture():
+    """Owned HTTP fixture for the actual installed SDK; no platform/models are used."""
+    requests: list[dict[str, Any]] = []
+    responses: dict[str, Any] = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append({"method": "GET", "path": self.path, "headers": dict(self.headers)})
+            if responses.get("disconnect"):
+                self.close_connection = True
+                return
+            status = responses.get("status", 200)
+            payload = responses.get("ledger") if "/ledger" in self.path else responses.get("record")
+            raw = responses.get("raw", json.dumps(payload).encode())
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def do_PATCH(self):
+            raw = self.rfile.read(int(self.headers["Content-Length"]))
+            requests.append({"method": "PATCH", "path": self.path,
+                             "headers": dict(self.headers), "body": json.loads(raw), "raw": raw})
+            if responses.get("disconnect"):
+                self.close_connection = True
+                return
+            response = responses.get("record", {
+                "schemaVersion": "simulation_run_evidence.v1",
+                "runId": requests[-1]["body"]["runId"],
+                "experimentId": "banking-python-policy-pack", "status": "COMPLETED"})
+            encoded = responses.get("raw", json.dumps(response).encode())
+            self.send_response(responses.get("status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", responses, requests
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=2)
+
+
+def test_experiment_run_reads_use_actual_sdk_and_preserve_evidence(monkeypatch) -> None:
+    run_id = "sdk-owned/run name"
+    record = {
+        "schemaVersion": "simulation_run_evidence.v1", "runId": run_id,
+        "experimentId": "banking-python-policy-pack", "status": "COMPLETED",
+        "agentCount": 1, "eventCount": 1, "checkpointCount": 1,
+        "metadata": {"providerReceipt": {"original": "unchanged", "claims": ["blocked", False]},
+                     "sourceRevision": "fixture-owner"},
+    }
+    ledger = {
+        "schemaVersion": "simulation_run_evidence.v1", "run": record, "limit": 100,
+        "agents": [{"runId": run_id, "agentId": "customer-1", "domainId": DOMAIN_ID,
+                    "activationMetadata": {"requestId": "original-request", "revision": 7}}],
+        "events": [{"eventId": "event-1", "eventType": "remote-domain.review",
+                    "category": "remote_domain", "payload": {"observation": {"blocked": True, "value": 1.25}},
+                    "correlationId": "original-correlation"}],
+        "checkpoints": [{"checkpointId": "checkpoint-1", "runId": run_id,
+                         "agentId": "customer-1", "artifactRef": "unchanged/checkpoint.json",
+                         "checksum": "sha256:" + "a" * 64}],
+    }
+    assert not hasattr(service, 'get_json')
+    assert not hasattr(service, 'http_json')
+    with simulation_runs_sdk_http_fixture() as (host, responses, requests):
+        monkeypatch.setenv("EXPERIMENT_SERVICE_URL", host)
+        responses.update(record=record, ledger=ledger)
+        # The platform currently emits these paths although neither selected
+        # generated response model declares them. They are not used by this
+        # sample's Experiment run-record consumer (ledger counts only).
+        responses["record"] = {**record, "summaryPath": "platform/original-summary.json",
+                               "bundlePath": "/api/experiment-runs/original/scenario-lab/bundle"}
+        responses["ledger"] = {**ledger, "run": responses["record"]}
+        assert service.fetch_simulation_run_record(run_id) == record
+        assert service.fetch_simulation_run_ledger(run_id) == ledger
+    assert len(requests) == 2
+    assert [request["method"] for request in requests] == ["GET", "GET"]
+    assert unquote(urlparse(requests[0]["path"]).path) == "/api/simulation-runs/" + run_id
+    assert unquote(urlparse(requests[1]["path"]).path) == "/api/simulation-runs/" + run_id + "/ledger"
+    assert parse_qs(urlparse(requests[1]["path"]).query) == {"limit": ["100"]}
+
+
+@pytest.mark.parametrize("reader", ["fetch_simulation_run_record", "fetch_simulation_run_ledger"])
+@pytest.mark.parametrize("failure", ["http503", "disconnect", "malformed_json"])
+def test_experiment_sdk_read_failure_preserves_unavailable_without_retry(
+    monkeypatch, reader: str, failure: str,
+) -> None:
+    with simulation_runs_sdk_http_fixture() as (host, responses, requests):
+        monkeypatch.setenv("EXPERIMENT_SERVICE_URL", host)
+        if failure == "http503":
+            responses.update(status=503, raw=b'{"code":"UNAVAILABLE"}')
+        elif failure == "disconnect":
+            responses["disconnect"] = True
+        else:
+            responses["raw"] = b'not-json'
+        assert getattr(service, reader)("same-run") == {}
+    assert len(requests) == 1
+    assert requests[0]["method"] == "GET"
+    assert unquote(urlparse(requests[0]["path"]).path).startswith("/api/simulation-runs/same-run")
+
+
+@pytest.fixture
+def sdk_finalization_payload() -> dict[str, Any]:
+    return {
+        "runId": "same-sdk-notification-run", "status": "COMPLETED",
+        "source": "banking-python-remote", "summaryPath": "original/summary.json",
+        "bundlePath": "/api/experiment-runs/same-sdk-notification-run/scenario-lab/bundle",
+        "completedAtEpochMs": 1768467600000,
+        "operationId": "scenario-lab-finalize:original-operation", "inputDigest": "a" * 64,
+        "providerRevision": "oci-sha256:" + "b" * 64,
+        "metadata": {"domainId": DOMAIN_ID, "scenarioLab": {"phase": "COMPLETED", "proof": {"unchanged": True}}},
+    }
+
+
+def sdk_preserves_finalization_payload(payload: dict[str, Any]) -> bool:
+    """Observe the actual selected SDK model, without mocking/injecting support."""
+    with ApiClient() as client:
+        return client.sanitize_for_serialization(SimulationRunUpdateRequest.from_dict(payload)) == payload
+
+
+def test_sdk_finalization_update_preserves_complete_wire_payload_and_identity(
+    monkeypatch, sdk_finalization_payload: dict[str, Any],
+) -> None:
+    original = deepcopy(sdk_finalization_payload)
+    logs: list[tuple[str, str]] = []
+    timeouts: list[float] = []
+    monkeypatch.setattr(service, "append_policy_log", lambda run_id, text: logs.append((run_id, text)))
+    assert not hasattr(service, 'http_json')
+    actual_transport_request = RESTClientObject.request
+    def observe_transport(self, *args, **kwargs):
+        timeouts.append(kwargs.get("_request_timeout"))
+        return actual_transport_request(self, *args, **kwargs)
+    monkeypatch.setattr(RESTClientObject, "request", observe_transport)
+    with simulation_runs_sdk_http_fixture() as (host, responses, requests):
+        monkeypatch.setenv("EXPERIMENT_SERVICE_URL", host)
+        accepted = service.notify_simulation_run_completed(sdk_finalization_payload)
+    assert sdk_finalization_payload == original
+    if sdk_preserves_finalization_payload(original):
+        assert accepted is True
+        assert len(requests) == 1
+        assert requests[0]["method"] == "PATCH"
+        assert requests[0]["body"] == original
+        assert unquote(urlparse(requests[0]["path"]).path) == "/api/simulation-runs/" + original["runId"]
+        assert requests[0]["headers"]["Idempotency-Key"] == original["operationId"]
+        assert timeouts == [10.0]
+        assert logs == []
+    else:
+        assert accepted is False
+        assert requests == []
+        assert timeouts == []
+        assert logs[0][0] == original["runId"]
+        assert "cannot preserve the complete" in logs[0][1]
+        assert "unconfirmed" in logs[0][1]
+
+
+@pytest.mark.parametrize("failure", ["http503", "disconnect", "malformed_json"])
+def test_sdk_finalization_uncertainty_never_retries_or_drops_correlation(
+    monkeypatch, sdk_finalization_payload: dict[str, Any], failure: str,
+) -> None:
+    logs: list[tuple[str, str]] = []
+    monkeypatch.setattr(service, "append_policy_log", lambda run_id, text: logs.append((run_id, text)))
+    before = deepcopy(sdk_finalization_payload)
+    with simulation_runs_sdk_http_fixture() as (host, responses, requests):
+        monkeypatch.setenv("EXPERIMENT_SERVICE_URL", host)
+        if failure == "http503":
+            responses.update(status=503, raw=b'{"code":"UNAVAILABLE"}')
+        elif failure == "disconnect":
+            responses["disconnect"] = True
+        else:
+            responses["raw"] = b'not-json'
+        assert service.notify_simulation_run_completed(sdk_finalization_payload) is False
+    assert sdk_finalization_payload == before
+    if sdk_preserves_finalization_payload(before):
+        assert len(requests) == 1
+        assert requests[0]["method"] == "PATCH"
+        assert requests[0]["body"] == before
+        assert requests[0]["headers"]["Idempotency-Key"] == before["operationId"]
+    else:
+        assert requests == []
+        assert "cannot preserve the complete" in logs[0][1]
+    assert logs[0][0] == before["runId"]
+    assert "not confirmed" in logs[0][1]
+
+
+def test_sdk_unconfirmed_notification_keeps_published_receipt_and_operation(
+    tmp_path, monkeypatch, sdk_finalization_payload: dict[str, Any],
+) -> None:
+    logs: list[tuple[str, str]] = []
+    monkeypatch.setattr(service, "append_policy_log", lambda run_id, text: logs.append((run_id, text)))
+    receipt = {"state": "PUBLISHED", "runId": sdk_finalization_payload["runId"],
+               "operationId": sdk_finalization_payload["operationId"],
+               "inputDigest": sdk_finalization_payload["inputDigest"],
+               "completionNotificationState": "PENDING",
+               "completionNotificationPayload": deepcopy(sdk_finalization_payload)}
+    saved = tmp_path / "published-receipt.json"
+    saved.write_text(json.dumps(receipt))
+    original = saved.read_bytes()
+    def forbid_confirmed_receipt_write(*_args, **_kwargs):
+        raise AssertionError("An unconfirmed update cannot replace the durable published receipt")
+    monkeypatch.setattr(service, "write_finalization_receipt", forbid_confirmed_receipt_write)
+    with simulation_runs_sdk_http_fixture() as (host, responses, requests):
+        monkeypatch.setenv("EXPERIMENT_SERVICE_URL", host)
+        responses["disconnect"] = True
+        service.confirm_finalization_notification(json.loads(saved.read_text()))
+    assert saved.read_bytes() == original
+    assert json.loads(saved.read_text())["completionNotificationState"] == "PENDING"
+    assert json.loads(saved.read_text())["completionNotificationPayload"] == sdk_finalization_payload
+    assert len(requests) == (1 if sdk_preserves_finalization_payload(sdk_finalization_payload) else 0)
+    assert logs[0][0] == sdk_finalization_payload["runId"]
+
+
+def test_retired_clock_launch_rejects_before_creation_or_admission(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(service, "workspace_root", lambda: tmp_path)
+    before = set(service._POLICY_WIND_TUNNEL_RUNS)
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("Retired clock launch must fail before identity, admission or scheduling")
+    monkeypatch.setattr(service.uuid, "uuid4", unexpected)
+    monkeypatch.setattr(service, "admit_clock_driven_policy_launch", unexpected)
+    monkeypatch.setattr(service, "start_clock_driven_policy_wind_tunnel_worker", unexpected)
+    payload = {"executionMode": "CLOCK_DRIVEN_HYBRID", "presetId": "saver-repricing",
+               service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_PLATFORM_OWNED_V2}
+    with pytest.raises(service.ProtocolError) as error:
+        service.start_policy_wind_tunnel_run(payload, execution_role="PLATFORM_ADMIN")
+    assert (error.value.status_code, error.value.code) == (410, "scenario_lab_clock_execution_retired")
+    with pytest.raises(service.ProtocolError) as private_error:
+        service.start_clock_driven_policy_wind_tunnel_run(
+            "saver-repricing", {**payload, "simulationRunId": "rejected-run"}, launch_digest="a" * 64)
+    assert private_error.value.status_code == 410
+    assert set(service._POLICY_WIND_TUNNEL_RUNS) == before
+    assert list(tmp_path.rglob("*")) == []
+    response = client.post("/policy-wind-tunnel/runs", json=payload)
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "scenario_lab_clock_execution_retired"
+    assert set(service._POLICY_WIND_TUNNEL_RUNS) == before
+    assert list(tmp_path.rglob("*")) == []
+
+
+@pytest.mark.parametrize("method", ["GET", "POST"])
+@pytest.mark.parametrize("path", ["/api/clock", "/api/clock/time", "/api/clock/rate/info", "/api/clock/replay?paused=true"])
+def test_retired_clock_transport_rejects_before_request_or_socket(monkeypatch, method, path) -> None:
+    import urllib.request
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("Retired clock operations must never construct or send HTTP")
+    monkeypatch.setattr(urllib.request, "Request", unexpected)
+    monkeypatch.setattr(urllib.request, "urlopen", unexpected)
+    for owner in ("http_json", "get_json", "post_json", "post_bytes", "simulator_url", "agent_runtime_url"):
+        assert not hasattr(service, owner)
+    reads = {"/api/clock": service.simulator_max_playback_rate,
+             "/api/clock/time": service.fetch_simulation_time_epoch_ms,
+             "/api/clock/rate/info": service.simulator_max_playback_rate,
+             "/api/clock/replay?paused=true": service.fetch_simulator_replay_context}
+    with pytest.raises(service.ProtocolError) as error:
+        if method == "GET":
+            reads[path]()
+        else:
+            service.apply_playback_control_for_run("retired-clock", paused=True, playback_rate=0, action_label="Retired operation")
+    assert (error.value.status_code, error.value.code) == (410, "scenario_lab_clock_execution_retired")
+
+
+@pytest.mark.parametrize("action", ["PAUSE", "RESUME", "SET_PLAYBACK_RATE", "FINALIZE", "CANCEL"])
+def test_retired_clock_lifecycle_rejects_before_state_or_runtime_mutation(tmp_path, monkeypatch, action) -> None:
+    monkeypatch.setattr(service, "workspace_root", lambda: tmp_path)
+    run_id = "retired-lifecycle-" + action.lower()
+    install_finalizable_policy_run(run_id)
+    original = deepcopy(service.policy_run_record(run_id))
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("Retired lifecycle control must not mutate or call old Runtime/clock")
+    for owner in ("update_policy_run", "clear_active_agents", "persist_terminal_policy_run", "apply_playback_control_for_run"):
+        monkeypatch.setattr(service, owner, unexpected)
+    try:
+        payload = {"action": action, "playbackRate": 1.0}
+        if action == "FINALIZE":
+            payload["operationId"] = service.expected_finalization_operation_id(run_id)
+        with pytest.raises(service.ProtocolError) as error:
+            service.control_policy_wind_tunnel_run(run_id, payload)
+        assert (error.value.status_code, error.value.code) == (410, "scenario_lab_clock_execution_retired")
+        assert service.policy_run_record(run_id) == original
+        assert list(tmp_path.rglob("*")) == []
+    finally:
+        with service._POLICY_WIND_TUNNEL_LOCK:
+            service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+
+
+@pytest.mark.parametrize("owner", ["start_clock_driven_policy_wind_tunnel_worker", "start_clock_driven_policy_wind_tunnel_recovery", "start_clock_horizon_monitor"])
+def test_retired_clock_workers_reject_before_thread_start(monkeypatch, owner) -> None:
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("Retired clock workers must not schedule threads")
+    monkeypatch.setattr(service.threading, "Thread", unexpected)
+    with pytest.raises(service.ProtocolError) as error:
+        getattr(service, owner)("retired-worker", execution_claim_owner="old-claim")
+    assert (error.value.status_code, error.value.code) == (410, "scenario_lab_clock_execution_retired")
+
+
+@pytest.mark.parametrize("mode", [service.FINALIZATION_MODE_LEGACY_V1, service.FINALIZATION_MODE_PLATFORM_OWNED_V1])
+def test_retired_clock_historical_stored_evidence_remains_readable(tmp_path, monkeypatch, mode) -> None:
+    monkeypatch.setattr(service, "workspace_root", lambda: tmp_path)
+    run_id = "historical-stored-" + mode.lower()
+    summary = {"schemaVersion": service.WIND_TUNNEL_SUMMARY_SCHEMA_VERSION, "runId": run_id,
+               "summaryMode": "CLOCK_DRIVEN_HYBRID_FINALIZED", "originalPayload": {"blocked": True, "value": 1.25},
+               "simulationTimeline": {"startEpochMs": 1768381200000, "endEpochMs": 1768467600000,
+                                      "events": [{"eventId": "original-event", "time": "2026-01-15T09:00:00Z"}]},
+               "hybrid": {"agentAudit": {"original": "stored audit"}}}
+    saved = tmp_path / "historical-summary.json"
+    saved.write_text(json.dumps(summary))
+    original = saved.read_bytes()
+    run = service.new_policy_run(run_id, "hardship-relief", {
+        "executionMode": "CLOCK_DRIVEN_HYBRID", "runPath": "CLOCK_DRIVEN_SIMULATION",
+        service.FINALIZATION_MODE_FIELD: mode}, status="COMPLETED", phase="COMPLETED",
+        progress=1.0, bundle_ready=True, log_tail=[])
+    run["summaryPath"] = str(saved)
+    with service._POLICY_WIND_TUNNEL_LOCK:
+        service._POLICY_WIND_TUNNEL_RUNS[run_id] = run
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("Historical evidence reads must not refresh retired clock or Runtime")
+    assert not hasattr(service, 'http_json')
+    monkeypatch.setattr(service, "clock_driven_policy_wind_tunnel_bundle", unexpected)
+    try:
+        assert service.policy_wind_tunnel_run_status(run_id)["status"] == "COMPLETED"
+        assert service.policy_wind_tunnel_bundle(run_id)["summary"] == summary
+        assert json.loads(service.policy_wind_tunnel_artifact(run_id, "summary")) == summary
+        with zipfile.ZipFile(io.BytesIO(service.policy_wind_tunnel_evidence_pack(run_id))) as exported:
+            assert exported.testzip() is None
+            assert json.loads(exported.read("summary.json")) == summary
+            assert json.loads(exported.read("simulation-timeline.json")) == summary["simulationTimeline"]
+        assert saved.read_bytes() == original
+        assert service.policy_run_record(run_id) == run
+    finally:
+        with service._POLICY_WIND_TUNNEL_LOCK:
+            service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+
+
+def test_retired_clock_published_finalization_reconciles_same_operation_with_native_sdk(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(service, "workspace_root", lambda: tmp_path)
+    run_id = "published-clock-free-reconciliation"
+    install_finalizable_policy_run(run_id)
+    run = service.policy_run_snapshot_with_lifecycle(service.policy_run_record(run_id),
+        status="COMPLETED", phase="COMPLETED", progress=1.0, bundle_ready=True)
+    run["completedAtEpochMs"] = 1768467600000
+    summary = {"runId": run_id, "summaryMode": "CLOCK_DRIVEN_HYBRID_FINALIZED",
+               "hybrid": {"agentAudit": {"original": "stored audit"}},
+               "simulationTimeline": {"events": [{"eventId": "original-event"}]}}
+    service.write_clock_driven_artifact_files(run_id, summary)
+    manifest = service.finalization_artifact_manifest(run_id)
+    run["summaryPath"] = manifest["summary"]["artifactRef"]
+    service.store_policy_run_snapshot(run_id, run)
+    payload = {"action": "FINALIZE", "operationId": service.expected_finalization_operation_id(run_id)}
+    operation = service.finalization_operation(payload)
+    receipt = service.finalization_receipt(run_id, service.FINALIZATION_MODE_PLATFORM_OWNED_V2,
+        operation, operation["inputDigest"], service.FINALIZATION_RECEIPT_PUBLISHED, run, manifest)
+    service.attach_completion_notification_payload(receipt, summary)
+    service.write_finalization_receipt(run_id, receipt)
+    assert service.load_finalization_receipt(run_id) == receipt
+    original_receipt = service.finalization_receipt_path(run_id).read_bytes()
+    original_notification = deepcopy(receipt["completionNotificationPayload"])
+    artifact_bytes = {entry["artifactRef"]: tmp_path.joinpath(entry["artifactRef"]).read_bytes() for entry in manifest.values()}
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("Published reconciliation must use only the native SDK and existing evidence")
+    assert not hasattr(service, 'http_json')
+    monkeypatch.setattr(service, "clock_driven_policy_wind_tunnel_bundle", unexpected)
+    try:
+        with simulation_runs_sdk_http_fixture() as (host, responses, requests):
+            monkeypatch.setenv("EXPERIMENT_SERVICE_URL", host)
+            result = service.control_policy_wind_tunnel_run(run_id, payload)
+            assert result["status"] == "COMPLETED"
+            assert service.policy_wind_tunnel_bundle(run_id)["summary"] == summary
+            assert service.policy_wind_tunnel_artifact(run_id, "summary") == artifact_bytes[manifest["summary"]["artifactRef"]]
+            after = service.load_finalization_receipt(run_id)
+            assert after["completionNotificationPayload"] == original_notification
+            assert after["operationId"] == receipt["operationId"]
+            assert after["inputDigest"] == receipt["inputDigest"]
+            if sdk_preserves_finalization_payload(original_notification):
+                assert after["completionNotificationState"] == "CONFIRMED"
+                assert len(requests) == 1
+                assert requests[0]["body"] == original_notification
+                assert requests[0]["headers"]["Idempotency-Key"] == receipt["operationId"]
+                service.control_policy_wind_tunnel_run(run_id, payload)
+                assert len(requests) == 1
+            else:
+                assert after["completionNotificationState"] == "PENDING"
+                assert service.finalization_receipt_path(run_id).read_bytes() == original_receipt
+                assert requests == []
+            contradictory = {**payload, "unexpectedChangedInput": "contradictory"}
+            with pytest.raises(service.ProtocolError) as error:
+                service.control_policy_wind_tunnel_run(run_id, contradictory)
+            assert error.value.status_code == 409
+        for ref, original in artifact_bytes.items():
+            assert tmp_path.joinpath(ref).read_bytes() == original
+    finally:
+        with service._POLICY_WIND_TUNNEL_LOCK:
+            service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+
+
+@contextmanager
+def stored_clock_run(monkeypatch, tmp_path, run_id: str, *, status="RUNNING", phase="CLOCK_RUNNING"):
+    """Historical persisted fixture, never a replacement for native execution."""
+    monkeypatch.setattr(service, "workspace_root", lambda: tmp_path)
+    run = service.new_policy_run(run_id, "hardship-relief", {
+        "executionMode": "CLOCK_DRIVEN_HYBRID", "runPath": "CLOCK_DRIVEN_SIMULATION",
+        "agentDecisionMode": "STUB_LLM", "agentDecisionCadence": "EVENT_ONLY",
+        "simulationRunId": run_id, "simulationHorizonDays": 1,
+        service.FINALIZATION_MODE_FIELD: service.FINALIZATION_MODE_PLATFORM_OWNED_V2},
+        status=status, phase=phase, progress=1.0 if status in {"COMPLETED", "FAILED", "CANCELLED"} else 0.55,
+        bundle_ready=True, log_tail=["Historical stored fixture; no execution was started."])
+    service.store_policy_run_snapshot(run_id, run)
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("Historical fixture must not call retired clock/Runtime or schedule execution")
+    for owner in ("activate_agent_chunk", "activate_pinned_cohort", "clear_active_agents",
+                  "admit_clock_driven_policy_launch", "start_clock_driven_policy_wind_tunnel_worker",
+                  "start_clock_driven_policy_wind_tunnel_recovery"):
+        monkeypatch.setattr(service, owner, unexpected)
+    try:
+        yield run
+    finally:
+        with service._POLICY_WIND_TUNNEL_LOCK:
+            service._POLICY_WIND_TUNNEL_RUNS.pop(run_id, None)
+
+
+def store_historical_finalization_receipt(run_id: str, run: dict[str, Any], *, state="PUBLISHED"):
+    """Publish exact unit-fixture bytes through actual existing durable owners."""
+    summary = {"runId": run_id, "summaryMode": "CLOCK_DRIVEN_HYBRID_FINALIZED",
+               "simulationTimeline": {"events": [{"eventId": "historical-event", "time": "2026-01-15T09:00:00Z"}]},
+               "hybrid": {"agentAudit": {"original": "stored audit"}},
+               "decisionComparison": {"baseline": {"originalBalance": 1200}, "proposed": {"budget": 100}}}
+    service.write_clock_driven_artifact_files(run_id, summary)
+    manifest = service.finalization_artifact_manifest(run_id)
+    run["summaryPath"] = manifest["summary"]["artifactRef"]
+    service.store_policy_run_snapshot(run_id, run)
+    request = {"action": "FINALIZE", "operationId": service.expected_finalization_operation_id(run_id)}
+    operation = service.finalization_operation(request)
+    receipt = service.finalization_receipt(run_id, service.FINALIZATION_MODE_PLATFORM_OWNED_V2,
+        operation, operation["inputDigest"], state, run, manifest)
+    if state == "PUBLISHED":
+        service.attach_completion_notification_payload(receipt, summary)
+    service.write_finalization_receipt(run_id, receipt)
+    return receipt, request
+
+
+def test_rejected_controls_and_middleware_leave_published_receipt_conflicting_state_unchanged(tmp_path, monkeypatch) -> None:
+    run_id = "published-read-only-control-preflight"
+    with stored_clock_run(monkeypatch, tmp_path, run_id, status="COMPLETED", phase="COMPLETED") as run:
+        receipt, valid = store_historical_finalization_receipt(run_id, run)
+        stale = service.policy_run_snapshot_with_lifecycle(run, status="RUNNING", phase="CLOCK_RUNNING",
+            progress=0.55, bundle_ready=True)
+        stale["historicalDiskMarker"] = "must remain unchanged on rejection"
+        service.store_policy_run_snapshot(run_id, stale)
+        with service._POLICY_WIND_TUNNEL_LOCK:
+            service._POLICY_WIND_TUNNEL_RUNS[run_id]["historicalCacheMarker"] = "do not replace this cache during inspection"
+            original_cache = deepcopy(service._POLICY_WIND_TUNNEL_RUNS[run_id])
+        original_files = {str(path.relative_to(tmp_path)): hashlib.sha256(path.read_bytes()).hexdigest()
+                          for path in tmp_path.rglob("*") if path.is_file()}
+        restored: list[str] = []
+        actual_store = service.store_policy_run_snapshot
+        def observe_store(requested_run_id, snapshot):
+            restored.append(requested_run_id)
+            return actual_store(requested_run_id, snapshot)
+        monkeypatch.setattr(service, "store_policy_run_snapshot", observe_store)
+        cases = [({"action": "FINALIZE"}, 400, "finalization_operation_required"),
+                 ({"action": "FINALIZE", "operationId": "malformed"}, 400, "invalid_finalization_operation_id"),
+                 ({**valid, "contradictory": True}, 409, "finalization_operation_conflict"),
+                 ({"action": "CANCEL", "operationId": valid["operationId"]}, 400, "invalid_finalization_operation_action")]
+        with simulation_runs_sdk_http_fixture() as (host, responses, requests):
+            monkeypatch.setenv("EXPERIMENT_SERVICE_URL", host)
+            # The middleware must inspect this genuine completed snapshot without
+            # restoring it over the persisted/cached nonterminal state.
+            status = client.get(f"/policy-wind-tunnel/runs/{run_id}")
+            assert status.status_code == 200
+            assert status.json()["status"] == receipt["runSnapshot"]["status"] == "COMPLETED"
+            for payload, expected_status, expected_code in cases:
+                with pytest.raises(service.ProtocolError) as direct_error:
+                    service.control_policy_wind_tunnel_run(run_id, payload)
+                assert (direct_error.value.status_code, direct_error.value.code) == (expected_status, expected_code)
+                if payload["action"] == "FINALIZE":
+                    with pytest.raises(service.ProtocolError) as private_error:
+                        service.finalize_clock_driven_policy_wind_tunnel_run(run_id, payload)
+                    assert (private_error.value.status_code, private_error.value.code) == (expected_status, expected_code)
+                response = client.post(f"/policy-wind-tunnel/runs/{run_id}/lifecycle", json=payload)
+                assert response.status_code == expected_status
+                assert response.json()["error"]["code"] == expected_code
+                assert restored == []
+                with service._POLICY_WIND_TUNNEL_LOCK:
+                    assert service._POLICY_WIND_TUNNEL_RUNS[run_id] == original_cache
+                assert {str(path.relative_to(tmp_path)): hashlib.sha256(path.read_bytes()).hexdigest()
+                        for path in tmp_path.rglob("*") if path.is_file()} == original_files
+            assert requests == []
+        assert service.load_finalization_receipt(run_id) == receipt
+
+
+@pytest.mark.parametrize(("owner", "args", "kwargs"), [
+    ("simulator_max_playback_rate", (), {}),
+    ("apply_hybrid_replay_contract", ("retired-run", {}, 1.0), {}),
+    ("release_hybrid_replay_contract", ("retired-run",), {}),
+    ("apply_playback_control_for_run", ("retired-run",), {"paused": True, "playback_rate": 0, "action_label": "Retired"}),
+    ("clear_active_agents", ("retired-run",), {}),
+    ("activate_agent_chunk", ("retired-run", "cohort", "a" * 64, 1, 1, []), {}),
+    ("activate_pinned_cohort", ("retired-run", "cohort", {}, "STUB_LLM", {}, 1), {}),
+    ("fetch_simulation_time_epoch_ms", (), {}),
+    ("fetch_simulator_replay_context", (), {}),
+    ("install_clock_driven_rate_change_plan", ("retired-run", None, set(), "a" * 64, "b" * 64), {}),
+    ("load_runtime_decision_audit", ("retired-run",), {}),
+    ("wait_for_runtime_tick_drain", ("retired-run",), {}),
+    ("fetch_decision_opportunity_reconciliation", ("retired-run",), {}),
+    ("recover_existing_clock_driven_policy_wind_tunnel_run", ("retired-run", "claim"), {}),
+    ("execute_clock_driven_policy_wind_tunnel_run", ("retired-run",), {}),
+    ("monitor_clock_driven_horizon", ("retired-run",), {}),
+])
+def test_removed_runtime_clock_operations_reject_before_any_side_effect(tmp_path, monkeypatch, owner, args, kwargs):
+    import urllib.request
+    monkeypatch.setattr(service, "workspace_root", lambda: tmp_path)
+    before = deepcopy(service._POLICY_WIND_TUNNEL_RUNS)
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("Removed operation must not issue HTTP, start SDK/thread, or mutate run")
+    monkeypatch.setattr(urllib.request, "Request", unexpected)
+    monkeypatch.setattr(urllib.request, "urlopen", unexpected)
+    monkeypatch.setattr(service, "ApiClient", unexpected)
+    monkeypatch.setattr(service.threading, "Thread", unexpected)
+    monkeypatch.setattr(service, "update_policy_run", unexpected)
+    monkeypatch.setattr(service, "append_policy_log", unexpected)
+    with pytest.raises(service.ProtocolError) as error:
+        getattr(service, owner)(*args, **kwargs)
+    assert (error.value.status_code, error.value.code) == (410, "scenario_lab_clock_execution_retired")
+    assert service._POLICY_WIND_TUNNEL_RUNS == before
+    assert list(tmp_path.rglob("*")) == []
