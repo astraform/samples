@@ -2,7 +2,7 @@
 
 This starter connects a real LLM customer in Astraform to a real LLM banking agent over A2A 1.0 JSON-RPC. The customer reads its own bank account through MCP; the partner agent reads the same bank backend through its banking API. Bank records live in this starter's separate PostgreSQL database. Astraform stores simulation state and evidence in its own database.
 
-The published baseline uses **Astraform Platform v0.2.0** and **Python SDK 0.3.2** in the bank/advice images. You need the platform and starter archives, Docker and your model configuration; no private source checkout or host SDK installation is required. A package marked `localVerificationOnly` requires the recorded locally installed images and is an engineering rehearsal, not a public starter release.
+The immutable published baseline uses **Astraform Platform v0.2.0** and **Python SDK 0.3.2** in the bank/advice images. Current source targets **Java SDK 0.4.3 / Python SDK 0.3.3** for newly built local candidates; a source version target does not upgrade an existing image. You need the platform and starter archives, Docker and your model configuration; no private source checkout or host SDK installation is required. A package marked `localVerificationOnly` requires the recorded locally installed images and is an engineering rehearsal, not a public starter release.
 
 The updated local source scenario opts into `completionPolicy.requireCustomerFinish: true`. It requires both the locally updated Experiment service and a customer SDK whose generated completion-policy model preserves this field. Published platform v0.2.0 and Python SDK 0.3.2 do not support it. A customer launcher using SDK 0.3.2 rejects any explicit Boolean value before bank seeding or create/publish/launch writes; it does not add the field through a transport bridge. Inspection of an existing run still uses the published SDK. Existing published images and archives retain their recorded dependency versions. Older `starter-config.json` manifests retain their recorded `requiresUnreleasedCustomerSdk` and `requiredCustomerSdkCapabilities` markers. Published Python SDK 0.3.3 now supplies the native client capability; using it requires a new verified customer installation/image and the supporting platform. Existing archive bytes and recorded image versions are unchanged.
 
@@ -14,7 +14,7 @@ Avery has an already-issued January statement and a budget of AUD 100. The goal 
 
 `scenario.json` contains the persona, goal, initial bank seed, MCP tool allowance, completion conditions and execution limits. It is copied from the existing issued-statement example. The issued-statement defaults permit four partner interactions, ten customer decisions, three repeated exchanges and two hours of wall time. The January statement is seeded before the customer is created; customer identities and tool access are bound by the SDK launch, not chosen by the LLM.
 
-Three prebuilt images run the bank, its PostgreSQL database and the banking agent. The agent image also contains the published Python SDK 0.3.2 and the launch/inspect/export helper. This is an evaluation sample; the banking agent reads current bank records per request and does not claim persistent conversation memory or implement real payment execution.
+Three prebuilt images run the bank, its PostgreSQL database and the banking agent. The agent image contains the launch/inspect/export helper. The historical public v0.1.0 image contains Python SDK 0.3.2; a current candidate must be rebuilt and checked for Python SDK 0.3.3. This is an evaluation sample; the banking agent reads current bank records per request and does not claim persistent conversation memory or implement real payment execution.
 
 ## Download and extract
 
@@ -48,7 +48,7 @@ python3 init.py --platform ../astraform-platform-v0.2.0 --model gemini
 
 Use the actual platform folder name. `--model ollama` selects the partner's local-model template instead. Initialization writes `.env` and `private/partner.env`, creates `runs/`, saves a backup of the platform Runtime connection file and appends the banking MCP/A2A bindings to it. It refuses existing banking bindings so it cannot silently replace your integration. No services or simulations start during initialization.
 
-Edit `private/partner.env`: for Gemini, set `BANKING_LLM_API_KEY`. Customer-model configuration remains in the platform's `private/model.env`; these are separate agents and may use different providers. The supplied partner defaults are Gemini 2.5 Flash or Ollama Qwen3.5 4B. Keep values as unquoted single lines. For a partner model change, update `BANKING_LLM_BINDING_REVISION`, recreate `advice` and use a fresh run. For customer-model or Runtime connection changes, follow the platform guide, update the affected binding revision and recreate `agent-runtime`. Finish existing runs before changing these settings; the new configuration is for fresh launches.
+Edit `private/partner.env`: for Gemini, set `BANKING_LLM_API_KEY`. Customer-model configuration remains in the platform's `private/model.env`; these are separate agents and may use different providers. The current source partner templates select Gemini 3.6 Flash or Ollama Qwen3.5 4B. To use Gemini 3.6 on both sides, select `AI_CHAT_MODEL=gemini-3.6-flash` independently in the platform profile and keep its customer binding key aligned with the scenario. Existing archives and initialized private profiles retain their original values. Keep values as unquoted single lines. For a partner model change, update `BANKING_LLM_BINDING_REVISION`, recreate `advice` and use a fresh run. For customer-model or Runtime connection changes, follow the platform guide, update the affected binding revision and recreate `agent-runtime`. Finish existing runs before changing these settings; the new configuration is for fresh launches.
 
 Start the platform using its guide, then the starter:
 
@@ -68,7 +68,7 @@ If Runtime was already running when you initialized the starter, recreate it to 
 ./astraform.sh up -d --force-recreate --wait agent-runtime
 ```
 
-The starter initializer keeps Gemini at a 150-second A2A request timeout and a 120-second partner deadline. The local Ollama thinking preset uses a finite 840-second partner deadline inside 900-second A2A request and poll deadlines, with a 32,768-token generated output ceiling. Initialization refuses an existing request timeout, and for Ollama also an existing poll timeout, so it preserves private configuration. These limits are separate from the customer model and the scenario's two-hour wall-time limit (7,200,000 ms). A longer HTTP timeout does not itself extend the simulation.
+The current Gemini and Ollama banking templates use `reasoning_effort=high`, a 32,768-token output ceiling, temperature `1.0`, and a finite 840-second partner deadline. Initialization derives request and poll budgets from the selected template's partner deadline plus 60 seconds: the supplied profiles produce `900s` for both. The Runtime target and partner use the same selected binding revision (`banking-starter-gemini36-high-v1` for Gemini). Initialization refuses an existing request or poll timeout before writing anything, and refuses an already initialized starter; it never upgrades or overwrites a private profile. These limits are separate from the customer model and the scenario's two-hour wall-time limit (7,200,000 ms). A longer HTTP timeout does not itself extend the simulation.
 
 The local source Ollama partner preset enables thinking with `BANKING_LLM_REASONING_EFFORT=high`, uses temperature `1.0`, and identifies the configuration as `banking-starter-qwen35-4b-thinking-v8`. To adopt it, build `advice` from the updated source and update both `BANKING_LLM_BINDING_REVISION` and the platform Runtime target's `simulation.event.runtime.a2a.targets.banking-advice.binding-revision`. Review the partner configuration, recreate `advice` and `agent-runtime`, then use a fresh run. Existing published images and private profiles retain their original provenance. The partner bounds the whole upstream response, including reasoning, to 1 MiB and returns only the original final answer (at most 4,096 characters). Thinking does not prove factual accuracy; check the actual answer against its bank records.
 
@@ -92,7 +92,7 @@ Edit `scenario.json` before a new launch. These existing API fields are the conf
 
 The goal is a human purpose; the response conditions check structured bank facts such as the account, statement month, amount and due date. Keep those conditions consistent if you change the seeded bank records. The local `requireCustomerFinish: true` setting also waits for an accepted customer `FINISH` after matching evidence, so a clarification request can continue instead of being cut off by the earlier receipt. It neither forces the customer to finish nor scores whether the partner's prose explains the AU$100 budget correctly; review that in the conversation evidence. Omission retains earlier receipt-only stopping behavior. Explicit false has that same runtime meaning but still requires a typed SDK that preserves the field. The launcher validates the raw Boolean and its typed round-trip, then calls the normal generated journey API; it never drops or manually reinserts the setting.
 
-The helper supplies new catalog/request identities, discovers the configured MCP descriptor and binds the fresh bank context to `customer-a`. Leave the corresponding placeholders in the scenario; the LLM does not select its customer identity or another customer's account. The customer can read only its assigned account context. The partner agent reads the same bank through the backend API, using the host-provided context.
+The launcher supplies new catalog/request identities, discovers the configured MCP descriptor and binds the fresh bank context to `customer-a`. Leave the corresponding placeholders in the scenario; the LLM does not select its customer identity or another customer's account. The customer can read only its assigned account context. The partner agent reads the same bank through the backend API, using the host-provided context.
 
 This scenario uses the `GOAL` completion policy and a fixed logical time. Its bank seed and launch `logicalTimeEpochMs` must match. Extending a horizon alone does not add monthly statement generation or time-progress notifications to this starter.
 
@@ -115,6 +115,35 @@ If the local wait expires, use the saved `runId` to continue reading that run:
 Do not launch again merely because a request timed out. If launch acceptance is uncertain, `launch-request.json` preserves the exact request identity for reconciliation using the SDK/API; the helper refuses to launch into a nonempty output directory. It deliberately does not retry writes. Inspection retries transient read errors at most three times and cannot create another run.
 
 A new intentional experiment uses a new directory such as `/runs/second-run`. Editing `scenario.json` changes future launches only. Keep host-owned customer references out of model-authored messages; use the existing catalog/launch configuration to assign each customer's access.
+
+## Prepare for the existing Java customer SDK client
+
+A Java bank provider and a Python customer launcher are separate SDK boundaries.
+From an extracted, freshly built candidate, prepare the same scenario without
+creating a Catalog definition or launching a Journey:
+
+```sh
+./starter.sh run --rm customer --prepare-only --output /runs/java-prepared
+```
+
+This uses the existing launcher to seed one isolated bank context and discover
+its scoped MCP descriptor. It saves `runs/java-prepared/prepared-scenario.json`
+with top-level `catalog` and `launch` objects, plus the seed and capability
+receipts. Preparation makes partner-bank setup writes, but performs **zero
+Catalog create/publish or Agent Journey launch writes**. It does not execute a
+customer model or manufacture a customer decision. Use a new empty output
+folder for every intentional preparation.
+
+Pass that JSON to the existing downloaded Java `FirstSimulation` client, built
+with the accompanying POM against published Java SDK 0.4.3. Use its documented
+classpath and `launch SCENARIO OUTPUT` command, the extracted platform's public
+origin as `ASTRAFORM_API_BASE`, and a separate new, not-yet-existing Java output directory (for example, `first-run`); do not create it in advance.
+For example, the Java command's scenario argument is the absolute host path
+`/absolute/path/to/starter/runs/java-prepared/prepared-scenario.json`, not the
+container path `/runs/java-prepared`. Use the same client's inspect/resume
+commands to collect evidence from the accepted run; do not prepare or launch a
+replacement after a timeout. The Java client is a separate existing download;
+this starter archive does not embed it or imply a new public release.
 
 ## Read the result
 
@@ -163,10 +192,13 @@ launcher. The monthly scenario omits `requireCustomerFinish` and can use publish
 Python SDK 0.3.2 for launch/inspect/export. The strict issued scenario requires a
 native typed customer SDK that preserves its explicit completion field; its
 client capability is now published in Python SDK 0.3.3, while the supporting
-platform and coordinated image/archive delivery remain pending. These earlier
-candidate images retain Java SDK 0.4.2; current source selects 0.4.3. The customer
-launcher remains Python, so this candidate does
-not prove a Java launch/export client path.
+platform and coordinated image/archive delivery remain pending. Earlier candidate
+images retain their recorded Java 0.4.2 / Python 0.3.2 dependencies. A fresh local
+candidate must verify its assembled Java 0.4.3 / Python 0.3.3 image contents;
+manifest source targets alone do not prove installed versions. The default
+customer launcher remains Python, so running it against a Java bank proves the
+Java provider path, not a Java customer launch/export path. Use the preparation
+route above when verifying the Java customer SDK.
 
 The `monthly` variant copies the existing three-month scenario to`scenario.json`,
 enables `remote-domain.native-reference-state.v1` and installs the existing

@@ -126,7 +126,7 @@ Add these connections to the bundle's `private/runtime.properties`, preserving
 any existing bindings. These examples reach sample services on the Docker host.
 On Linux, host services must listen on an interface reachable from Docker;
 replace `host.docker.internal` with a reachable private address where appropriate.
-The A2A timeout must exceed the agency's request budget. The scenario's separate
+The A2A request/poll budgets must cover the agency's outer deadline. The scenario's separate
 wall-time and interaction limits still apply.
 
 ```properties
@@ -135,9 +135,10 @@ simulation.event.runtime.domain.bindings.marketing-ops.domain-id=marketing-ops
 simulation.event.runtime.domain.bindings.marketing-ops.binding-revision=marketing-ops-native-review-findings-v3
 simulation.event.runtime.domain.bindings.marketing-ops.allow-insecure-http=true
 simulation.event.runtime.a2a.enabled=true
-simulation.event.runtime.a2a.request-timeout=120s
+simulation.event.runtime.a2a.request-timeout=300s
+simulation.event.runtime.a2a.poll-timeout=300s
 simulation.event.runtime.a2a.targets.creative-agency.base-url=http://host.docker.internal:18091
-simulation.event.runtime.a2a.targets.creative-agency.binding-revision=marketing-agency-review-evidence-v2
+simulation.event.runtime.a2a.targets.creative-agency.binding-revision=marketing-starter-gemini36-high-v1
 simulation.event.runtime.a2a.targets.creative-agency.allow-insecure-http=true
 ```
 
@@ -258,19 +259,31 @@ does not establish a shared marketing database.
 
 ### Gemini model selection
 
-For new Gemini runs, select `gemini-3.6-flash` in Astraform's customer profile
-and retain `gemini-2.5-flash` for the Java creative agency. The two bindings are
-independent. After loading the agency's Gemini settings, export:
+For new Gemini runs, select `gemini-3.6-flash` independently in Astraform's
+customer profile and the Java creative agency. After loading the agency's
+endpoint and credentials, export:
 
 ```bash
-export CREATIVE_AGENCY_LLM_MODEL=gemini-2.5-flash
-export CREATIVE_AGENCY_LLM_BINDING_REVISION=marketing-agency-gemini25-flash-review-v2
+export CREATIVE_AGENCY_LLM_MODEL=gemini-3.6-flash
+export CREATIVE_AGENCY_LLM_BINDING_REVISION=marketing-starter-gemini36-high-v1
+export CREATIVE_AGENCY_LLM_REASONING_EFFORT=high
+export CREATIVE_AGENCY_LLM_TOKEN_LIMIT_PARAMETER=max-completion-tokens
+export CREATIVE_AGENCY_LLM_MAX_OUTPUT_TOKENS=16384
+export CREATIVE_AGENCY_LLM_READ_TIMEOUT=120s
+export CREATIVE_AGENCY_LLM_MAX_ATTEMPTS=1
+export CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS=300
 ```
 
 Use the same revision in the Runtime A2A target binding. Restart the agency and Runtime before
 launching a new run. The [agency Gemini profile](../../marketing-ops-creative-agency/README.md#google-gemini-through-its-openai-compatibility-endpoint)
-contains the remaining endpoint and credential settings. Changing either model requires restarting its service and creating a fresh
-simulation; it does not change an accepted run.
+contains the remaining endpoint and credential settings. The two-second connect
+and 120-second read use one attempt within the 300-second agency deadline;
+configure Runtime request and poll budgets to `300s`. These limits differ from
+the banking adapter's larger token/read ceilings. Changing either model requires
+restarting its service and creating a fresh simulation; it does not change an
+accepted run or rewrite an existing private profile. Immutable published images
+retain their recorded versions; a newly built candidate requires its own SDK
+and image verification.
 
 ## Direct protocol 1.0 proof
 

@@ -166,6 +166,157 @@ class CustomerLauncherTest(unittest.TestCase):
                 self.assertFalse(self.output.exists())
 
 
+    def prepare_capabilities(self, binding="banking"):
+        digest = 'sha256:' + 'a' * 64
+        return {'bindingKey': binding, 'bindingRevision': 'actual-v3', 'bindingDigest': digest,
+                'tools': [{'name': 'get_customer_accounts', 'descriptorDigest': digest,
+                           'inputSchemaDigest': digest, 'outputSchemaDigest': digest,
+                           'effectClass': 'READ_ONLY', 'scope': 'CUSTOMER_CONTEXT'}]}
+
+    def test_prepare_only_emits_java_scenario_with_exact_grants_and_no_catalog_or_journey_writes(self):
+        sample = json.loads((DIRECTORY / 'three-month-configuration.json').read_text())
+        sample['catalogDraftRequest']['draft']['tools'][0]['maxCalls'] = 3
+        sample['launchRequestTemplate']['completionPolicy']['requireCustomerFinish'] = True
+        selected = self.output.parent / 'monthly.json'
+        selected.write_text(json.dumps(sample))
+        capabilities = self.prepare_capabilities('banking-scoped')
+        events = MagicMock()
+        events.inspect_public_customer_mcp_capabilities.return_value = document(capabilities)
+        def seed(method, url, body):
+            session = json.loads((self.output / 'session.json').read_text())
+            self.assertEqual(sample['bankCustomerSeed'], body)
+            self.assertTrue(session['scenario']['catalogDraftRequest']['requestId'])
+            self.assertTrue(session['scenario']['launchRequestTemplate']['requestId'])
+            self.assertEqual('PUT', method)
+            self.assertTrue(url.endswith('/contexts/prepared%2Fcontext/customers/customer-z'))
+            return {'seeded': True}
+        with patch.dict(os.environ, {'BANKING_SAMPLE_FILE': str(selected),
+                                    'BANKING_CUSTOMER_BINDING_KEY': 'banking-scoped',
+                                    'BANKING_DOMAIN_BINDING_KEY': 'banking-native',
+                                    'BANKING_CONTEXT_REF': 'prepared/context',
+                                    'BANKING_SUBJECT_REF': 'customer-z',
+                                    'BANKING_PARTNER_TARGET_AGENT_KEY': 'banking-adviser'}), \
+                patch.object(launcher, 'SimulationEventsApi', return_value=events), \
+                patch.object(launcher, 'AgentCatalogApi') as catalog, \
+                patch.object(launcher, 'AgentJourneysApi') as journeys, \
+                patch.object(launcher, 'bank_request', side_effect=seed) as bank:
+            self.assertEqual(0, launcher.main(['--prepare-only', '--output', str(self.output)]))
+            saved = (self.output / 'prepared-scenario.json').read_bytes()
+            with self.assertRaisesRegex(ValueError, 'not empty'):
+                launcher.main(['--prepare-only', '--output', str(self.output)])
+        bank.assert_called_once()
+        events.inspect_public_customer_mcp_capabilities.assert_called_once_with('banking-scoped', _request_timeout=60.0)
+        catalog.assert_not_called()
+        journeys.assert_not_called()
+        prepared = json.loads(saved)
+        self.assertEqual({'catalog', 'launch'}, set(prepared))
+        grant = prepared['catalog']['draft']['tools'][0]
+        descriptor = capabilities['tools'][0]
+        self.assertEqual({'kind': 'MCP', 'toolName': 'get_customer_accounts', 'maxCalls': 3,
+                          **{key: capabilities[key] for key in ('bindingKey', 'bindingRevision', 'bindingDigest')},
+                          **{key: descriptor[key] for key in ('descriptorDigest', 'inputSchemaDigest', 'outputSchemaDigest',
+                                                            'effectClass', 'scope')}}, grant)
+        launch = prepared['launch']
+        self.assertEqual([{'bindingKey': 'banking-scoped', 'contextRef': 'prepared/context',
+                           'subjectRef': 'customer-z'}], launch['toolContexts'])
+        self.assertEqual('banking-native', launch['domain']['bindingKey'])
+        self.assertEqual('banking-scoped', launch['domain']['toolContextBindingKey'])
+        self.assertEqual('banking-adviser', launch['partnerTargetAgentKey'])
+        expected_policy = sample['launchRequestTemplate']['completionPolicy']
+        for condition in expected_policy['partnerResponseConditions']:
+            if condition['pointer'] == '/bankingContext/subjectRef':
+                condition['oneOf'] = ['customer-z']
+        self.assertEqual(expected_policy, launch['completionPolicy'])
+        self.assertIs(True, launch['completionPolicy']['requireCustomerFinish'])
+        self.assertEqual(sample['launchRequestTemplate']['facts'], launch['facts'])
+        self.assertEqual(sample['launchRequestTemplate']['logicalTimeEpochMs'], launch['logicalTimeEpochMs'])
+        self.assertTrue(launch['catalogAgentId'].startswith('<'))
+        session = json.loads((self.output / 'session.json').read_text())
+        self.assertEqual(session['scenario']['catalogDraftRequest']['requestId'], prepared['catalog']['requestId'])
+        self.assertEqual(session['scenario']['launchRequestTemplate']['requestId'], launch['requestId'])
+        self.assertEqual({'seeded': True}, json.loads((self.output / 'bank-seed-response.json').read_text()))
+        self.assertEqual(capabilities, json.loads((self.output / 'capabilities.json').read_text()))
+        self.assertEqual(saved, (self.output / 'prepared-scenario.json').read_bytes())
+        self.assertFalse(any((self.output / name).exists() for name in
+                             ('create-request.json', 'created.json', 'publish-request.json', 'published.json',
+                              'launch-request.json', 'launch.json', 'manifest.json')))
+
+    def test_prepare_only_cli_rejects_missing_output_wait_and_inspect_before_any_client(self):
+        for arguments in (['--prepare-only'], ['--prepare-only', '--wait', '--output', str(self.output)],
+                          ['--prepare-only', '--inspect', 'run-1', '--output', str(self.output)]):
+            with self.subTest(arguments=arguments), patch.object(launcher, 'ApiClient') as client, \
+                    patch.object(launcher, 'bank_request') as bank:
+                with self.assertRaises(SystemExit) as raised:
+                    launcher.main(arguments)
+                self.assertEqual(2, raised.exception.code)
+                client.assert_not_called()
+                bank.assert_not_called()
+        self.assertFalse(self.output.exists())
+
+    def test_prepare_only_requires_native_strict_support_before_any_effect(self):
+        policy = json.loads((DIRECTORY / 'issued-statement-configuration.json').read_text())['launchRequestTemplate']['completionPolicy']
+        policy.pop('requireCustomerFinish')
+        unsupported = AgentJourneyGoalCompletionPolicy.from_dict(policy)
+        with patch.object(launcher.AgentJourneyGoalCompletionPolicy, 'from_dict', return_value=unsupported), \
+                patch.object(launcher, 'SimulationEventsApi') as events, \
+                patch.object(launcher, 'AgentCatalogApi') as catalog, \
+                patch.object(launcher, 'AgentJourneysApi') as journeys, \
+                patch.object(launcher, 'bank_request') as bank:
+            with self.assertRaisesRegex(ValueError, 'cannot preserve completionPolicy.requireCustomerFinish'):
+                launcher.main(['--prepare-only', '--output', str(self.output)])
+        bank.assert_not_called()
+        events.assert_not_called()
+        catalog.assert_not_called()
+        journeys.assert_not_called()
+        self.assertFalse(self.output.exists())
+
+    def test_prepare_only_preserves_uncertain_seed_and_refuses_another_attempt(self):
+        with patch.object(launcher, 'bank_request', side_effect=launcher.URLError('response unknown')) as bank, \
+                patch.object(launcher, 'SimulationEventsApi') as events, \
+                patch.object(launcher, 'AgentCatalogApi') as catalog, \
+                patch.object(launcher, 'AgentJourneysApi') as journeys:
+            with self.assertRaises(launcher.URLError):
+                launcher.main(['--prepare-only', '--output', str(self.output)])
+            session = (self.output / 'session.json').read_bytes()
+            seed_request = (self.output / 'bank-seed-request.json').read_bytes()
+            with self.assertRaisesRegex(ValueError, 'not empty'):
+                launcher.main(['--prepare-only', '--output', str(self.output)])
+        bank.assert_called_once()
+        events.assert_not_called()
+        catalog.assert_not_called()
+        journeys.assert_not_called()
+        self.assertEqual(session, (self.output / 'session.json').read_bytes())
+        self.assertEqual(seed_request, (self.output / 'bank-seed-request.json').read_bytes())
+        self.assertFalse((self.output / 'prepared-scenario.json').exists())
+
+    def test_prepare_only_rejects_untrusted_or_ambiguous_mcp_grant_without_platform_writes(self):
+        variants = []
+        for key, value in (('effectClass', 'STATE_WRITE'), ('scope', 'GLOBAL'), ('descriptorDigest', '<unresolved>')):
+            capabilities = self.prepare_capabilities()
+            capabilities['tools'][0][key] = value
+            variants.append(capabilities)
+        duplicate = self.prepare_capabilities()
+        duplicate['tools'].append(dict(duplicate['tools'][0]))
+        variants.append(duplicate)
+        variants.append(self.prepare_capabilities('other-binding'))
+        for index, capabilities in enumerate(variants):
+            output = self.output.parent / ('invalid-grant-' + str(index))
+            events = MagicMock()
+            events.inspect_public_customer_mcp_capabilities.return_value = document(capabilities)
+            with self.subTest(capabilities=capabilities), \
+                    patch.object(launcher, 'bank_request', return_value={}), \
+                    patch.object(launcher, 'SimulationEventsApi', return_value=events), \
+                    patch.object(launcher, 'AgentCatalogApi') as catalog, \
+                    patch.object(launcher, 'AgentJourneysApi') as journeys:
+                with self.assertRaises(ValueError):
+                    launcher.main(['--prepare-only', '--output', str(output)])
+            catalog.assert_not_called()
+            journeys.assert_not_called()
+            self.assertFalse((output / 'prepared-scenario.json').exists())
+            self.assertEqual(capabilities, json.loads((output / 'capabilities.json').read_text()))
+
+
+
 @contextlib.contextmanager
 def journey_http_fixture(status=202):
     """Owned loopback HTTP boundary; no platform, bank or model service is used."""
@@ -259,7 +410,7 @@ class JourneyLaunchTransportTest(unittest.TestCase):
         with patch.dict(os.environ, {'BANKING_SAMPLE_FILE': str(selected)}), \
                 patch.object(launcher, 'AgentCatalogApi', return_value=catalog), \
                 patch.object(launcher, 'SimulationEventsApi', return_value=events), \
-                patch.object(launcher, 'bank_request') as bank:
+                patch.object(launcher, 'bank_request', return_value={}) as bank:
             yield output, catalog, events, bank
 
     def assert_native_launch_body(self, requests, output, result, finish='omitted'):

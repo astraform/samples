@@ -40,12 +40,21 @@ def initialize(platform, model):
                  "simulation.event.runtime.a2a.request-timeout", "simulation.event.runtime.a2a.poll-timeout")
     if any(line.startswith(conflicts) for line in active):
         raise ValueError("Platform already has marketing bindings or an A2A timeout; preserve it and configure manually")
+    profile_path = ROOT / f"models/{model}.env.example"
+    partner = profile_path.read_text()
+    profile = env(profile_path)
+    agent_timeout = int(profile.get("CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS", "140"))
+    if not 1 <= agent_timeout <= 300:
+        raise ValueError("CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS must be between 1 and 300")
+    # Preserve the 150s Ollama budget; cover a longer configured agency deadline.
+    timeout = f"{max(150, agent_timeout)}s"
     name = "astraform-marketing-" + secrets.token_hex(5)
     token = secrets.token_hex(32)
-    revision = name + "-v1"
+    revision = profile.get("CREATIVE_AGENCY_LLM_BINDING_REVISION", name + "-v1")
+    if not re.fullmatch(r"[A-Za-z0-9._:/-]{1,160}", revision):
+        raise ValueError("Invalid partner binding revision in selected model profile")
     schema = json.dumps(json.loads((ROOT / "input.schema.json").read_text()), separators=(",", ":"))
     schema = schema.replace(chr(92), chr(92) * 2)
-    timeout = "150s"  # Agency adapter permits at most 120s model reads; both profiles fit.
     bindings = "\n# Marketing starter: " + name + "\n" + "\n".join([
         f"simulation.event.runtime.domain.bindings.marketing-ops.base-url=http://{name}-domain:8090",
         "simulation.event.runtime.domain.bindings.marketing-ops.domain-id=marketing-ops",
@@ -69,8 +78,9 @@ def initialize(platform, model):
         raise ValueError("Partial starter configuration exists; inspect private/ before retrying")
     deployment = {"COMPOSE_PROJECT_NAME": name, "ASTRAFORM_NETWORK": project + "_default",
                   "LOCAL_UID": str(os.getuid()), "LOCAL_GID": str(os.getgid())}
-    partner = (ROOT / f"models/{model}.env.example").read_text()
-    partner += f"\nCREATIVE_AGENCY_A2A_TOKEN={token}\nCREATIVE_AGENCY_LLM_BINDING_REVISION={revision}\n"
+    partner += f"\nCREATIVE_AGENCY_A2A_TOKEN={token}\n"
+    if "CREATIVE_AGENCY_LLM_BINDING_REVISION" not in profile:
+        partner += f"CREATIVE_AGENCY_LLM_BINDING_REVISION={revision}\n"
     contents = ["".join(f"{key}={value}\n" for key, value in deployment.items()), partner, existing, bindings,
                 json.dumps({"platformDirectory": str(platform), "project": project,
                             "starterProject": name, "partnerModelProfile": model,

@@ -180,15 +180,26 @@ export CREATIVE_AGENCY_LLM_PROVIDER_ID=google-gemini
 export CREATIVE_AGENCY_LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
 export CREATIVE_AGENCY_LLM_AUTH_TYPE=bearer
 export CREATIVE_AGENCY_LLM_API_KEY="$GEMINI_API_KEY"
-export CREATIVE_AGENCY_LLM_MODEL=gemini-2.5-flash
-export CREATIVE_AGENCY_LLM_BINDING_REVISION=marketing-agency-gemini25-flash-review-v2
-export CREATIVE_AGENCY_LLM_TOKEN_LIMIT_PARAMETER=omit
+export CREATIVE_AGENCY_LLM_MODEL=gemini-3.6-flash
+export CREATIVE_AGENCY_LLM_BINDING_REVISION=marketing-starter-gemini36-high-v1
+export CREATIVE_AGENCY_LLM_REASONING_EFFORT=high
+export CREATIVE_AGENCY_LLM_TOKEN_LIMIT_PARAMETER=max-completion-tokens
+export CREATIVE_AGENCY_LLM_MAX_OUTPUT_TOKENS=16384
+export CREATIVE_AGENCY_LLM_READ_TIMEOUT=120s
+export CREATIVE_AGENCY_LLM_MAX_ATTEMPTS=1
+export CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS=300
 ```
 
-This supplied Gemini profile omits the output-token field. Select a token
-field only when supported by your chosen model/API revision; an omitted field
-means `CREATIVE_AGENCY_LLM_MAX_OUTPUT_TOKENS` does not cap that request. The raw
-response-byte limit remains enforced locally.
+The current Gemini profile sends `max_completion_tokens=16384` with high
+reasoning. Its two-second connect and 120-second read use one attempt inside
+the 300-second agency deadline. Set Runtime A2A request and poll budgets to
+`300s`, and use the same binding revision there. These are the agency adapter's
+bounds; do not copy banking's 32,768-token/840-second settings. The raw
+response-byte limit remains enforced locally. The customer model is configured
+independently in the platform's `private/model.env`; choose
+`AI_CHAT_MODEL=gemini-3.6-flash` there for Gemini on both roles. Existing private
+profiles, published images and accepted runs retain their original provenance;
+rebuild and verify a fresh candidate before adopting source changes.
 
 ### Ollama on the same machine
 

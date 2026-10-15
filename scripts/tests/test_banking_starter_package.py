@@ -319,19 +319,42 @@ class BankingStarterInitializationTest(unittest.TestCase):
         self.assertFalse((self.root / ".env").exists())
         self.assertFalse((self.root / "private").exists())
 
-    def test_gemini_settings_and_existing_poll_timeout_remain_unchanged(self):
-        existing = self.original + "simulation.event.runtime.a2a.poll-timeout=90s\n"
-        self.runtime.write_text(existing)
+    def test_gemini_thinking_profile_sets_matching_revision_and_bounded_request_and_poll(self):
         self.initializer.initialize(self.platform, "gemini")
         partner = self.initializer.env(self.root / "private/partner.env")
-        bindings = (self.root / "private/runtime-bindings.properties").read_text()
-        self.assertIn("simulation.event.runtime.a2a.request-timeout=150s\n", bindings)
-        self.assertNotIn("simulation.event.runtime.a2a.poll-timeout=", bindings)
-        self.assertEqual("120", partner["BANKING_LLM_TIMEOUT_SECONDS"])
-        self.assertEqual("2048", partner["BANKING_LLM_MAX_OUTPUT_TOKENS"])
-        self.assertEqual("none", partner["BANKING_LLM_REASONING_EFFORT"])
-        self.assertTrue(self.runtime.read_text().startswith(existing))
-        self.assertEqual(existing, (self.root / "private/runtime.properties.before-starter").read_text())
+        bindings = self.initializer.env(self.root / "private/runtime-bindings.properties")
+        self.assertEqual("900s", bindings["simulation.event.runtime.a2a.request-timeout"])
+        self.assertEqual("900s", bindings["simulation.event.runtime.a2a.poll-timeout"])
+        self.assertEqual("gemini-3.6-flash", partner["BANKING_LLM_MODEL"])
+        self.assertEqual("840", partner["BANKING_LLM_TIMEOUT_SECONDS"])
+        self.assertEqual("32768", partner["BANKING_LLM_MAX_OUTPUT_TOKENS"])
+        self.assertEqual("high", partner["BANKING_LLM_REASONING_EFFORT"])
+        self.assertEqual("1.0", partner["BANKING_LLM_TEMPERATURE"])
+        self.assertEqual(partner["BANKING_LLM_BINDING_REVISION"],
+                         bindings["simulation.event.runtime.a2a.targets.banking-advice.binding-revision"])
+        self.assertEqual(self.original, (self.root / "private/runtime.properties.before-starter").read_text())
+
+    def test_gemini_existing_poll_timeout_is_preserved_before_any_starter_write(self):
+        existing = self.original + "simulation.event.runtime.a2a.poll-timeout=90s\n"
+        self.runtime.write_text(existing)
+        with self.assertRaisesRegex(ValueError, "already has an A2A poll timeout"):
+            self.initializer.initialize(self.platform, "gemini")
+        self.assertEqual(existing, self.runtime.read_text())
+        self.assertFalse((self.root / ".env").exists())
+        self.assertFalse((self.root / "private").exists())
+
+    def test_a2a_budget_and_binding_revision_follow_selected_profile(self):
+        profile_path = self.root / "models/gemini.env.example"
+        profile_path.write_text(profile_path.read_text().replace("TIMEOUT_SECONDS=840", "TIMEOUT_SECONDS=240")
+                                .replace("banking-starter-gemini36-high-v1", "operator-reviewed-gemini-v2"))
+        self.initializer.initialize(self.platform, "gemini")
+        partner = self.initializer.env(self.root / "private/partner.env")
+        bindings = self.initializer.env(self.root / "private/runtime-bindings.properties")
+        self.assertEqual("300s", bindings["simulation.event.runtime.a2a.request-timeout"])
+        self.assertEqual("300s", bindings["simulation.event.runtime.a2a.poll-timeout"])
+        self.assertEqual("operator-reviewed-gemini-v2", partner["BANKING_LLM_BINDING_REVISION"])
+        self.assertEqual(partner["BANKING_LLM_BINDING_REVISION"],
+                         bindings["simulation.event.runtime.a2a.targets.banking-advice.binding-revision"])
 
     def test_compose_uses_saved_project_and_images_even_for_down(self):
         self.initializer.initialize(self.platform, "gemini")

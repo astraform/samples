@@ -1,4 +1,4 @@
-"""Launch one banking customer, or inspect the same run through the typed SDK."""
+"""Prepare or launch one banking customer, or inspect its run through the typed SDK."""
 
 import argparse
 import importlib.util
@@ -43,9 +43,10 @@ def bank_request(method, url, body=None):
         raise SystemExit(f"{method} {url}: HTTP {error.code}: {error.read().decode()}") from None
 
 
-def launch(client, api, output):
+def launch(client, api, output, prepare_only=False):
+    if prepare_only and output is None:
+        raise ValueError("--prepare-only requires --output")
     directory = Path(__file__).resolve().parent
-    catalog_api = AgentCatalogApi(client)
     bank = os.environ.get("BANKING_BACKEND_URL", "http://localhost:8098").rstrip("/")
     binding = os.environ.get("BANKING_CUSTOMER_BINDING_KEY", "banking")
     domain_binding = os.environ.get("BANKING_DOMAIN_BINDING_KEY", "banking-reference")
@@ -90,17 +91,49 @@ def launch(client, api, output):
                        "subjectRef": subject, "scenario": sample}, record, indent=2)
             record.write("\n")
         evidence.save(output, "bank-seed-request.json", {"contextRef": context, "subjectRef": subject, "body": seed})
-    bank_request("PUT", bank + "/api/banking/v1/contexts/" + quote(context, safe="")
+    seeded = bank_request("PUT", bank + "/api/banking/v1/contexts/" + quote(context, safe="")
             + "/customers/" + quote(subject, safe=""), seed)
+    evidence.save(output, "bank-seed-response.json", seeded)
 
     capabilities = json.loads(SimulationEventsApi(client).inspect_public_customer_mcp_capabilities(
         binding, _request_timeout=60.0).to_json())
-    descriptor = next(tool for tool in capabilities["tools"] if tool["name"] == "get_customer_accounts")
+    evidence.save(output, "capabilities.json", capabilities)
+    descriptors = [tool for tool in capabilities["tools"] if tool.get("name") == "get_customer_accounts"]
+    if len(descriptors) != 1 or capabilities.get("bindingKey") != binding:
+        raise ValueError("Expected one get_customer_accounts descriptor for the configured MCP binding")
+    descriptor = descriptors[0]
+    if descriptor.get("effectClass") != "READ_ONLY" or descriptor.get("scope") != "CUSTOMER_CONTEXT":
+        raise ValueError("get_customer_accounts must be READ_ONLY and CUSTOMER_CONTEXT scoped")
+    binding_fields = ("bindingKey", "bindingRevision", "bindingDigest")
+    descriptor_fields = ("descriptorDigest", "inputSchemaDigest", "outputSchemaDigest", "effectClass", "scope")
+    for metadata, names in ((capabilities, binding_fields), (descriptor, descriptor_fields)):
+        if any(not isinstance(metadata.get(name), str) or not metadata[name] or "<" in metadata[name]
+               for name in names):
+            raise ValueError("MCP capability metadata must contain resolved binding and descriptor identities")
     grant = {"kind": "MCP", "toolName": descriptor["name"], "maxCalls": max_calls,
-             **{key: capabilities[key] for key in ("bindingKey", "bindingRevision", "bindingDigest")},
-             **{key: descriptor[key] for key in ("descriptorDigest", "inputSchemaDigest", "outputSchemaDigest",
-                                               "effectClass", "scope")}}
+             **{key: capabilities[key] for key in binding_fields},
+             **{key: descriptor[key] for key in descriptor_fields}}
     catalog["draft"]["tools"] = [grant]
+    launch_request = sample["launchRequestTemplate"]
+    launch_request["toolContexts"] = [{"bindingKey": binding, "contextRef": context, "subjectRef": subject}]
+    partner_target = os.environ.get("BANKING_PARTNER_TARGET_AGENT_KEY")
+    if partner_target:
+        launch_request["partnerTargetAgentKey"] = partner_target
+    if "domain" in launch_request:
+        launch_request["domain"].update({"bindingKey": domain_binding, "toolContextBindingKey": binding})
+    for condition in launch_request["completionPolicy"]["partnerResponseConditions"]:
+        if condition["pointer"] == "/bankingContext/subjectRef":
+            condition["oneOf"] = [subject]
+    if prepare_only:
+        # The normal Java SDK caller owns all subsequent Catalog and Journey writes.
+        prepared = {"catalog": catalog, "launch": launch_request}
+        evidence.save(output, "prepared-scenario.json", prepared)
+        print(json.dumps({"preparedScenario": str(output / "prepared-scenario.json"),
+                          "contextRef": context, "subjectRef": subject,
+                          "catalogOrJourneyWrites": 0}, indent=2))
+        return prepared
+
+    catalog_api = AgentCatalogApi(client)
     evidence.save(output, "create-request.json", catalog)
     definition = json.loads(catalog_api.create_agent_definition(
         AgentDefinitionCreateRequest.from_dict(catalog), _request_timeout=60.0).to_json())["definition"]
@@ -112,28 +145,18 @@ def launch(client, api, output):
         definition["catalogAgentId"], AgentDefinitionPublishRequest.from_dict(publish_request),
         _request_timeout=60.0).to_json())["revision"]
     evidence.save(output, "published.json", published)
-    launch = sample["launchRequestTemplate"]
-    launch.update({"catalogAgentId": definition["catalogAgentId"],
-                   "catalogRevisionId": published["catalogRevisionId"],
-                   "catalogDefinitionDigest": published["catalogDefinitionDigest"],
-                   "toolContexts": [{"bindingKey": binding, "contextRef": context, "subjectRef": subject}]})
-    partner_target = os.environ.get("BANKING_PARTNER_TARGET_AGENT_KEY")
-    if partner_target:
-        launch["partnerTargetAgentKey"] = partner_target
-    if "domain" in launch:
-        launch["domain"].update({"bindingKey": domain_binding, "toolContextBindingKey": binding})
-    for condition in launch["completionPolicy"]["partnerResponseConditions"]:
-        if condition["pointer"] == "/bankingContext/subjectRef":
-            condition["oneOf"] = [subject]
-    evidence.save(output, "launch-request.json", launch)
-    print(json.dumps({"launchRequest": launch}, indent=2), flush=True)
+    launch_request.update({"catalogAgentId": definition["catalogAgentId"],
+                           "catalogRevisionId": published["catalogRevisionId"],
+                           "catalogDefinitionDigest": published["catalogDefinitionDigest"]})
+    evidence.save(output, "launch-request.json", launch_request)
+    print(json.dumps({"launchRequest": launch_request}, indent=2), flush=True)
     result = json.loads(AgentJourneysApi(client).launch_agent_journey(
-        AgentJourneyLaunchRequest.from_dict(launch), _request_timeout=60.0).to_json())
+        AgentJourneyLaunchRequest.from_dict(launch_request), _request_timeout=60.0).to_json())
     evidence.save(output, "launch.json", result)
     evidence.save(output, "manifest.json", {"apiBase": api, "runId": result["runId"],
                                   "catalogAgentId": definition["catalogAgentId"],
                                   "catalogRevisionId": published["catalogRevisionId"],
-                                  "launchRequestId": launch["requestId"],
+                                  "launchRequestId": launch_request["requestId"],
                                   "contextRef": context, "subjectRef": subject})
     print(json.dumps({"catalogAgentId": definition["catalogAgentId"],
                       "catalogRevisionId": published["catalogRevisionId"], "launch": result}, indent=2))
@@ -143,12 +166,16 @@ def launch(client, api, output):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, help="Save requests and evidence; use an empty directory for a new launch")
+    parser.add_argument("--prepare-only", action="store_true",
+                        help="Seed the bank and resolve SDK tool grants for a Java caller; do not create or launch a customer")
     parser.add_argument("--wait", action="store_true", help="Wait for this run and its terminal evidence export")
     parser.add_argument("--inspect", metavar="RUN_ID", help="Read an existing run; never seed, create, publish or launch")
     parser.add_argument("--timeout", type=float, default=8220, help="Maximum inspection/wait seconds (default: 8220)")
     args = parser.parse_args(argv)
-    if (args.wait or args.inspect) and args.output is None:
-        parser.error("--wait and --inspect require --output")
+    if args.prepare_only and (args.wait or args.inspect):
+        parser.error("--prepare-only cannot be combined with --wait or --inspect")
+    if (args.wait or args.inspect or args.prepare_only) and args.output is None:
+        parser.error("--wait, --inspect and --prepare-only require --output")
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout must be a positive finite number of seconds")
     api = os.environ.get("ASTRAFORM_API_BASE", "http://localhost:8484").rstrip("/")
@@ -158,6 +185,9 @@ def main(argv=None):
             api = api[:-len(suffix)]
             break
     with ApiClient(Configuration(host=api, retries=0)) as client:
+        if args.prepare_only:
+            launch(client, api, args.output, prepare_only=True)
+            return 0
         run_id = args.inspect
         if run_id is None:
             accepted = launch(client, api, args.output)

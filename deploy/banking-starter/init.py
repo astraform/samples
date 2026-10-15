@@ -1,6 +1,7 @@
 """Connect the banking starter to a fresh, initialized Astraform bundle."""
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -62,12 +63,22 @@ def initialize(platform, model):
     if any(line.startswith(timeout_key) for line in active):
         raise ValueError("Platform already has an A2A timeout; preserve it and configure this starter manually")
     poll_timeout_key = "simulation.event.runtime.a2a.poll-timeout"
-    if model == "ollama" and any(line.startswith(poll_timeout_key) for line in active):
+    if any(line.startswith(poll_timeout_key) for line in active):
         raise ValueError("Platform already has an A2A poll timeout; preserve it and configure this starter manually")
+    profile_path = ROOT / f"models/{model}.env.example"
+    partner = profile_path.read_text()
+    profile = env(profile_path)
+    partner_timeout = float(profile.get("BANKING_LLM_TIMEOUT_SECONDS", "120"))
+    if not 1 <= partner_timeout <= 900:
+        raise ValueError("BANKING_LLM_TIMEOUT_SECONDS must be between 1 and 900")
+    # Reserve time for the bank read and A2A response around the model deadline.
+    timeout = f"{math.ceil(partner_timeout) + 60}s"
     name = "astraform-bank-" + secrets.token_hex(5)
     schema = json.dumps(json.loads((ROOT / "bank-backend.input.schema.json").read_text()), separators=(",", ":"))
     schema = schema.replace(chr(92), chr(92) * 2)
-    revision = name + "-v1"
+    revision = profile["BANKING_LLM_BINDING_REVISION"]
+    if not re.fullmatch(r"[A-Za-z0-9._:/-]{1,160}", revision):
+        raise ValueError("Invalid partner binding revision in selected model profile")
     bindings = "\n# Banking starter: " + name + "\n" + "\n".join([
         f"simulation.event.runtime.mcp.bindings.banking.endpoint=http://{name}-bank:{port}/mcp",
         f"simulation.event.runtime.mcp.bindings.banking.binding-revision={revision}",
@@ -83,8 +94,8 @@ def initialize(platform, model):
             f"simulation.event.runtime.domain.bindings.banking-reference.binding-revision={revision}",
             "simulation.event.runtime.domain.bindings.banking-reference.allow-insecure-http=true",
         ] if monthly else []),
-        f"{timeout_key}={'900s' if model == 'ollama' else '150s'}",
-        *([f"{poll_timeout_key}=900s"] if model == "ollama" else []),
+        f"{timeout_key}={timeout}",
+        f"{poll_timeout_key}={timeout}",
     ]) + "\n"
     private = ROOT / "private"
     private.mkdir(mode=0o700, exist_ok=True)
@@ -104,7 +115,7 @@ def initialize(platform, model):
     if any(path.exists() for path in paths):
         raise ValueError("Partial starter configuration exists; inspect private/ before retrying")
     contents = ["".join(f"{key}={value}\n" for key, value in deployment.items()),
-                (ROOT / f"models/{model}.env.example").read_text(), existing, bindings,
+                partner, existing, bindings,
                 json.dumps({"platformDirectory": str(platform), "project": project,
                             "starterProject": name, "partnerModelProfile": model,
                             "starterConfiguration": configuration}, indent=2) + "\n"]

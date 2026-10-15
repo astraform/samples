@@ -90,25 +90,36 @@ reuse the existing marketing scenarios and native domain provider. The scheduled
 horizon extends to 2026-01-16 10:00 UTC, while the current variant has a fixed
 boundary. These are evaluation bounds, not month/year capacity claims.
 
-The goal conditions check a qualifying partner receipt. They do not verify the
-advice's factual quality, require a later customer FINISH, or prove that the
-external production studio supplied its missing licence. Inspect the domain
-observations, actual advice, customer decisions and stop reason separately.
+Both current scenarios require a qualifying partner receipt **and a later
+accepted customer FINISH** through `completionPolicy.requireCustomerFinish:true`.
+A selected customer follow-up remains eligible for dispatch after the first
+qualifying reply. These conditions do not verify the advice's factual quality or
+prove that the external production studio supplied its missing licence. Inspect
+the domain observations, actual advice, customer decisions and stop reason separately.
 A model mistake remains in evidence; there is no scripted customer or fallback.
 
-The supplied agency templates preserve the existing Gemini 2.5 and Ollama Qwen3.5
-4B marketing profiles; they do not select the customer's model or apply the
-banking thinking profile. For an explicit partner model change, update
+The current agency templates select Gemini 3.6 Flash with high reasoning or
+retain the existing nonthinking Ollama Qwen3.5 4B marketing option. They do not
+select the customer's model. For Gemini on both roles, independently set
+`AI_CHAT_MODEL=gemini-3.6-flash` in the platform's customer profile. Existing
+archives and initialized private profiles retain their recorded settings. For an
+explicit partner model change, update
 `CREATIVE_AGENCY_LLM_BINDING_REVISION` and the matching Runtime target revision,
 recreate both services and start a fresh run. Accepted runs keep their provenance.
 Other provider settings are documented in the existing Creative Agency guide.
 
 The agency allows output caps 64–16,384 tokens, model reads up to 120 seconds and
-agent deadlines up to 300 seconds. Supplied Gemini uses 120 seconds/140 seconds;
-Ollama uses 90 seconds/110 seconds, and both fit the Runtime 150-second request/poll
-budgets. Gemini's existing `token-limit-parameter=omit` profile sends no token
-ceiling; the local raw response limit still applies. Do not copy banking's32,768
-output or840-second partner timeout into this adapter.
+agent deadlines up to 300 seconds. Gemini uses `reasoning_effort=high`,
+`max-completion-tokens`, a 16,384-token ceiling, a 120-second read and a 300-second
+outer agent deadline. Compose uses one model attempt and the adapter's two-second
+connect default; these fit within the outer budget. Initialization derives
+Runtime request/poll timeouts from that selected outer deadline with a
+150-second floor: Gemini uses `300s`, while the unchanged Ollama profile uses
+90-second reads, a 110-second outer deadline and `150s` request/poll budgets.
+The selected Gemini revision `marketing-starter-gemini36-high-v1` matches the
+Runtime target; initialized profiles are not rewritten. These are bounded
+settings, not duration or answer-quality guarantees. Do not copy banking's
+32,768-token output or 840-second partner read limit into this adapter.
 
 Stop only this starter's services with `./starter.sh down`. Its domain checkpoint
 and agency task/history state are in memory; it does not provide a durable shared

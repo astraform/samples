@@ -178,7 +178,14 @@ class MarketingStarterInitializationTest(unittest.TestCase):
         self.assertEqual(partner["CREATIVE_AGENCY_A2A_TOKEN"], bindings["simulation.event.runtime.a2a.targets.creative-agency.token"])
         self.assertEqual(64, len(partner["CREATIVE_AGENCY_A2A_TOKEN"]))
         self.assertEqual(partner["CREATIVE_AGENCY_LLM_BINDING_REVISION"], bindings["simulation.event.runtime.a2a.targets.creative-agency.binding-revision"])
-        self.assertEqual("150s", bindings["simulation.event.runtime.a2a.request-timeout"])
+        self.assertEqual("300s", bindings["simulation.event.runtime.a2a.request-timeout"])
+        self.assertEqual("300s", bindings["simulation.event.runtime.a2a.poll-timeout"])
+        self.assertEqual("gemini-3.6-flash", partner["CREATIVE_AGENCY_LLM_MODEL"])
+        self.assertEqual("high", partner["CREATIVE_AGENCY_LLM_REASONING_EFFORT"])
+        self.assertEqual("max-completion-tokens", partner["CREATIVE_AGENCY_LLM_TOKEN_LIMIT_PARAMETER"])
+        self.assertEqual("16384", partner["CREATIVE_AGENCY_LLM_MAX_OUTPUT_TOKENS"])
+        self.assertEqual("120s", partner["CREATIVE_AGENCY_LLM_READ_TIMEOUT"])
+        self.assertEqual("300", partner["CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS"])
         self.assertEqual(inode, self.runtime.stat().st_ino)
         self.assertEqual(self.original, (self.starter / "private/runtime.properties.before-starter").read_text())
         for file in (self.starter / "private").iterdir():
@@ -188,6 +195,33 @@ class MarketingStarterInitializationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "already initialized"):
             initializer.initialize(self.platform, "ollama")
         self.assertEqual(before, self.runtime.read_bytes())
+
+    def test_a2a_budget_and_revision_follow_selected_profile(self):
+        profile_path = self.starter / "models/gemini.env.example"
+        profile_path.write_text(profile_path.read_text().replace("TIMEOUT_SECONDS=300", "TIMEOUT_SECONDS=240")
+                                .replace("marketing-starter-gemini36-high-v1", "operator-reviewed-gemini-v2"))
+        initializer.initialize(self.platform, "gemini")
+        partner = initializer.env(self.starter / "private/partner.env")
+        bindings = initializer.env(self.starter / "private/runtime-bindings.properties")
+        self.assertEqual("240s", bindings["simulation.event.runtime.a2a.request-timeout"])
+        self.assertEqual("240s", bindings["simulation.event.runtime.a2a.poll-timeout"])
+        self.assertEqual("operator-reviewed-gemini-v2", partner["CREATIVE_AGENCY_LLM_BINDING_REVISION"])
+        self.assertEqual(partner["CREATIVE_AGENCY_LLM_BINDING_REVISION"],
+                         bindings["simulation.event.runtime.a2a.targets.creative-agency.binding-revision"])
+
+    def test_ollama_profile_and_a2a_bounds_remain_unchanged(self):
+        initializer.initialize(self.platform, "ollama")
+        partner = initializer.env(self.starter / "private/partner.env")
+        bindings = initializer.env(self.starter / "private/runtime-bindings.properties")
+        self.assertEqual("qwen3.5:4b", partner["CREATIVE_AGENCY_LLM_MODEL"])
+        self.assertEqual("none", partner["CREATIVE_AGENCY_LLM_REASONING_EFFORT"])
+        self.assertEqual("2048", partner["CREATIVE_AGENCY_LLM_MAX_OUTPUT_TOKENS"])
+        self.assertEqual("90s", partner["CREATIVE_AGENCY_LLM_READ_TIMEOUT"])
+        self.assertEqual("110", partner["CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS"])
+        self.assertEqual("150s", bindings["simulation.event.runtime.a2a.request-timeout"])
+        self.assertEqual("150s", bindings["simulation.event.runtime.a2a.poll-timeout"])
+        self.assertEqual(partner["CREATIVE_AGENCY_LLM_BINDING_REVISION"],
+                         bindings["simulation.event.runtime.a2a.targets.creative-agency.binding-revision"])
 
     def test_existing_domain_a2a_and_timeout_settings_are_never_overwritten(self):
         for conflict in ("simulation.event.runtime.domain.bindings.marketing-ops.base-url=x",

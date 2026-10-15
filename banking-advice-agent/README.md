@@ -132,15 +132,22 @@ do not put it in a tracked file:
 
 ```bash
 export BANKING_LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
-export BANKING_LLM_MODEL=gemini-2.5-flash
+export BANKING_LLM_MODEL=gemini-3.6-flash
 export BANKING_LLM_AUTH_TYPE=bearer
 export BANKING_LLM_API_KEY="$GEMINI_API_KEY"
-export BANKING_LLM_BINDING_REVISION=bank-gemini25-flash-v1
-export BANKING_LLM_REASONING_EFFORT=none
+export BANKING_LLM_BINDING_REVISION=banking-starter-gemini36-high-v1
+export BANKING_LLM_REASONING_EFFORT=high
+export BANKING_LLM_MAX_OUTPUT_TOKENS=32768
+export BANKING_LLM_TIMEOUT_SECONDS=840
+export BANKING_LLM_TEMPERATURE=1.0
+export BANKING_LLM_MAX_CONCURRENCY=1
 ```
 
-This partner example uses `gemini-2.5-flash`. The platform bundle's customer
-profile independently defaults to `gemini-3.6-flash`; the two need not match.
+This current source partner example uses `gemini-3.6-flash`. Select the same
+model independently in the platform's `private/model.env` for a both-role
+Gemini run; the partner variables do not configure the customer. Rebuild current
+candidate images to adopt this profile. Historical published archives and
+initialized private profiles retain their original versions and settings.
 
 The same client can be configured for Ollama's OpenAI-compatible endpoint:
 
@@ -202,10 +209,11 @@ change and update the Astraform A2A target binding revision before launching a n
 
 The guarded bank read has a separate ten-second deadline. Configure Astraform's
 `simulation.event.runtime.a2a.request-timeout` above the bank + model deadlines;
-use `150s` with the defaults, and raise it if using a slower local model. This is
-separate from Astraform's customer-model timeout. The Ollama thinking preset uses
+use `150s` only with the adapter's 120-second default. The supplied current
+Gemini profile and Ollama thinking preset instead use
 `reasoning_effort=high`, 32,768 total generated tokens, a finite 840-second model
 deadline and temperature `1.0`; configure A2A request and poll timeouts to `900s`.
+These partner limits are separate from Astraform's customer-model timeout.
 Those are ceilings, not guaranteed duration or accuracy. Ollama's compatibility
 API cannot set context size per request: configure the model server to allow the
 input plus generated tokens before testing. The [Qwen model card](https://huggingface.co/Qwen/Qwen3.5-4B)
@@ -285,9 +293,10 @@ simulation.event.runtime.domain.bindings.banking-reference.domain-id=banking
 simulation.event.runtime.domain.bindings.banking-reference.binding-revision=banking-reference-v1
 simulation.event.runtime.domain.bindings.banking-reference.allow-insecure-http=true
 simulation.event.runtime.a2a.enabled=true
-simulation.event.runtime.a2a.request-timeout=150s
+simulation.event.runtime.a2a.request-timeout=900s
+simulation.event.runtime.a2a.poll-timeout=900s
 simulation.event.runtime.a2a.targets.banking-advice.base-url=http://host.docker.internal:8099
-simulation.event.runtime.a2a.targets.banking-advice.binding-revision=bank-db-advice-v5-llm-gemini25-flash
+simulation.event.runtime.a2a.targets.banking-advice.binding-revision=banking-starter-gemini36-high-v1
 simulation.event.runtime.a2a.targets.banking-advice.allow-insecure-http=true
 ```
 
@@ -349,9 +358,10 @@ simulation.event.runtime.domain.bindings.banking-python-reference.domain-id=bank
 simulation.event.runtime.domain.bindings.banking-python-reference.binding-revision=banking-python-reference-v1
 simulation.event.runtime.domain.bindings.banking-python-reference.allow-insecure-http=true
 simulation.event.runtime.a2a.enabled=true
-simulation.event.runtime.a2a.request-timeout=150s
+simulation.event.runtime.a2a.request-timeout=900s
+simulation.event.runtime.a2a.poll-timeout=900s
 simulation.event.runtime.a2a.targets.banking-python-advice.base-url=http://host.docker.internal:8101
-simulation.event.runtime.a2a.targets.banking-python-advice.binding-revision=bank-python-advice-v2-llm-gemini25-flash
+simulation.event.runtime.a2a.targets.banking-python-advice.binding-revision=banking-starter-gemini36-high-v1
 simulation.event.runtime.a2a.targets.banking-python-advice.allow-insecure-http=true
 ```
 
@@ -446,6 +456,15 @@ The launcher shares saved-run inspection and export behavior with
 Docker build places that utility beside `/app/run-customer.py`; source execution
 uses the same file from `integration/`. The utility does not seed a bank,
 create/publish an agent or launch a customer.
+
+To verify a Java customer rather than only a Java bank provider, the same
+launcher supports `--prepare-only --output /fresh/empty/prepared-output`.
+It seeds and discovers capabilities but makes no Catalog create/publish or
+Journey launch writes. Its `prepared-scenario.json` has `catalog` and `launch`
+objects for the existing downloaded Java SDK 0.4.3 `FirstSimulation` client.
+See the [extracted starter Java preparation route](../deploy/banking-starter/README.md#prepare-for-the-existing-java-customer-sdk-client)
+for paths and the launch-once/inspect-same-run boundary. No extra runtime layer
+or SDK transport bridge is introduced.
 
 Use the updated platform gateway with canonical `/api/...` routing:
 
