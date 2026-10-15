@@ -179,9 +179,9 @@ class BankingStarterPackageTest(unittest.TestCase):
                 self.assertEqual(8092 if bank == "python" else 8094, configuration["bankPort"])
                 self.assertEqual("banking-python" if bank == "python" else "banking", configuration["domainId"])
                 self.assertEqual(scenario == "monthly", configuration["nativeDomainEnabled"])
-                self.assertEqual("0.3.2", manifest["compatibility"]["pythonSdk"])
+                self.assertEqual("0.3.3", manifest["compatibility"]["pythonSdk"])
                 if bank == "java":
-                    self.assertEqual("0.4.2", manifest["compatibility"]["javaSdk"])
+                    self.assertEqual("0.4.3", manifest["compatibility"]["javaSdk"])
 
     def test_new_variants_and_finish_criteria_cannot_be_packaged_as_public_compatible_assets(self):
         with patch.object(packager.subprocess, "check_output") as docker:
@@ -214,13 +214,15 @@ class BankingStarterPackageTest(unittest.TestCase):
                     bundle = packager.package("v0.1.0", self.images, self.output / str(value), True, self.source_revision)
                 configuration = json.loads((bundle / "starter-config.json").read_text())
                 manifest = json.loads((bundle / "bundle-manifest.json").read_text())
-                self.assertTrue(configuration["requiresUnreleasedCustomerSdk"])
+                self.assertFalse(configuration["requiresUnreleasedCustomerSdk"])
                 self.assertEqual(["completionPolicy.requireCustomerFinish"], configuration["requiredCustomerSdkCapabilities"])
                 self.assertTrue(configuration["requiresUnreleasedPlatform"])
                 self.assertIs(value, manifest["requiredPlatform"]["completionPolicy.requireCustomerFinish"])
-                self.assertEqual("0.3.2", manifest["compatibility"]["pythonSdk"])
-                self.assertIn("bank/advice provider dependency", manifest["compatibilityMeaning"])
-                self.assertIn("published Python SDK 0.3.2 cannot preserve that field", manifest["compatibilityMeaning"])
+                self.assertEqual("0.3.3", manifest["compatibility"]["pythonSdk"])
+                self.assertEqual("1.2.1", manifest["compatibility"]["contracts"])
+                self.assertIn("source dependency targets", manifest["compatibilityMeaning"])
+                self.assertIn("published Python SDK 0.3.3", manifest["compatibilityMeaning"])
+                self.assertIn("separate installed-package verification", manifest["compatibilityMeaning"])
                 self.assertEqual(self.scenario, json.loads((bundle / "scenario.json").read_text()))
                 self.assertNotIn("customer-run-evidence.py", manifest["files"])
 

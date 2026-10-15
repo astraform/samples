@@ -30,15 +30,31 @@ def package(version, images, output, local_verification=False, source_revision=N
     files = {**FILES, "scenario.json": "integration/marketing-ops-a2a/" + (
         "sample-configuration.json" if scenario == "scheduled" else "current-state-configuration.json"),
         "RELEASE-NOTES.md": f"docs/releases/{version}.md"}
+    source = ROOT / files["scenario.json"]
+    packaging.require(source.is_file() and not source.is_symlink(),
+                      f"Missing or unsafe starter source: {files['scenario.json']}")
+    selected = json.loads(source.read_text())
+    policy = selected.get("launchRequestTemplate", {}).get("completionPolicy", {})
+    finish_present = "requireCustomerFinish" in policy
+    finish = policy.get("requireCustomerFinish")
+    packaging.require(not finish_present or type(finish) is bool,
+                      "completionPolicy.requireCustomerFinish must be a Boolean when present")
     configuration = {"schemaVersion": "astraform.marketing-starter.configuration.v1",
                      "scenario": scenario, "domainId": "marketing-ops",
                      "domainPort": 8090, "agencyPort": 8091,
-                     "requiresUnreleasedPlatform": False,
+                     "requiresUnreleasedPlatform": finish_present,
+                     "requiredPlatformCapabilities": ["completionPolicy.requireCustomerFinish"] if finish_present else [],
+                     "requiresUnreleasedCustomerSdk": False,
+                     "requiredCustomerSdkCapabilities": ["completionPolicy.requireCustomerFinish"] if finish_present else [],
                      "customerEvidenceHelper": "customer-run-evidence.py"}
+    compatibility = {**packaging.LOCAL_COMPATIBILITY, "javaSdk": "0.4.3"}
+    if finish_present:
+        compatibility["platform"] = "unreleased-local-customer-finish"
     return packaging.package_bundle(version, images, output, source_revision, files,
         f"astraform-marketing-{scenario}-starter-{version}",
-        {"platform": "0.2.0", "javaSdk": "0.4.2", "pythonSdk": "0.3.2", "contracts": "1.2.0"},
-        "astraform.marketing-starter.bundle.v1", True, configuration)
+        compatibility, "astraform.marketing-starter.bundle.v1", True, configuration,
+        {"completionPolicy.requireCustomerFinish": finish} if finish_present else None,
+        "Local compatibility records current source dependency targets: Java SDK 0.4.3, Python SDK 0.3.3 and contracts 1.2.1. Actual image contents require separate installed-package verification against the recorded image IDs. Native customer completion is available in published Python SDK 0.3.3; a supporting local platform is still required when completionPolicy.requireCustomerFinish is present.")
 
 
 def main():

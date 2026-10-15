@@ -37,7 +37,16 @@ class MarketingStarterPackageTest(unittest.TestCase):
                 bundle = packager.package("v0.1.0", self.images, self.directory / scenario, True, "a" * 40, scenario)
             manifest = json.loads((bundle / "bundle-manifest.json").read_text())
             self.assertTrue(manifest["localVerificationOnly"])
-            self.assertEqual({"platform": "0.2.0", "javaSdk": "0.4.2", "pythonSdk": "0.3.2", "contracts": "1.2.0"}, manifest["compatibility"])
+            self.assertEqual({"platform": "unreleased-local-customer-finish", "javaSdk": "0.4.3", "pythonSdk": "0.3.3", "contracts": "1.2.1"}, manifest["compatibility"])
+            self.assertTrue(manifest["requiredPlatform"]["completionPolicy.requireCustomerFinish"])
+            configuration = json.loads((bundle / "starter-config.json").read_text())
+            self.assertTrue(configuration["requiresUnreleasedPlatform"])
+            self.assertFalse(configuration["requiresUnreleasedCustomerSdk"])
+            self.assertEqual(["completionPolicy.requireCustomerFinish"], configuration["requiredPlatformCapabilities"])
+            self.assertEqual(["completionPolicy.requireCustomerFinish"], configuration["requiredCustomerSdkCapabilities"])
+            self.assertIn("separate installed-package verification", manifest["compatibilityMeaning"])
+            original = "sample-configuration.json" if scenario == "scheduled" else "current-state-configuration.json"
+            self.assertEqual((ROOT / "integration/marketing-ops-a2a" / original).read_bytes(), (bundle / "scenario.json").read_bytes())
             self.assertEqual((ROOT / "integration/marketing-ops-a2a/run-customer.py").read_bytes(), (bundle / "run-customer.py").read_bytes())
             self.assertEqual((ROOT / "integration/customer-run-evidence.py").read_bytes(), (bundle / "customer-run-evidence.py").read_bytes())
             self.assertEqual(scenario, json.loads((bundle / "starter-config.json").read_text())["scenario"])
@@ -48,6 +57,68 @@ class MarketingStarterPackageTest(unittest.TestCase):
             checksum = Path(str(bundle) + ".tar.gz.sha256")
             archive = Path(str(bundle) + ".tar.gz")
             self.assertEqual(f"{packager.packaging.file_hash(archive)}  {archive.name}\n", checksum.read_text())
+
+    def test_finish_metadata_preserves_omission_and_both_boolean_values(self):
+        source = self.directory / "source"
+        files = {**packager.FILES,
+                 "scheduled": "integration/marketing-ops-a2a/sample-configuration.json",
+                 "current": "integration/marketing-ops-a2a/current-state-configuration.json",
+                 "notes": "docs/releases/v0.1.0.md"}
+        for relative in files.values():
+            target = source / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / relative, target)
+        for scenario, name in (("scheduled", "sample-configuration.json"),
+                               ("current", "current-state-configuration.json")):
+            for value in (None, False, True):
+                selected = json.loads((ROOT / "integration/marketing-ops-a2a" / name).read_text())
+                policy = selected["launchRequestTemplate"]["completionPolicy"]
+                if value is None:
+                    policy.pop("requireCustomerFinish")
+                else:
+                    policy["requireCustomerFinish"] = value
+                (source / "integration/marketing-ops-a2a" / name).write_text(json.dumps(selected))
+                with self.subTest(scenario=scenario, value=value), \
+                     patch.object(packager, "ROOT", source), \
+                     patch.object(packager.packaging, "ROOT", source), \
+                     patch.object(packager.packaging.subprocess, "check_output", return_value="sha256:" + "a" * 64 + "\n"):
+                    bundle = packager.package("v0.1.0", self.images,
+                                              self.directory / f"{scenario}-{value}", True, "a" * 40, scenario)
+                manifest = json.loads((bundle / "bundle-manifest.json").read_text())
+                configuration = json.loads((bundle / "starter-config.json").read_text())
+                explicit = value is not None
+                self.assertEqual(explicit, configuration["requiresUnreleasedPlatform"])
+                self.assertFalse(configuration["requiresUnreleasedCustomerSdk"])
+                capabilities = ["completionPolicy.requireCustomerFinish"] if explicit else []
+                self.assertEqual(capabilities, configuration["requiredPlatformCapabilities"])
+                self.assertEqual(capabilities, configuration["requiredCustomerSdkCapabilities"])
+                self.assertEqual("unreleased-local-customer-finish" if explicit else "0.2.0",
+                                 manifest["compatibility"]["platform"])
+                if explicit:
+                    self.assertIs(value, manifest["requiredPlatform"]["completionPolicy.requireCustomerFinish"])
+                else:
+                    self.assertNotIn("requiredPlatform", manifest)
+                self.assertEqual(selected, json.loads((bundle / "scenario.json").read_text()))
+
+    def test_invalid_finish_value_fails_before_images_or_archive(self):
+        source = self.directory / "invalid-source"
+        for scenario, name in (("scheduled", "sample-configuration.json"),
+                               ("current", "current-state-configuration.json")):
+            target = source / "integration/marketing-ops-a2a" / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            for value in (None, "true", 0, 1, [], {}):
+                selected = json.loads((ROOT / "integration/marketing-ops-a2a" / name).read_text())
+                selected["launchRequestTemplate"]["completionPolicy"]["requireCustomerFinish"] = value
+                target.write_text(json.dumps(selected))
+                output = self.directory / f"invalid-{scenario}"
+                with self.subTest(scenario=scenario, value=value), \
+                     patch.object(packager, "ROOT", source), \
+                     patch.object(packager.packaging, "ROOT", source), \
+                     patch.object(packager.packaging.subprocess, "check_output") as docker:
+                    with self.assertRaisesRegex(ValueError, "must be a Boolean"):
+                        packager.package("v0.1.0", self.images, output, True, "a" * 40, scenario)
+                    docker.assert_not_called()
+                self.assertFalse(output.exists())
 
     def test_standalone_archive_imports_shared_evidence_without_banking_source(self):
         with patch.object(packager.packaging.subprocess, "check_output", return_value="sha256:" + "a" * 64 + "\n"):

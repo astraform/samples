@@ -23,6 +23,7 @@ FILES = {
     "scenario.json": "banking-advice-agent/issued-statement-configuration.json",
 }
 COMPATIBILITY = {"platform": "0.2.0", "pythonSdk": "0.3.2", "contracts": "1.2.0"}
+LOCAL_COMPATIBILITY = {"platform": "0.2.0", "pythonSdk": "0.3.3", "contracts": "1.2.1"}
 IMAGE_VARIABLES = {"banking": "BANKING_IMAGE", "advice": "ADVICE_IMAGE", "postgres": "POSTGRES_IMAGE"}
 DIGEST_IMAGE = re.compile(r"[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}")
 TAGGED_IMAGE = re.compile(r"[a-z0-9][a-z0-9._:/-]*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}")
@@ -212,10 +213,11 @@ def package(version, images, output, local_verification=False, source_revision=N
         "requiresUnreleasedPlatform": finish_present,
         "requiredPlatformCapabilities": (["retainedParticipationSupported"] if scenario == "monthly" else [])
             + (["completionPolicy.requireCustomerFinish"] if finish_present else []),
-        "requiresUnreleasedCustomerSdk": finish_present,
+        "requiresUnreleasedCustomerSdk": False,
         "requiredCustomerSdkCapabilities": ["completionPolicy.requireCustomerFinish"] if finish_present else [],
     }
-    compatibility = {**COMPATIBILITY, **({"javaSdk": "0.4.2"} if bank == "java" else {})}
+    compatibility = {**(LOCAL_COMPATIBILITY if local_verification else COMPATIBILITY),
+                     **({"javaSdk": "0.4.3"} if bank == "java" else {})}
     if finish_present:
         compatibility["platform"] = "unreleased-local-customer-finish"
     bundle_name = (f"astraform-banking-starter-{version}" if bank == "python" and scenario == "issued"
@@ -223,8 +225,8 @@ def package(version, images, output, local_verification=False, source_revision=N
     return package_bundle(version, images, output, source_revision, files, bundle_name,
                           compatibility, "astraform.banking-starter.bundle.v1", local_verification,
                           configuration, {"completionPolicy.requireCustomerFinish": finish} if finish_present else None,
-                          "Python SDK 0.3.2 identifies the bank/advice provider dependency. The customer launcher requires a native typed SDK that preserves completionPolicy.requireCustomerFinish; published Python SDK 0.3.2 cannot preserve that field. See starter-config.json requiredCustomerSdkCapabilities."
-                          if finish_present else None)
+                          "Local compatibility records current source dependency targets: Python SDK 0.3.3, contracts 1.2.1 and Java SDK 0.4.3 when selected. Actual image contents require separate installed-package verification against the recorded image IDs. Native customer completion is available in published Python SDK 0.3.3; a supporting local platform is still required when completionPolicy.requireCustomerFinish is present. See starter-config.json requiredCustomerSdkCapabilities."
+                          if local_verification else None)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
