@@ -76,6 +76,9 @@ public final class BankingPolicyWindTunnelV2ProviderProcess {
     private final BankingRemotePolicyWindTunnelService metadataService;
     private final ConformanceRestTemplate conformanceRestTemplate;
     private final ConformanceExecutor conformanceExecutor;
+    private final HttpServer nativeExperimentServer;
+    private final java.util.concurrent.ExecutorService nativeExperimentExecutor;
+    private final java.util.concurrent.atomic.AtomicInteger nativeExperimentRequests = new java.util.concurrent.atomic.AtomicInteger();
     private final Map<String, HeldLock> storageLocks = new ConcurrentHashMap<>();
 
     private BankingPolicyWindTunnelV2ProviderProcess(Path workspaceRoot, String processRole) throws Exception {
@@ -107,6 +110,43 @@ public final class BankingPolicyWindTunnelV2ProviderProcess {
                 false);
         this.conformanceExecutor = new ConformanceExecutor();
         this.conformanceRestTemplate = new ConformanceRestTemplate(runRoot, objectMapper);
+        this.nativeExperimentServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        this.nativeExperimentExecutor = Executors.newCachedThreadPool();
+        nativeExperimentServer.setExecutor(nativeExperimentExecutor);
+        nativeExperimentServer.createContext("/api/simulation-runs/", exchange -> {
+            nativeExperimentRequests.incrementAndGet();
+            try {
+                String runId = exchange.getRequestURI().getPath().substring("/api/simulation-runs/".length());
+                requireSafeId(runId);
+                if (!"PATCH".equals(exchange.getRequestMethod())) {
+                    sendJson(exchange, 405, Map.of("error", "native fixture accepts completion PATCH only"));
+                    return;
+                }
+                String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
+                if (contentType == null || !contentType.startsWith("application/json")) {
+                    sendJson(exchange, 415, Map.of("error", "application/json required"));
+                    return;
+                }
+                byte[] content = exchange.getRequestBody().readAllBytes();
+                Map<String, Object> payload = objectMapper.readValue(content, MAP_TYPE);
+                String key = exchange.getRequestHeaders().getFirst("Idempotency-Key");
+                if (!runId.equals(payload.get("runId")) || !String.valueOf(payload.get("operationId")).equals(key)) {
+                    sendJson(exchange, 400, Map.of("error", "native completion identity mismatch"));
+                    return;
+                }
+                conformanceRestTemplate.nativeNotification(runId, content, key);
+                sendJson(exchange, 200, Map.of("runId", runId));
+            } catch (ResourceAccessException rejected) {
+                sendJson(exchange, 408, Map.of("error", "recorded owned fixture delivery failure"));
+            } catch (Exception error) {
+                sendJson(exchange, 500, Map.of("error", error.getClass().getSimpleName()));
+            } finally { exchange.close(); }
+        });
+        nativeExperimentServer.start();
+        var nativeClient = new ai.astraform.platform.client.ApiClient()
+                .setConnectTimeout(java.time.Duration.ofSeconds(5))
+                .setReadTimeout(java.time.Duration.ofSeconds(30));
+        nativeClient.updateBaseUri("http://127.0.0.1:" + nativeExperimentServer.getAddress().getPort());
         BiConsumer<String, String> preparedHook = this::afterPrepared;
         Constructor<BankingPolicyWindTunnelExecutionProvider> constructor =
                 BankingPolicyWindTunnelExecutionProvider.class.getDeclaredConstructor(
@@ -115,7 +155,8 @@ public final class BankingPolicyWindTunnelV2ProviderProcess {
                         Executor.class,
                         LongSupplier.class,
                         Runnable.class,
-                        BiConsumer.class);
+                        BiConsumer.class,
+                        ai.astraform.platform.client.ApiClient.class);
         constructor.setAccessible(true);
         this.provider = constructor.newInstance(
                 objectMapper,
@@ -123,7 +164,8 @@ public final class BankingPolicyWindTunnelV2ProviderProcess {
                 conformanceExecutor,
                 (LongSupplier) System::currentTimeMillis,
                 (Runnable) () -> { },
-                preparedHook);
+                preparedHook,
+                nativeClient);
         this.provider.recoverPendingFinalizationNotifications(context);
     }
 
@@ -164,6 +206,10 @@ public final class BankingPolicyWindTunnelV2ProviderProcess {
                 sendJson(exchange, 200, metadataService.presets());
                 return;
             }
+            if ((BASE_PATH + "/conformance-v2/native-sdk-status").equals(path)) {
+                sendJson(exchange, 200, Map.of("requests", nativeExperimentRequests.get()));
+                return;
+            }
             String storagePrefix = BASE_PATH + "/conformance-v2/storage/";
             if (path.startsWith(storagePrefix)) {
                 handleStorage(exchange, path.substring(storagePrefix.length()));
@@ -183,12 +229,6 @@ public final class BankingPolicyWindTunnelV2ProviderProcess {
                     request.putIfAbsent("postPolicyDays", request.get("simulationHorizonDays"));
                 }
                 String runId = String.valueOf(request.get("simulationRunId"));
-                if (rateChangeAcceptance) {
-                    requireSafeId(runId);
-                    atomicWrite(
-                            runDirectory(runId).resolve("rate-change-component-characterization"),
-                            "ENABLED".getBytes(StandardCharsets.US_ASCII));
-                }
                 Supplier<PolicyWindTunnelRunRecord> launch = () -> provider.startRun(
                         context,
                         request,
@@ -216,16 +256,15 @@ public final class BankingPolicyWindTunnelV2ProviderProcess {
             if ("lifecycle".equals(operation) && "POST".equals(exchange.getRequestMethod())) {
                 Map<String, Object> request = readObject(exchange);
                 String action = String.valueOf(request.getOrDefault("action", ""));
-                if ("FINALIZE".equals(action)) {
-                    incrementFinalizeCount(runId);
-                }
-                sendJson(exchange, 200, runRecord(provider.controlRun(
+                PolicyWindTunnelRunRecord controlled = provider.controlRun(
                         context,
                         runId,
                         action,
                         request,
                         exchange.getRequestHeaders().getFirst(
-                                "X-Astraform-Opportunity-Correlation-Capability"))));
+                                "X-Astraform-Opportunity-Correlation-Capability"));
+                if ("FINALIZE".equals(action)) incrementFinalizeCount(runId);
+                sendJson(exchange, 200, runRecord(controlled));
                 return;
             }
             if (operation.startsWith("artifacts/") && "GET".equals(exchange.getRequestMethod())) {
@@ -237,6 +276,8 @@ public final class BankingPolicyWindTunnelV2ProviderProcess {
                 return;
             }
             sendJson(exchange, 404, Map.of("error", "not_found"));
+        } catch (ai.astraform.remote.domain.sdk.RemoteDomainProtocolException error) {
+            sendJson(exchange, 400, Map.of("error", error.code(), "message", error.getMessage()));
         } catch (IllegalArgumentException error) {
             sendJson(exchange, 400, Map.of("error", error.getMessage()));
         } catch (Exception error) {
@@ -255,6 +296,11 @@ public final class BankingPolicyWindTunnelV2ProviderProcess {
         String runId = suffix.substring(0, separator);
         String operation = suffix.substring(separator + 1);
         requireSafeId(runId);
+        if ("historical-published".equals(operation) && "POST".equals(exchange.getRequestMethod())) {
+            seedHistoricalPublishedReceipt(runId);
+            sendJson(exchange, 200, Map.of("seededHistoricalReceipt", true));
+            return;
+        }
         if ("ready".equals(operation) && "POST".equals(exchange.getRequestMethod())) {
             var stored = context.findRun(runId)
                     .orElseThrow(() -> new IllegalArgumentException("unknown run"));
@@ -308,6 +354,67 @@ public final class BankingPolicyWindTunnelV2ProviderProcess {
             return;
         }
         sendJson(exchange, 404, Map.of("error", "not_found"));
+    }
+
+
+    /** Explicit saved historical evidence, created by existing pure file/hash/receipt owners.
+     * This fixture is never labelled a newly executed native Scenario Lab run. */
+    @SuppressWarnings("unchecked")
+    private void seedHistoricalPublishedReceipt(String runId) throws Exception {
+        Map<String, Object> parameters = Map.of("presetId", "hardship-relief",
+                "executionMode", "CLOCK_DRIVEN_HYBRID", "opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2",
+                "agentDecisionMode", "STUB_LLM", "agentDecisionCadence", "EVENT_ONLY",
+                "simulationHorizonDays", 1, "cohortTargetSize", 1);
+        Map<String, Object> metadata = Map.of("scenarioLab", Map.of(
+                "phase", "COMPLETED", "progress", 1.0d, "bundleReady", true, "parameters", parameters,
+                "phaseTimings", List.of(), "logTail", List.of("Explicit saved historical receipt fixture")));
+        context.createRun(new PolicyWindTunnelRunCreateRequest(runId, BankingPolicyWindTunnelManifest.EXPERIMENT_ID,
+                "banking-hardship-relief", "CANDIDATE", "SEEDED_DETERMINISTIC", "hardship-relief", "COMPLETED",
+                1_791_993_500_000L, null, null, metadata));
+        var stored = context.findRun(runId).orElseThrow();
+        Path directory = (Path) invokePure("finalizationSummaryDirectory", context, runId);
+        Files.createDirectories(directory);
+        Map<String, Object> artifactPaths = (Map<String, Object>) invokePure("finalizedHybridArtifactPaths", workspaceRoot, directory, runId);
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("schemaVersion", "customer_outcome_simulation_summary.v1");
+        summary.put("runId", runId); summary.put("runConfig", parameters); summary.put("artifacts", artifactPaths);
+        summary.put("fixtureProvenance", "saved historical fixture; no current clock/native execution");
+        summary.put("decisionReadiness", Map.of("status", "NOT_ASSESSED", "recommendation", "WATCH", "reason", "Stored evidence is not new native execution acceptance"));
+        summary.put("decisionComparison", Map.of("comparisonId", runId + "-saved", "decisionQuestion", "Inspect saved evidence"));
+        summary.put("simulationTimeline", Map.of("events", List.of(Map.of("eventId", "saved-observation", "eventType", "OBSERVATION"))));
+        summary.put("sideEffectLedger", Map.of("assessment", "NOT_ASSESSED", "entries", List.of()));
+        summary.put("branchStateProjection", Map.of("source", "stored-fixture", "branches", List.of(Map.of("balance", -1200, "minimumPayment", 48))));
+        summary.put("domainOutcomeScore", Map.of("status", "NOT_ASSESSED"));
+        summary.put("domainOutcomeScores", List.of(Map.of("status", "NOT_ASSESSED")));
+        summary.put("hybridAgentAudit", Map.of("source", "stored-fixture", "assessment", "NOT_ASSESSED", "agents", List.of()));
+        summary.put("checkpointSummaries", List.of(Map.of("checkpointId", "saved-checkpoint", "balance", -1200)));
+        invokePure("writeClockDrivenHybridFinalizedArtifacts", directory, summary);
+        Map<String, Object> manifest = (Map<String, Object>) invokePure("finalizationArtifactManifest", context, artifactPaths);
+        if (manifest.size() != 14) throw new AssertionError("historical receipt must contain all 14 real artifacts");
+        Map<String, Object> request = Map.of("action", "FINALIZE", "operationId", "scenario-lab-finalize:" +
+                ConformanceRestTemplate.sha256((runId + BankingRemotePolicyWindTunnelService.PROVIDER_REVISION).getBytes(StandardCharsets.UTF_8)));
+        Object operation = invokePure("finalizationOperation", request);
+        Map<String, Object> updatedMetadata = (Map<String, Object>) invokePure("withFinalizationOperation", metadata, operation);
+        java.lang.reflect.Method digest = operation.getClass().getDeclaredMethod("inputDigest"); digest.setAccessible(true);
+        Map<String, Object> snapshot = (Map<String, Object>) invokePure("runSnapshot", stored, "COMPLETED",
+                artifactPaths.get("summary"), "/api/experiment-runs/" + runId + "/scenario-lab/bundle", 1_791_993_600_000L, updatedMetadata);
+        Map<String, Object> receipt = (Map<String, Object>) invokePure("finalizationReceipt", runId,
+                "PLATFORM_OWNED_V2", operation, digest.invoke(operation), "PUBLISHED", snapshot, manifest);
+        invokePure("attachCompletionNotificationPayload", context, receipt);
+        invokePure("writeFinalizationReceipt", context, runId, receipt);
+        invokePure("loadFinalizationReceipt", context, runId); // Validates every actual artifact byte length and hash.
+    }
+
+    private Object invokePure(String name, Object... arguments) throws Exception {
+        java.lang.reflect.Method method = java.util.Arrays.stream(provider.getClass().getDeclaredMethods())
+                .filter(candidate -> candidate.getName().equals(name) && candidate.getParameterCount() == arguments.length)
+                .findFirst().orElseThrow();
+        method.setAccessible(true);
+        try { return method.invoke(provider, arguments); }
+        catch (java.lang.reflect.InvocationTargetException error) {
+            if (error.getCause() instanceof Exception cause) throw cause;
+            throw (Error) error.getCause();
+        }
     }
 
     private void handleStorage(HttpExchange exchange, String suffix) throws Exception {
@@ -437,6 +544,8 @@ public final class BankingPolicyWindTunnelV2ProviderProcess {
     }
 
     private void close() {
+        nativeExperimentServer.stop(0);
+        nativeExperimentExecutor.shutdownNow();
         for (HeldLock held : storageLocks.values()) {
             try {
                 held.close();
@@ -918,13 +1027,18 @@ public final class BankingPolicyWindTunnelV2ProviderProcess {
         }
 
         private ResponseEntity<Object> notification(String runId, HttpEntity<?> requestEntity) {
+            return nativeNotification(runId, objectMapper.writeValueAsBytes(requestEntity.getBody()),
+                    requestEntity.getHeaders().getFirst("Idempotency-Key"));
+        }
+
+        private ResponseEntity<Object> nativeNotification(String runId, byte[] actualContent, String actualKey) {
             boolean callbackBarrier = Files.isRegularFile(
                     runRoot.resolve(runId).resolve("notification-callback-barrier"));
             byte[] content = null;
             String key = null;
             try {
-                content = objectMapper.writeValueAsBytes(requestEntity.getBody());
-                key = requestEntity.getHeaders().getFirst("Idempotency-Key");
+                content = actualContent;
+                key = actualKey;
                 if (callbackBarrier) {
                     appendCallbackEvent(runId, "ENTRY", content, key);
                     awaitCallbackRelease(runId);

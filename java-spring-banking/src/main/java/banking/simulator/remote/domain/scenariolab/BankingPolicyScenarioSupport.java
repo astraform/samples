@@ -19,6 +19,20 @@ final class BankingPolicyScenarioSupport {
     private BankingPolicyScenarioSupport() {
     }
 
+    static void requireNativeScenarioLabExecution(String operation) {
+        throw nativeScenarioLabExecutionUnavailable(operation);
+    }
+
+    static ai.astraform.remote.domain.sdk.RemoteDomainProtocolException nativeScenarioLabExecutionUnavailable(
+            String operation) {
+        return ai.astraform.remote.domain.sdk.RemoteDomainProtocolException.invalidRequest(
+                java.util.UUID.randomUUID(), operation, "scenario_lab_native_execution_unavailable",
+                "This historical Scenario Lab execution requires the retired global clock. "
+                        + "Native Scenario Lab execution is not available yet. "
+                        + "Stored run status and saved evidence remain readable.",
+                Map.of("requiredCapability", "nativeScenarioLabExecution"));
+    }
+
     @SuppressWarnings("unchecked")
     static Map<String, Object> objectMap(Object value) {
         if (value instanceof Map<?, ?> map) {

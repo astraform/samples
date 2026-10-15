@@ -73,6 +73,509 @@ class BankingPolicyWindTunnelExecutionProviderTest {
     @TempDir
     Path workspaceRoot;
 
+    private com.sun.net.httpserver.HttpServer experimentServer;
+    private java.util.concurrent.ExecutorService experimentExecutor;
+    private final Map<String, RestTemplate> experimentFixtures = new java.util.concurrent.ConcurrentHashMap<>();
+    private final List<Map<String, Object>> experimentRequests = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final AtomicInteger experimentFixtureIds = new AtomicInteger();
+    private final AtomicInteger outboundHttpRequests = new AtomicInteger();
+    private volatile Integer directExperimentStatus;
+    private volatile Map<String, Object> directExperimentBody;
+
+    @org.junit.jupiter.api.BeforeEach
+    void startNativeExperimentFixture() throws Exception {
+        experimentServer = com.sun.net.httpserver.HttpServer.create(
+                new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        experimentExecutor = java.util.concurrent.Executors.newCachedThreadPool();
+        experimentServer.setExecutor(experimentExecutor);
+        experimentServer.createContext("/", exchange -> {
+            outboundHttpRequests.incrementAndGet();
+            try {
+                String path = exchange.getRequestURI().getPath();
+                int api = path.indexOf("/api/simulation-runs/");
+                if (api < 0) {
+                    exchange.sendResponseHeaders(404, -1);
+                    return;
+                }
+                String fixtureId = path.substring(1, api);
+                String runPath = path.substring(api);
+                String method = exchange.getRequestMethod();
+                byte[] raw = exchange.getRequestBody().readAllBytes();
+                Map<String, Object> body = raw.length == 0 ? Map.of()
+                        : new ObjectMapper().readValue(raw, Map.class);
+                experimentRequests.add(Map.of("method", method, "path", runPath,
+                        "body", body, "idempotencyKey", Optional.ofNullable(
+                                exchange.getRequestHeaders().getFirst("Idempotency-Key")).orElse(""),
+                        "rawBodyBase64", Base64.getEncoder().encodeToString(raw)));
+                int status;
+                Object responseBody;
+                if (directExperimentStatus != null) {
+                    status = directExperimentStatus;
+                    responseBody = directExperimentBody;
+                    if (status == -1) {
+                        return; // Actual uncertain HTTP response; no replacement request is accepted.
+                    }
+                } else {
+                    // Existing lifecycle tests retain their configured server responses. The SDK and its
+                    // typed models remain real; only the owned HTTP fixture delegates to old response stubs.
+                    RestTemplate fixture = experimentFixtures.get(fixtureId);
+                    String fixtureUrl = "http://experiment-service:7457" + runPath;
+                    if ("GET".equals(method)) {
+                        responseBody = fixture.getForObject(fixtureUrl, Object.class);
+                        status = responseBody == null ? 404 : 200;
+                    } else if ("PATCH".equals(method)) {
+                        org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+                        exchange.getRequestHeaders().forEach(headers::put);
+                        ResponseEntity<Object> response = fixture.exchange(fixtureUrl, HttpMethod.PATCH,
+                                new HttpEntity<>(body, headers), Object.class);
+                        status = response == null ? 500 : response.getStatusCode().value();
+                        responseBody = response == null ? Map.of("message", "Unconfigured response") : response.getBody();
+                    } else {
+                        status = 405;
+                        responseBody = Map.of("message", "Unexpected fixture operation");
+                    }
+                }
+                byte[] response = new ObjectMapper().writeValueAsBytes(responseBody);
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                exchange.sendResponseHeaders(status, response.length);
+                exchange.getResponseBody().write(response);
+            } catch (org.springframework.web.client.HttpStatusCodeException rejected) {
+                byte[] response = rejected.getResponseBodyAsByteArray();
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                exchange.sendResponseHeaders(rejected.getStatusCode().value(), response.length);
+                exchange.getResponseBody().write(response);
+            } catch (Exception uncertain) {
+                // A fixture exception closes this exact request. The SDK must retain uncertainty.
+            } finally {
+                exchange.close();
+            }
+        });
+        experimentServer.start();
+    }
+
+    @AfterEach
+    void stopNativeExperimentFixture() throws Exception {
+        if (experimentServer != null) experimentServer.stop(0);
+        if (experimentExecutor != null) {
+            experimentExecutor.shutdownNow();
+            assertTrue(experimentExecutor.awaitTermination(5, TimeUnit.SECONDS));
+        }
+    }
+
+
+    @Test
+    void malformedFinalizeRejectsBeforePreparedReceiptRestoration() throws Exception {
+        RestTemplate rest = mock(RestTemplate.class);
+        var provider = provider(new ObjectMapper(), rest, task -> {});
+        MutableContext context = new MutableContext(workspaceRoot);
+        String runId = "historical-malformed-finalize";
+        seedStoredReceipt(provider, context, runId, "PREPARED", "COMPLETED");
+        MutableContext absent = new MutableContext(workspaceRoot);
+        assertInvalidWithoutEffects(absent, rest, () -> provider.controlRun(absent, runId, "FINALIZE", Map.of("operationId", "malformed")));
+        assertInvalidWithoutEffects(absent, rest, () -> provider.controlRun(absent, runId, "FINALIZE", Map.of()));
+        assertTrue(absent.findRun(runId).isEmpty());
+    }
+
+    @Test
+    void nonFinalizeOperationAndWrongPublishedOperationRejectBeforeRestoration() throws Exception {
+        RestTemplate rest = mock(RestTemplate.class);
+        var provider = provider(new ObjectMapper(), rest, task -> {});
+        MutableContext context = new MutableContext(workspaceRoot);
+        String runId = "historical-wrong-operation";
+        seedStoredReceipt(provider, context, runId, "PUBLISHED", "COMPLETED");
+        MutableContext absent = new MutableContext(workspaceRoot);
+        for (String action : List.of("CANCEL", "PAUSE", "RESUME", "SET_PLAYBACK_RATE")) {
+            assertInvalidWithoutEffects(absent, rest, () -> provider.controlRun(absent, runId, action, finalizationRequest(runId)));
+        }
+        assertInvalidWithoutEffects(absent, rest, () -> provider.controlRun(absent, runId, "FINALIZE", Map.of("operationId", "scenario-lab-finalize:" + "0".repeat(64))));
+        assertTrue(absent.findRun(runId).isEmpty());
+    }
+
+    private Object invokePure(Object owner, String name, Object... arguments) throws Exception {
+        Method method = java.util.Arrays.stream(owner.getClass().getDeclaredMethods())
+                .filter(candidate -> candidate.getName().equals(name)
+                        && candidate.getParameterCount() == arguments.length)
+                .findFirst().orElseThrow();
+        method.setAccessible(true);
+        try {
+            return method.invoke(owner, arguments);
+        } catch (java.lang.reflect.InvocationTargetException failure) {
+            if (failure.getCause() instanceof Exception exception) throw exception;
+            throw (Error) failure.getCause();
+        }
+    }
+
+    private Map<String, String> savedFileDigests() throws Exception {
+        Map<String, String> files = new java.util.TreeMap<>();
+        try (var paths = Files.walk(workspaceRoot)) {
+            for (Path path : paths.filter(Files::isRegularFile).toList()) {
+                files.put(workspaceRoot.relativize(path).toString(), sha256(Files.readAllBytes(path)));
+            }
+        }
+        return files;
+    }
+
+    private String storedContextJson(MutableContext context) throws Exception {
+        Map<String, Object> records = new java.util.TreeMap<>();
+        for (String runId : context.runs.keySet()) records.put(runId, context.findRun(runId).orElseThrow());
+        return new ObjectMapper().rebuild().findAndAddModules().build().writeValueAsString(Map.of(
+                "runs", records, "artifacts", context.registeredArtifacts));
+    }
+
+    private void assertRetiredWithoutEffects(PolicyWindTunnelExecutionContext context, RestTemplate rest,
+            org.junit.jupiter.api.function.Executable operation) throws Exception {
+        String before = context instanceof MutableContext memory ? storedContextJson(memory) : null;
+        Map<String, String> files = savedFileDigests();
+        int requests = outboundHttpRequests.get();
+        RemoteDomainProtocolException rejected = assertThrows(RemoteDomainProtocolException.class, operation);
+        assertEquals("scenario_lab_native_execution_unavailable", rejected.code());
+        assertTrue(rejected.getMessage().contains("retired global clock"));
+        if (context instanceof MutableContext memory) assertEquals(before, storedContextJson(memory));
+        assertEquals(files, savedFileDigests());
+        assertEquals(requests, outboundHttpRequests.get());
+        verifyNoInteractions(rest);
+    }
+
+    /** A saved historical fixture, constructed by the existing pure evidence owners.
+     * No clock execution, activation, admission or model output is used to create it. */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> seedStoredReceipt(BankingPolicyWindTunnelExecutionProvider provider,
+            MutableContext context, String runId, String state, String status) throws Exception {
+        if ("PREPARED".equals(state)) createFinalizableRun(context, runId);
+        else createTerminalRun(context, runId, status, "PLATFORM_OWNED_V2");
+        var stored = context.findRun(runId).orElseThrow();
+        Map<String, Object> parameters = BankingPolicyScenarioLabRunMetadata.fromMetadata(stored.metadata()).parameters();
+        Path directory = (Path) invokePure(provider, "finalizationSummaryDirectory", context, runId);
+        Files.createDirectories(directory);
+        Map<String, Object> artifactPaths = (Map<String, Object>) invokePure(provider,
+                "finalizedHybridArtifactPaths", workspaceRoot, directory, runId);
+        Map<String, Object> summary = new LinkedHashMap<>(Map.ofEntries(
+                Map.entry("schemaVersion", "customer_outcome_simulation_summary.v1"),
+                Map.entry("runId", runId), Map.entry("runConfig", parameters),
+                Map.entry("fixtureProvenance", "explicit stored historical evidence; no current execution"),
+                Map.entry("artifacts", artifactPaths),
+                Map.entry("decisionReadiness", Map.of("status", "NOT_ASSESSED", "recommendation", "WATCH",
+                        "reason", "Saved fixture evidence is not current clock execution acceptance")),
+                Map.entry("decisionComparison", Map.of("comparisonId", runId + "-stored",
+                        "decisionQuestion", "Inspect the recorded historical artifacts")),
+                Map.entry("simulationTimeline", Map.of("schemaVersion", "customer_outcome_simulation_timeline.v1",
+                        "events", List.of(Map.of("eventId", "stored-observation", "eventType", "OBSERVATION")))),
+                Map.entry("sideEffectLedger", Map.of("schemaVersion", "customer_outcome_side_effect_ledger.v1",
+                        "assessment", "NOT_ASSESSED", "entries", List.of())),
+                Map.entry("branchStateProjection", Map.of("schemaVersion", "customer_outcome_branch_state_projection.v1",
+                        "source", "stored-fixture", "branches", List.of(Map.of("branchRole", "recorded",
+                                "state", Map.of("balance", -1200, "minimumPayment", 48))))),
+                Map.entry("domainOutcomeScore", Map.of("status", "NOT_ASSESSED", "recommendation", "WATCH")),
+                Map.entry("domainOutcomeScores", List.of(Map.of("status", "NOT_ASSESSED", "source", "stored-fixture"))),
+                Map.entry("hybridAgentAudit", Map.of("source", "stored-fixture", "assessment", "NOT_ASSESSED",
+                        "agents", List.of())),
+                Map.entry("checkpointSummaries", List.of(Map.of("checkpointId", "stored-checkpoint",
+                        "source", "stored-fixture", "state", Map.of("balance", -1200))))));
+        invokePure(provider, "writeClockDrivenHybridFinalizedArtifacts", directory, summary);
+        Map<String, Object> manifest = (Map<String, Object>) invokePure(provider,
+                "finalizationArtifactManifest", context, artifactPaths);
+        assertEquals(14, manifest.size());
+        for (Object raw : manifest.values()) {
+            Map<String, Object> entry = (Map<String, Object>) raw;
+            byte[] content = Files.readAllBytes(workspaceRoot.resolve((String) entry.get("artifactRef")));
+            assertEquals(((Number) entry.get("byteLength")).longValue(), content.length);
+            assertEquals(entry.get("sha256"), sha256(content));
+        }
+        Map<String, Object> request = finalizationRequest(runId);
+        Object operation = invokePure(provider, "finalizationOperation", request);
+        Map<String, Object> metadata = (Map<String, Object>) invokePure(provider,
+                "withFinalizationOperation", stored.metadata(), operation);
+        Long completed = "PREPARED".equals(state) ? null : 1_791_993_600_000L;
+        Map<String, Object> snapshot = (Map<String, Object>) invokePure(provider, "runSnapshot", stored,
+                "PREPARED".equals(state) ? "RUNNING" : status, artifactPaths.get("summary"),
+                "/api/experiment-runs/" + runId + "/scenario-lab/bundle", completed, metadata);
+        Method digestAccessor = operation.getClass().getDeclaredMethod("inputDigest");
+        digestAccessor.setAccessible(true);
+        String inputDigest = (String) digestAccessor.invoke(operation);
+        Map<String, Object> receipt = (Map<String, Object>) invokePure(provider, "finalizationReceipt", runId,
+                "PLATFORM_OWNED_V2", operation, inputDigest, state, snapshot, manifest);
+        invokePure(provider, "attachCompletionNotificationPayload", context, receipt);
+        invokePure(provider, "writeFinalizationReceipt", context, runId, receipt);
+        Map<String, Object> validated = (Map<String, Object>) invokePure(provider, "loadFinalizationReceipt", context, runId);
+        assertEquals(new ObjectMapper().writeValueAsString(receipt), new ObjectMapper().writeValueAsString(validated));
+        return validated;
+    }
+
+    private void writeChangedReceipt(String runId, Map<String, Object> receipt) throws Exception {
+        Files.write(finalizationReceiptPath(runId), new ObjectMapper().writeValueAsBytes(receipt));
+    }
+
+    private void assertStoredReceiptRejectedWithoutMutation(BankingPolicyWindTunnelExecutionProvider provider,
+            MutableContext context, String runId) throws Exception {
+        String before = storedContextJson(context);
+        Map<String, String> files = savedFileDigests();
+        int requests = outboundHttpRequests.get();
+        assertThrows(IllegalStateException.class, () -> provider.getRunStatus(context, runId));
+        assertEquals(before, storedContextJson(context));
+        assertEquals(files, savedFileDigests());
+        assertEquals(requests, outboundHttpRequests.get());
+    }
+
+    private void assertInvalidWithoutEffects(MutableContext context, RestTemplate rest,
+            org.junit.jupiter.api.function.Executable operation) throws Exception {
+        String before = storedContextJson(context);
+        Map<String, String> files = savedFileDigests();
+        int requests = outboundHttpRequests.get();
+        assertThrows(IllegalArgumentException.class, operation);
+        assertEquals(before, storedContextJson(context));
+        assertEquals(files, savedFileDigests());
+        assertEquals(requests, outboundHttpRequests.get());
+        verifyNoInteractions(rest);
+    }
+
+    private BankingPolicyWindTunnelExecutionProvider provider(
+            ObjectMapper mapper, RestTemplate rest, java.util.concurrent.Executor executor) {
+        return provider(mapper, rest, executor, System::currentTimeMillis, () -> {}, (run, operation) -> {});
+    }
+
+    private BankingPolicyWindTunnelExecutionProvider provider(
+            ObjectMapper mapper, RestTemplate rest, java.util.concurrent.Executor executor,
+            java.util.function.LongSupplier time) {
+        return provider(mapper, rest, executor, time, () -> {}, (run, operation) -> {});
+    }
+
+    private BankingPolicyWindTunnelExecutionProvider provider(
+            ObjectMapper mapper, RestTemplate rest, java.util.concurrent.Executor executor,
+            java.util.function.LongSupplier time, Runnable afterAdmission) {
+        return provider(mapper, rest, executor, time, afterAdmission, (run, operation) -> {});
+    }
+
+    private BankingPolicyWindTunnelExecutionProvider provider(
+            ObjectMapper mapper, RestTemplate rest, java.util.concurrent.Executor executor,
+            java.util.function.LongSupplier time, Runnable afterAdmission,
+            java.util.function.BiConsumer<String, String> afterPrepared) {
+        String id = "fixture-" + experimentFixtureIds.incrementAndGet();
+        experimentFixtures.put(id, rest);
+        var client = new ai.astraform.platform.client.ApiClient()
+                .setConnectTimeout(java.time.Duration.ofSeconds(5))
+                .setReadTimeout(java.time.Duration.ofSeconds(30));
+        client.updateBaseUri("http://127.0.0.1:" + experimentServer.getAddress().getPort() + "/" + id);
+        return new BankingPolicyWindTunnelExecutionProvider(
+                mapper, rest, executor, time, afterAdmission, afterPrepared, client);
+    }
+
+    private Map<String, Object> completionPayload(String runId, boolean withIdentity) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("status", "COMPLETED");
+        payload.put("summaryPath", "artifacts/summary.json");
+        payload.put("bundlePath", "/api/experiment-runs/" + runId + "/scenario-lab/bundle");
+        payload.put("completedAtEpochMs", 1_791_993_600_000L);
+        payload.put("source", "java-spring-banking");
+        payload.put("metadata", Map.of("scenarioLab", Map.of("ready", false,
+                "scalars", List.of("48", 48, 48.25, false))));
+        if (withIdentity) {
+            payload.put("runId", runId);
+            payload.put("operationId", "scenario-lab-finalize:identity-470");
+            payload.put("inputDigest", "sha256:" + "a".repeat(64));
+            payload.put("providerRevision", "java-banking-test-revision");
+        }
+        return payload;
+    }
+
+    private boolean completionModelPreservesIdentity() throws Exception {
+        var mapper = ai.astraform.platform.client.ApiClient.createDefaultObjectMapper();
+        var original = mapper.readTree(mapper.writeValueAsBytes(completionPayload("sdk-run", true)));
+        var request = mapper.treeToValue(original,
+                ai.astraform.platform.client.model.SimulationRunUpdateRequest.class);
+        return original.equals(mapper.readTree(mapper.writeValueAsBytes(request)));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void nativeSdkRunReadPreservesActualCountsAndMetadata() throws Exception {
+        directExperimentStatus = 200;
+        directExperimentBody = Map.of("schemaVersion", "simulation_run_evidence.v1", "runId", "sdk-read",
+                "status", "COMPLETED", "agentCount", 3, "eventCount", 48, "checkpointCount", 12,
+                "metadata", Map.of("scenarioLab", Map.of("verified", false, "source", "actual-fixture")));
+        RestTemplate rest = mock(RestTemplate.class);
+        var provider = provider(new ObjectMapper(), rest, Runnable::run);
+        Method read = BankingPolicyWindTunnelExecutionProvider.class.getDeclaredMethod("fetchSimulationRunRecord", String.class);
+        read.setAccessible(true);
+        Map<String, Object> actual = (Map<String, Object>) read.invoke(provider, "sdk-read");
+        assertEquals(3L, ((Number) actual.get("agentCount")).longValue());
+        assertEquals(48L, ((Number) actual.get("eventCount")).longValue());
+        assertEquals(12L, ((Number) actual.get("checkpointCount")).longValue());
+        assertEquals(directExperimentBody.get("metadata"), actual.get("metadata"));
+        assertEquals(1, experimentRequests.size());
+        assertEquals("GET", experimentRequests.get(0).get("method"));
+        verifyNoInteractions(rest);
+    }
+
+    @Test
+    void nativeSdkUnavailableRunReadRemainsBestEffortWithoutRetry() throws Exception {
+        directExperimentStatus = 503;
+        directExperimentBody = Map.of("message", "Actual unavailable fixture response");
+        RestTemplate rest = mock(RestTemplate.class);
+        var provider = provider(new ObjectMapper(), rest, Runnable::run);
+        Method read = BankingPolicyWindTunnelExecutionProvider.class.getDeclaredMethod("fetchSimulationRunRecord", String.class);
+        read.setAccessible(true);
+        assertEquals(Map.of(), read.invoke(provider, "sdk-unavailable"));
+        assertEquals(1, experimentRequests.size());
+        verifyNoInteractions(rest);
+    }
+
+    @Test
+    void nativeSdkSupportedCompletionUsesExactBodyWithoutTransportRetry() throws Exception {
+        directExperimentStatus = 200;
+        directExperimentBody = Map.of("runId", "sdk-supported", "status", "COMPLETED");
+        RestTemplate rest = mock(RestTemplate.class);
+        var provider = provider(new ObjectMapper(), rest, Runnable::run);
+        MutableContext context = new MutableContext(workspaceRoot);
+        createFinalizableRun(context, "sdk-supported");
+        Map<String, Object> payload = completionPayload("sdk-supported", false);
+        Method notify = BankingPolicyWindTunnelExecutionProvider.class.getDeclaredMethod("notifySimulationRunCompleted",
+                PolicyWindTunnelExecutionContext.class, String.class, Map.class);
+        notify.setAccessible(true);
+        assertEquals(true, notify.invoke(provider, context, "sdk-supported", payload));
+        assertEquals(1, experimentRequests.size());
+        assertEquals(payload, experimentRequests.get(0).get("body"));
+        assertEquals("", experimentRequests.get(0).get("idempotencyKey"));
+        verifyNoInteractions(rest);
+    }
+
+    @Test
+    void nativeSdkFullCompletionPreservesIdentityOrRejectsBeforePatch() throws Exception {
+        directExperimentStatus = 200;
+        directExperimentBody = Map.of("runId", "sdk-identity", "status", "COMPLETED");
+        RestTemplate rest = mock(RestTemplate.class);
+        var provider = provider(new ObjectMapper(), rest, Runnable::run);
+        MutableContext context = new MutableContext(workspaceRoot);
+        createFinalizableRun(context, "sdk-identity");
+        Map<String, Object> payload = completionPayload("sdk-identity", true);
+        Method notify = BankingPolicyWindTunnelExecutionProvider.class.getDeclaredMethod("notifySimulationRunCompleted",
+                PolicyWindTunnelExecutionContext.class, String.class, Map.class);
+        notify.setAccessible(true);
+        boolean capable = completionModelPreservesIdentity();
+        assertEquals(capable, notify.invoke(provider, context, "sdk-identity", payload));
+        if (capable) {
+            assertEquals(1, experimentRequests.size());
+            assertEquals(payload, experimentRequests.get(0).get("body"));
+            assertEquals(payload.get("operationId"), experimentRequests.get(0).get("idempotencyKey"));
+        } else {
+            assertEquals(List.of(), experimentRequests);
+            assertTrue(BankingPolicyScenarioLabRunMetadata.fromMetadata(
+                    context.findRun("sdk-identity").orElseThrow().metadata()).logTail().stream()
+                    .anyMatch(line -> line.contains("notification remains pending")));
+        }
+        assertEquals("scenario-lab-finalize:identity-470", payload.get("operationId"));
+        verifyNoInteractions(rest);
+    }
+
+    @Test
+    void nativeSdkCompletionRejectionAndUncertaintyNeverRetryOrDowngrade() throws Exception {
+        RestTemplate rest = mock(RestTemplate.class);
+        var provider = provider(new ObjectMapper(), rest, Runnable::run);
+        MutableContext context = new MutableContext(workspaceRoot);
+        createFinalizableRun(context, "sdk-rejected");
+        Map<String, Object> payload = completionPayload("sdk-rejected", false);
+        Method notify = BankingPolicyWindTunnelExecutionProvider.class.getDeclaredMethod("notifySimulationRunCompleted",
+                PolicyWindTunnelExecutionContext.class, String.class, Map.class);
+        notify.setAccessible(true);
+        for (int status : new int[] {409, -1}) {
+            directExperimentStatus = status;
+            directExperimentBody = Map.of("message", "Do not change the saved operation");
+            experimentRequests.clear();
+            assertEquals(false, notify.invoke(provider, context, "sdk-rejected", payload));
+            assertEquals(1, experimentRequests.size());
+            assertEquals(payload, experimentRequests.get(0).get("body"));
+        }
+        verifyNoInteractions(rest);
+    }
+
+
+    @Test
+    void retiredClockLaunchRejectsBeforeContextFilesOrAnyOutboundRequest() throws Exception {
+        RestTemplate rest = mock(RestTemplate.class);
+        var provider = provider(new ObjectMapper(), rest, Runnable::run);
+        PolicyWindTunnelExecutionContext context = mock(PolicyWindTunnelExecutionContext.class);
+        var rejected = assertThrows(RemoteDomainProtocolException.class,
+                () -> provider.startRun(context, Map.of("executionMode", "CLOCK_DRIVEN_HYBRID"), "REMOTE_PROVIDER"));
+        assertTrue(rejected.getMessage().contains("retired global clock"));
+        verifyNoInteractions(context, rest);
+        assertEquals(0, outboundHttpRequests.get());
+        try (var files = Files.list(workspaceRoot)) { assertEquals(0, files.count()); }
+    }
+
+    @Test
+    void retiredClockLifecycleActionsLeaveHistoricalRecordUnchanged() throws Exception {
+        RestTemplate rest = mock(RestTemplate.class);
+        var provider = provider(new ObjectMapper(), rest, Runnable::run);
+        MutableContext context = new MutableContext(workspaceRoot);
+        String runId = "historical-clock-controls";
+        createFinalizableRun(context, runId);
+        var before = context.findRun(runId).orElseThrow();
+        for (String action : List.of("CANCEL", "PAUSE", "RESUME", "SET_PLAYBACK_RATE", "FINALIZE")) {
+            Map<String, Object> payload = "FINALIZE".equals(action) ? finalizationRequest(runId) : Map.of();
+            var rejected = assertThrows(RemoteDomainProtocolException.class,
+                    () -> provider.controlRun(context, runId, action, payload));
+            assertTrue(rejected.getMessage().contains("Native Scenario Lab execution is not available"));
+            assertEquals(before, context.findRun(runId).orElseThrow());
+        }
+        assertEquals(0, outboundHttpRequests.get());
+        verifyNoInteractions(rest);
+    }
+
+    @Test
+    void retiredClockOutboundDefensesRejectReadsAndMutationsAtActualHttpBoundary() throws Exception {
+        RestTemplate realTransport = new RestTemplate();
+        var provider = provider(new ObjectMapper(), realTransport, Runnable::run);
+        String origin = "http://127.0.0.1:" + experimentServer.getAddress().getPort();
+        PolicyWindTunnelExecutionContext context = mock(PolicyWindTunnelExecutionContext.class);
+        when(context.simulatorUrl()).thenReturn(origin);
+        for (String name : List.of("simulatorMaxPlaybackRate", "fetchSimulatorReplay", "fetchSimulationTimeEpochMs")) {
+            Method read = BankingPolicyWindTunnelExecutionProvider.class.getDeclaredMethod(name, PolicyWindTunnelExecutionContext.class);
+            read.setAccessible(true);
+            var rejected = assertThrows(java.lang.reflect.InvocationTargetException.class,
+                    () -> read.invoke(provider, context));
+            assertTrue(rejected.getCause() instanceof RemoteDomainProtocolException);
+        }
+        for (String name : List.of("clearActiveAgents", "waitForRuntimeTickDrain", "fetchDecisionOpportunityReconciliation")) {
+            Method retired = BankingPolicyWindTunnelExecutionProvider.class.getDeclaredMethod(name,
+                    PolicyWindTunnelExecutionContext.class, String.class);
+            retired.setAccessible(true);
+            var rejected = assertThrows(java.lang.reflect.InvocationTargetException.class,
+                    () -> retired.invoke(provider, context, "historical-run"));
+            assertTrue(rejected.getCause() instanceof RemoteDomainProtocolException);
+        }
+        Method replay = BankingPolicyWindTunnelExecutionProvider.class.getDeclaredMethod(
+                "postReplayContractUpdateForRun", PolicyWindTunnelExecutionContext.class,
+                String.class, Map.class, String.class);
+        replay.setAccessible(true);
+        var rejected = assertThrows(java.lang.reflect.InvocationTargetException.class,
+                () -> replay.invoke(provider, context, "historical-run", Map.of("paused", true), "Pause requested"));
+        assertTrue(rejected.getCause() instanceof RemoteDomainProtocolException);
+
+        var runtime = new BankingPolicyScenarioExecutionRuntime(new ObjectMapper(), workspaceRoot,
+                origin, origin, origin, realTransport);
+        Path output = workspaceRoot.resolve("retired-execution");
+        assertThrows(RemoteDomainProtocolException.class,
+                () -> runtime.executeScenario("historical-run", "CANDIDATE", output,
+                        List.of(), List.of(), List.of(), null));
+        assertFalse(Files.exists(output));
+        assertEquals(0, outboundHttpRequests.get());
+    }
+
+    @Test
+    void historicalStoredStatusRemainsReadableAndMissingLiveEvidenceIsExplicit() throws Exception {
+        RestTemplate rest = mock(RestTemplate.class);
+        var provider = provider(new ObjectMapper(), rest, Runnable::run);
+        MutableContext context = new MutableContext(workspaceRoot);
+        String runId = "historical-read-only";
+        createFinalizableRun(context, runId);
+        assertEquals(context.findRun(runId).orElseThrow().status(), provider.getRunStatus(context, runId).status());
+        IllegalArgumentException unavailable = assertThrows(IllegalArgumentException.class, () -> provider.loadBundle(context, runId));
+        assertTrue(unavailable.getMessage().contains("does not have a registered summary artifact or summary path"));
+        assertThrows(IllegalArgumentException.class, () -> provider.readArtifact(context, runId, "summary"));
+        assertEquals(0, outboundHttpRequests.get());
+        verifyNoInteractions(rest);
+    
+    }
+
     @AfterEach
     void stopDurableContextBackgroundRuns() throws InterruptedException {
         BankingRemotePolicyWindTunnelTestContexts.stopBackgroundRuns();
@@ -163,7 +666,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
 
     @Test
     void incompletePerAgentAuditMakesReconciledReportProofPartial() throws Exception {
-        BankingPolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        BankingPolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 mock(RestTemplate.class),
                 Runnable::run);
@@ -204,7 +707,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
 
     @Test
     void initializedZeroOpportunityCohortRequiresRunScopedAuditForEveryAgent() throws Exception {
-        BankingPolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        BankingPolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 mock(RestTemplate.class),
                 Runnable::run);
@@ -269,7 +772,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
 
     @Test
     void deterministicOutcomeReviewDoesNotRequireOrClaimAgentDecisionAuditVerification() throws Exception {
-        BankingPolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        BankingPolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 mock(RestTemplate.class),
                 Runnable::run);
@@ -317,7 +820,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
 
     @Test
     void deterministicModeIsPartialWhenAnyAgentOrDurableDecisionEvidenceExists() throws Exception {
-        BankingPolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        BankingPolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 mock(RestTemplate.class),
                 Runnable::run);
@@ -385,7 +888,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
 
     @Test
     void opportunityAuditRequiresOwnedUniqueContractValidRowsForEveryValidDecision() throws Exception {
-        BankingPolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        BankingPolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 mock(RestTemplate.class),
                 Runnable::run);
@@ -457,7 +960,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
 
     @Test
     void invalidCorrelatedEventOnlyDecisionIsAnEvidenceGapNotLegacyCadence() throws Exception {
-        BankingPolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        BankingPolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 mock(RestTemplate.class),
                 Runnable::run);
@@ -547,7 +1050,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
 
     @Test
     void nonzeroLegacyDurableDecisionMismatchIsPartialForStubAndRealModes() throws Exception {
-        BankingPolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        BankingPolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 mock(RestTemplate.class),
                 Runnable::run);
@@ -651,7 +1154,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
 
     @Test
     void positiveLegacyUnspecifiedDebtMakesReconciledReportProofPartial() throws Exception {
-        BankingPolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        BankingPolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 mock(RestTemplate.class),
                 Runnable::run);
@@ -856,26 +1359,25 @@ class BankingPolicyWindTunnelExecutionProviderTest {
     }
 
     @Test
-    void providerRejectsInvalidPlatformOwnedRunIdBeforeCreatingRun() {
-        BankingPolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+    void providerRejectsInvalidPlatformOwnedRunIdBeforeCreatingRun() throws Exception {
+        RestTemplate restTemplate = mock(RestTemplate.class);
+        BankingPolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
-                mock(RestTemplate.class),
+                restTemplate,
                 Runnable::run);
         MutableContext context = new MutableContext(workspaceRoot);
-
-        assertThrows(IllegalArgumentException.class, () -> provider.startRun(
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.startRun(
                 context,
                 Map.of(
                         "presetId", "saver-repricing",
                         "executionMode", "CLOCK_DRIVEN_HYBRID",
                         "simulationRunId", "../not-a-run"),
                 "PLATFORM_ADMIN"));
-
-        assertTrue(context.findRun("../not-a-run").isEmpty());
     }
 
     @Test
-    void clockPauseRequiresExplicitReplayOwnership() {
+    void clockPauseRequiresExplicitReplayOwnership() throws Exception {
         RestTemplate restTemplate = mock(RestTemplate.class);
         when(restTemplate.exchange(
                 eq("http://simulator.test/api/clock/replay"),
@@ -889,7 +1391,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 any(HttpEntity.class),
                 eq(String.class)))
                 .thenReturn(ResponseEntity.ok("{}"));
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
@@ -918,17 +1420,8 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 null,
                 null,
                 metadata));
-
-        PolicyWindTunnelRunRecord cancelled = provider.controlRun(context, runId, "CANCEL", Map.of());
-
-        assertEquals("CANCELLED", cancelled.status());
-        assertTrue(cancelled.logTail().stream()
-                .anyMatch(line -> line.contains("Cancel requested. Simulator playback was not changed because replay ownership changed")));
-        verify(restTemplate, times(1)).exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(String.class));
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.controlRun(context, runId, "CANCEL", Map.of()));
     }
 
     @Test
@@ -938,7 +1431,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 eq("http://simulator.test/api/clock/replay"),
                 eq(String.class)))
                 .thenReturn("{}");
-        BankingPolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        BankingPolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
@@ -949,19 +1442,9 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 Map.class);
         method.setAccessible(true);
 
-        @SuppressWarnings("unchecked")
-        Map<String, Object> window = (Map<String, Object>) method.invoke(
-                provider,
-                new MutableContext(workspaceRoot),
-                "clock-duration-missing-owner-test",
-                Map.of("simulationHorizonDays", 1));
-
-        assertEquals("UNVERIFIED_CLOCK_OWNERSHIP", window.get("durationStatus"));
-        assertEquals(false, window.get("durationProofVerified"));
-        assertFalse(window.containsKey("actualDurationDays"));
-        verify(restTemplate, never()).getForObject(
-                eq("http://simulator.test/api/clock/time"),
-                eq(Long.class));
+        MutableContext context = new MutableContext(workspaceRoot);
+        assertRetiredWithoutEffects(context, restTemplate, () -> invokePure(provider,
+                "clockDrivenSimulationWindow", context, "clock-duration-retired", Map.of("simulationHorizonDays", 1)));
     }
 
     @Test
@@ -975,7 +1458,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 eq("http://simulator.test/api/clock/time"),
                 eq(Long.class)))
                 .thenReturn(null);
-        BankingPolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        BankingPolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
@@ -986,22 +1469,13 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 Map.class);
         method.setAccessible(true);
 
-        @SuppressWarnings("unchecked")
-        Map<String, Object> window = (Map<String, Object>) method.invoke(
-                provider,
-                new MutableContext(workspaceRoot),
-                "clock-duration-missing-time-test",
-                Map.of("simulationHorizonDays", 1));
-
-        assertEquals("UNVERIFIED_CLOCK_TIME", window.get("durationStatus"));
-        assertEquals(false, window.get("durationProofVerified"));
-        assertEquals("Simulator clock time was unavailable after replay ownership was verified.",
-                window.get("durationUnverifiedReason"));
-        assertFalse(window.containsKey("actualDurationDays"));
+        MutableContext context = new MutableContext(workspaceRoot);
+        assertRetiredWithoutEffects(context, restTemplate, () -> invokePure(provider,
+                "clockDrivenSimulationWindow", context, "clock-duration-retired", Map.of("simulationHorizonDays", 1)));
     }
 
     @Test
-    void manualPlaybackControlsRequireExplicitReplayOwnership() {
+    void manualPlaybackControlsRequireExplicitReplayOwnership() throws Exception {
         RestTemplate restTemplate = mock(RestTemplate.class);
         when(restTemplate.exchange(
                 eq("http://simulator.test/api/clock/replay"),
@@ -1009,7 +1483,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 any(HttpEntity.class),
                 eq(String.class)))
                 .thenThrow(new HttpClientErrorException(HttpStatus.CONFLICT));
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
@@ -1038,30 +1512,12 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 null,
                 null,
                 metadata));
-
-        PolicyWindTunnelRunRecord afterPause = provider.controlRun(context, runId, "PAUSE", Map.of());
-        PolicyWindTunnelRunRecord afterResume = provider.controlRun(context, runId, "RESUME", Map.of("playbackRate", 2.0));
-
-        assertEquals("RUNNING", afterPause.status());
-        assertEquals("CLOCK_RUNNING", afterPause.phase());
-        assertEquals("RUNNING", afterResume.status());
-        assertEquals("CLOCK_RUNNING", afterResume.phase());
-        assertTrue(afterResume.logTail().stream()
-                .anyMatch(line -> line.contains("Pause requested. Simulator playback was not changed because replay ownership changed")));
-        assertTrue(afterResume.logTail().stream()
-                .anyMatch(line -> line.contains("Resume ignored because run state is RUNNING/CLOCK_RUNNING.")));
-        ArgumentCaptor<HttpEntity> replayCaptor = ArgumentCaptor.forClass(HttpEntity.class);
-        verify(restTemplate, times(1)).exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                replayCaptor.capture(),
-                eq(String.class));
-        assertTrue(replayCaptor.getAllValues().stream()
-                .allMatch(entity -> runId.equals(((Map<?, ?>) entity.getBody()).get("expectedRunId"))));
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.controlRun(context, runId, "PAUSE", Map.of()));
     }
 
     @Test
-    void runningClockCanChangePlaybackRateWithoutUsingResumeTransition() {
+    void runningClockCanChangePlaybackRateWithoutUsingResumeTransition() throws Exception {
         RestTemplate restTemplate = mock(RestTemplate.class);
         when(restTemplate.exchange(
                 eq("http://simulator.test/api/clock/replay"),
@@ -1069,7 +1525,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 any(HttpEntity.class),
                 eq(String.class)))
                 .thenReturn(ResponseEntity.ok("{}"));
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
@@ -1099,32 +1555,16 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 null,
                 null,
                 metadata));
-
-        PolicyWindTunnelRunRecord changed = provider.controlRun(
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.controlRun(
                 context,
                 runId,
                 "SET_PLAYBACK_RATE",
-                Map.of("playbackRate", 600.0));
-
-        assertEquals("RUNNING", changed.status());
-        assertEquals("CLOCK_RUNNING", changed.phase());
-        assertEquals(600.0, ((Number) changed.parameters().get("playbackRate")).doubleValue());
-        assertTrue(changed.logTail().stream().anyMatch(line -> line.contains("Playback rate changed to 600x.")));
-        ArgumentCaptor<HttpEntity> replayCaptor = ArgumentCaptor.forClass(HttpEntity.class);
-        verify(restTemplate).exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                replayCaptor.capture(),
-                eq(String.class));
-        Map<?, ?> replayBody = (Map<?, ?>) replayCaptor.getValue().getBody();
-        assertEquals(runId, replayBody.get("expectedRunId"));
-        Map<?, ?> playback = (Map<?, ?>) replayBody.get("playback");
-        assertEquals(false, playback.get("paused"));
-        assertEquals(600.0, ((Number) playback.get("rate")).doubleValue());
+                Map.of("playbackRate", 600.0)));
     }
 
     @Test
-    void playbackRateChangeWithoutExplicitRatePreservesStoredRate() {
+    void playbackRateChangeWithoutExplicitRatePreservesStoredRate() throws Exception {
         RestTemplate restTemplate = mock(RestTemplate.class);
         when(restTemplate.exchange(
                 eq("http://simulator.test/api/clock/replay"),
@@ -1132,7 +1572,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 any(HttpEntity.class),
                 eq(String.class)))
                 .thenReturn(ResponseEntity.ok("{}"));
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
@@ -1162,26 +1602,12 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 null,
                 null,
                 metadata));
-
-        PolicyWindTunnelRunRecord changed = provider.controlRun(context, runId, "SET_PLAYBACK_RATE", Map.of());
-
-        assertEquals("RUNNING", changed.status());
-        assertEquals("CLOCK_RUNNING", changed.phase());
-        assertEquals(600.0, ((Number) changed.parameters().get("playbackRate")).doubleValue());
-        ArgumentCaptor<HttpEntity> replayCaptor = ArgumentCaptor.forClass(HttpEntity.class);
-        verify(restTemplate).exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                replayCaptor.capture(),
-                eq(String.class));
-        Map<?, ?> replayBody = (Map<?, ?>) replayCaptor.getValue().getBody();
-        Map<?, ?> playback = (Map<?, ?>) replayBody.get("playback");
-        assertEquals(false, playback.get("paused"));
-        assertEquals(600.0, ((Number) playback.get("rate")).doubleValue());
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.controlRun(context, runId, "SET_PLAYBACK_RATE", Map.of()));
     }
 
     @Test
-    void playbackRateChangeWithInvalidExplicitRatePreservesStoredRate() {
+    void playbackRateChangeWithInvalidExplicitRatePreservesStoredRate() throws Exception {
         RestTemplate restTemplate = mock(RestTemplate.class);
         when(restTemplate.exchange(
                 eq("http://simulator.test/api/clock/replay"),
@@ -1189,7 +1615,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 any(HttpEntity.class),
                 eq(String.class)))
                 .thenReturn(ResponseEntity.ok("{}"));
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
@@ -1221,31 +1647,18 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 metadata));
 
         List<Object> invalidRates = List.of(0, -10.0, "NaN", "not-a-number");
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
         for (Object invalidRate : invalidRates) {
-            PolicyWindTunnelRunRecord changed = provider.controlRun(
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.controlRun(
                     context,
                     runId,
                     "SET_PLAYBACK_RATE",
-                    Map.of("playbackRate", invalidRate));
-            assertEquals(600.0, ((Number) changed.parameters().get("playbackRate")).doubleValue());
-        }
-
-        ArgumentCaptor<HttpEntity> replayCaptor = ArgumentCaptor.forClass(HttpEntity.class);
-        verify(restTemplate, times(invalidRates.size())).exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                replayCaptor.capture(),
-                eq(String.class));
-        for (HttpEntity entity : replayCaptor.getAllValues()) {
-            Map<?, ?> replayBody = (Map<?, ?>) entity.getBody();
-            Map<?, ?> playback = (Map<?, ?>) replayBody.get("playback");
-            assertEquals(false, playback.get("paused"));
-            assertEquals(600.0, ((Number) playback.get("rate")).doubleValue());
+                    Map.of("playbackRate", invalidRate)));
         }
     }
 
     @Test
-    void pauseResumePreservesOperatorSelectedPlaybackRate() {
+    void pauseResumePreservesOperatorSelectedPlaybackRate() throws Exception {
         RestTemplate restTemplate = mock(RestTemplate.class);
         when(restTemplate.exchange(
                 eq("http://simulator.test/api/clock/replay"),
@@ -1253,7 +1666,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 any(HttpEntity.class),
                 eq(String.class)))
                 .thenReturn(ResponseEntity.ok("{}"));
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
@@ -1283,31 +1696,14 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 null,
                 null,
                 metadata));
-
-        provider.controlRun(context, runId, "SET_PLAYBACK_RATE", Map.of("playbackRate", 600.0));
-        provider.controlRun(context, runId, "PAUSE", Map.of());
-        PolicyWindTunnelRunRecord resumed = provider.controlRun(context, runId, "RESUME", Map.of());
-
-        assertEquals("RUNNING", resumed.status());
-        assertEquals("CLOCK_RUNNING", resumed.phase());
-        assertEquals(600.0, ((Number) resumed.parameters().get("playbackRate")).doubleValue());
-        ArgumentCaptor<HttpEntity> replayCaptor = ArgumentCaptor.forClass(HttpEntity.class);
-        verify(restTemplate, times(3)).exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                replayCaptor.capture(),
-                eq(String.class));
-        Map<?, ?> resumeBody = (Map<?, ?>) replayCaptor.getAllValues().get(2).getBody();
-        assertEquals(runId, resumeBody.get("expectedRunId"));
-        Map<?, ?> resumePlayback = (Map<?, ?>) resumeBody.get("playback");
-        assertEquals(false, resumePlayback.get("paused"));
-        assertEquals(600.0, ((Number) resumePlayback.get("rate")).doubleValue());
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.controlRun(context, runId, "SET_PLAYBACK_RATE", Map.of("playbackRate", 600.0)));
     }
 
     @Test
-    void resumeDoesNotStartPlaybackDuringActivation() {
+    void resumeDoesNotStartPlaybackDuringActivation() throws Exception {
         RestTemplate restTemplate = mock(RestTemplate.class);
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
@@ -1336,22 +1732,12 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 null,
                 null,
                 metadata));
-
-        PolicyWindTunnelRunRecord resumed = provider.controlRun(context, runId, "RESUME", Map.of("playbackRate", 2.0));
-
-        assertEquals("RUNNING", resumed.status());
-        assertEquals("ACTIVATING_COHORT", resumed.phase());
-        assertTrue(resumed.logTail().stream()
-                .anyMatch(line -> line.contains("Resume ignored because run state is RUNNING/ACTIVATING_COHORT.")));
-        verify(restTemplate, never()).exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(String.class));
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.controlRun(context, runId, "RESUME", Map.of("playbackRate", 2.0)));
     }
 
     @Test
-    void pauseBeforeReplayOwnershipStillMarksRunPaused() {
+    void pauseBeforeReplayOwnershipStillMarksRunPaused() throws Exception {
         RestTemplate restTemplate = mock(RestTemplate.class);
         when(restTemplate.exchange(
                 eq("http://simulator.test/api/clock/replay"),
@@ -1359,7 +1745,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 any(HttpEntity.class),
                 eq(String.class)))
                 .thenThrow(new HttpClientErrorException(HttpStatus.CONFLICT));
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
@@ -1388,27 +1774,15 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 null,
                 null,
                 metadata));
-
-        PolicyWindTunnelRunRecord paused = provider.controlRun(context, runId, "PAUSE", Map.of());
-
-        assertEquals("PAUSED", paused.status());
-        assertEquals("PAUSED", paused.phase());
-        assertTrue(paused.logTail().stream()
-                .anyMatch(line -> line.contains("Run paused before simulator clock playback started.")));
-        assertTrue(paused.logTail().stream()
-                .anyMatch(line -> line.contains("Pause requested. Simulator playback was not changed because replay ownership changed")));
-        verify(restTemplate, times(1)).exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(String.class));
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.controlRun(context, runId, "PAUSE", Map.of()));
     }
 
     @Test
-    void resumeFromPreparingPauseRequeuesSetupWorker() {
+    void resumeFromPreparingPauseRequeuesSetupWorker() throws Exception {
         RestTemplate restTemplate = mock(RestTemplate.class);
         AtomicReference<Runnable> queuedWorker = new AtomicReference<>();
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 queuedWorker::set);
@@ -1441,26 +1815,15 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 null,
                 null,
                 metadata));
-
-        PolicyWindTunnelRunRecord resumed = provider.controlRun(context, runId, "RESUME", Map.of());
-
-        assertEquals("RUNNING", resumed.status());
-        assertEquals("PREPARING_CLOCK", resumed.phase());
-        assertTrue(queuedWorker.get() != null);
-        assertTrue(resumed.logTail().stream()
-                .anyMatch(line -> line.contains("Restarting clock-driven setup from PREPARING_CLOCK.")));
-        verify(restTemplate, never()).exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(String.class));
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.controlRun(context, runId, "RESUME", Map.of()));
     }
 
     @Test
-    void resumeFromActivationPauseRequeuesSetupWorkerFromCleanPreparingPhase() {
+    void resumeFromActivationPauseRequeuesSetupWorkerFromCleanPreparingPhase() throws Exception {
         RestTemplate restTemplate = mock(RestTemplate.class);
         AtomicReference<Runnable> queuedWorker = new AtomicReference<>();
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 queuedWorker::set);
@@ -1494,19 +1857,8 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 null,
                 null,
                 metadata));
-
-        PolicyWindTunnelRunRecord resumed = provider.controlRun(context, runId, "RESUME", Map.of());
-
-        assertEquals("RUNNING", resumed.status());
-        assertEquals("PREPARING_CLOCK", resumed.phase());
-        assertTrue(queuedWorker.get() != null);
-        assertTrue(resumed.logTail().stream()
-                .anyMatch(line -> line.contains("Restarting clock-driven setup from ACTIVATING_COHORT.")));
-        verify(restTemplate, never()).exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(String.class));
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.controlRun(context, runId, "RESUME", Map.of()));
     }
 
     @Test
@@ -1520,7 +1872,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 eq(String.class)))
                 .thenThrow(new HttpClientErrorException(HttpStatus.CONFLICT));
         AtomicReference<Runnable> queuedWorker = new AtomicReference<>();
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 queuedWorker::set);
@@ -1553,25 +1905,8 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 null,
                 null,
                 metadata));
-
-        provider.controlRun(context, runId, "RESUME", Map.of());
-        queuedWorker.get().run();
-
-        PolicyWindTunnelRunRecord status = provider.getRunStatus(context, runId);
-        assertEquals("PAUSED", status.status());
-        assertEquals("PAUSED", status.phase());
-        assertTrue(status.logTail().stream()
-                .anyMatch(line -> line.contains("Setup remains paused because simulator replay ownership was not empty or owned by this run.")));
-        ArgumentCaptor<HttpEntity> replayRequests = ArgumentCaptor.forClass(HttpEntity.class);
-        verify(restTemplate, times(2)).exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                replayRequests.capture(),
-                eq(String.class));
-        Map<?, ?> firstReplay = (Map<?, ?>) replayRequests.getAllValues().get(0).getBody();
-        Map<?, ?> secondReplay = (Map<?, ?>) replayRequests.getAllValues().get(1).getBody();
-        assertEquals(runId, firstReplay.get("expectedRunId"));
-        assertEquals("", secondReplay.get("expectedRunId"));
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.controlRun(context, runId, "RESUME", Map.of()));
     }
 
     @Test
@@ -1585,7 +1920,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 eq(String.class)))
                 .thenThrow(new HttpClientErrorException(HttpStatus.CONFLICT));
         AtomicReference<Runnable> queuedWorker = new AtomicReference<>();
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 queuedWorker::set);
@@ -1619,33 +1954,8 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 null,
                 null,
                 metadata));
-
-        provider.controlRun(context, runId, "RESUME", Map.of());
-        queuedWorker.get().run();
-
-        PolicyWindTunnelRunRecord status = provider.getRunStatus(context, runId);
-        assertEquals("PAUSED", status.status());
-        assertEquals("PAUSED", status.phase());
-
-        provider.controlRun(context, runId, "RESUME", Map.of());
-        queuedWorker.get().run();
-
-        PolicyWindTunnelRunRecord retryStatus = provider.getRunStatus(context, runId);
-        assertEquals("PAUSED", retryStatus.status());
-        assertEquals("PAUSED", retryStatus.phase());
-        ArgumentCaptor<HttpEntity> replayRequests = ArgumentCaptor.forClass(HttpEntity.class);
-        verify(restTemplate, times(2)).exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                replayRequests.capture(),
-                eq(String.class));
-        assertTrue(replayRequests.getAllValues().stream()
-                .allMatch(entity -> runId.equals(((Map<?, ?>) entity.getBody()).get("expectedRunId"))));
-        verify(restTemplate, never()).exchange(
-                startsWith("http://agent-runtime.test/api/agents"),
-                eq(HttpMethod.DELETE),
-                any(HttpEntity.class),
-                eq(String.class));
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.controlRun(context, runId, "RESUME", Map.of()));
     }
 
     @Test
@@ -1720,48 +2030,16 @@ class BankingPolicyWindTunnelExecutionProviderTest {
     }
 
     @Test
-    void eventOnlyLaunchRequiresClockDrivenHybridAndExplicitV2Finalization() {
-        BankingPolicyWindTunnelExecutionProvider provider =
-                new BankingPolicyWindTunnelExecutionProvider(
-                        new ObjectMapper(), mock(RestTemplate.class), command -> { });
+    void eventOnlyLaunchRequiresClockDrivenHybridAndExplicitV2Finalization() throws Exception {
+        RestTemplate restTemplate = mock(RestTemplate.class);
+        var provider = provider(new ObjectMapper(), restTemplate, Runnable::run);
         MutableContext context = new MutableContext(workspaceRoot);
-        Map<String, Object> base = new LinkedHashMap<>(Map.of(
-                "presetId", "saver-repricing",
-                "agentDecisionMode", "STUB_LLM",
-                "agentDecisionCadence", "EVENT_ONLY"));
-
-        Map<String, Object> missingMode = new LinkedHashMap<>(base);
-        missingMode.put("executionMode", "CLOCK_DRIVEN_HYBRID");
-        assertThrows(IllegalArgumentException.class, () -> provider.startRun(
-                context, missingMode, "PLATFORM_ADMIN"));
-
-        Map<String, Object> wrongExecutionMode = new LinkedHashMap<>(base);
-        wrongExecutionMode.put("executionMode", "FAST_BATCH_COMPARE");
-        wrongExecutionMode.put("opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2");
-        RemoteDomainProtocolException retired = assertThrows(
-                RemoteDomainProtocolException.class,
-                () -> provider.startRun(context, wrongExecutionMode, "PLATFORM_ADMIN"));
-        assertEquals(HttpStatus.BAD_REQUEST, retired.status());
-
-        Map<String, Object> legacyMode = new LinkedHashMap<>(base);
-        legacyMode.put("executionMode", "CLOCK_DRIVEN_HYBRID");
-        legacyMode.put("opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V1");
-        assertThrows(IllegalArgumentException.class, () -> provider.startRun(
-                context, legacyMode, "PLATFORM_ADMIN"));
-
-        Map<String, Object> paddedMode = new LinkedHashMap<>(base);
-        paddedMode.put("executionMode", "CLOCK_DRIVEN_HYBRID");
-        paddedMode.put("opportunityGenerationFinalizationMode", " PLATFORM_OWNED_V2 ");
-        assertThrows(IllegalArgumentException.class, () -> provider.startRun(
-                context, paddedMode, "PLATFORM_ADMIN"));
-
-        Map<String, Object> v2Mode = new LinkedHashMap<>(base);
-        v2Mode.put("executionMode", "CLOCK_DRIVEN_HYBRID");
-        v2Mode.put("opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2");
-        IllegalStateException rejected = assertThrows(
-                IllegalStateException.class,
-                () -> provider.startRun(context, v2Mode, "PLATFORM_ADMIN"));
-        assertTrue(rejected.getMessage().contains("verified shared durable provider storage"));
+        RemoteDomainProtocolException mode = assertThrows(RemoteDomainProtocolException.class, () ->
+                provider.startRun(context, Map.of("executionMode", "FAST_BATCH_COMPARE", "agentDecisionCadence", "EVENT_ONLY"), "PLATFORM_ADMIN"));
+        assertEquals("scenario_lab_execution_mode_retired", mode.code());
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.startRun(context, Map.of(
+                "executionMode", "CLOCK_DRIVEN_HYBRID", "agentDecisionCadence", "EVENT_ONLY",
+                "opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2"), "PLATFORM_ADMIN"));
     }
 
     @Test
@@ -1789,7 +2067,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
     @Test
     void newProviderLaunchRejectsFastMissingAndUnknownModesBeforePersistenceOrExecution() {
         AtomicInteger executions = new AtomicInteger();
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 mock(RestTemplate.class),
                 command -> executions.incrementAndGet());
@@ -1891,7 +2169,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 any(HttpEntity.class),
                 eq(String.class)))
                 .thenReturn(ResponseEntity.ok("{}"));
-        BankingPolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        BankingPolicyWindTunnelExecutionProvider provider = provider(
                 objectMapper,
                 restTemplate,
                 Runnable::run);
@@ -1933,18 +2211,14 @@ class BankingPolicyWindTunnelExecutionProviderTest {
         executeRun.setAccessible(true);
         executeRun.invoke(provider, context, runId, resolved);
 
-        assertEquals("COMPLETED", context.findRun(runId).orElseThrow().status());
+        assertEquals("FAILED", context.findRun(runId).orElseThrow().status());
         Path runRoot = workspaceRoot.resolve(BankingPolicyWindTunnelManifest.ARTIFACT_ROOT).resolve(runId);
-        Map<?, ?> baselineEvaluation = objectMapper.readValue(
-                runRoot.resolve("evaluation/baseline-evaluation.json").toFile(),
-                Map.class);
-        Map<?, ?> candidateEvaluation = objectMapper.readValue(
-                runRoot.resolve("evaluation/candidate-evaluation.json").toFile(),
-                Map.class);
-        assertEquals("evaluation.v1", baselineEvaluation.get("schemaVersion"));
-        assertEquals("evaluation.v1", candidateEvaluation.get("schemaVersion"));
-        assertTrue(baselineEvaluation.containsKey("scenarioResults"));
-        assertTrue(candidateEvaluation.containsKey("scenarioResults"));
+        assertFalse(Files.exists(runRoot.resolve("evaluation/baseline-evaluation.json")));
+        assertFalse(Files.exists(runRoot.resolve("evaluation/candidate-evaluation.json")));
+        assertEquals(0, outboundHttpRequests.get());
+        verify(restTemplate, times(1)).exchange(eq("http://banking.test/api/products"), eq(HttpMethod.GET), any(HttpEntity.class), eq(String.class));
+        verify(restTemplate, never()).exchange(contains("/api/clock"), any(HttpMethod.class), any(HttpEntity.class), eq(String.class));
+        assertEquals(1, org.mockito.Mockito.mockingDetails(restTemplate).getInvocations().size());
     }
 
     @Test
@@ -2345,14 +2619,13 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 any(HttpEntity.class),
                 eq(String.class)))
                 .thenReturn(ResponseEntity.ok("{}"));
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
         BankingRemotePolicyWindTunnelExecutionContext context =
                 BankingRemotePolicyWindTunnelTestContexts.durable(new ObjectMapper(), workspaceRoot);
-
-        PolicyWindTunnelRunRecord status = provider.startRun(context, withPinnedActivationSettings(Map.ofEntries(
+        Map<String, Object> originalPayload = withPinnedActivationSettings(Map.ofEntries(
                         Map.entry("presetId", "saver-repricing"),
                         Map.entry("executionMode", "CLOCK_DRIVEN_HYBRID"),
                         Map.entry("opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2"),
@@ -2371,19 +2644,16 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                                 "maxInputTokens", 150_000,
                                 "maxOutputTokens", 25_000)),
                         Map.entry("cohortId", cohortId),
-                        Map.entry("cohortSelection", Map.of("cohortId", cohortId)))),
-                "PLATFORM_ADMIN");
-
-        assertEquals("FAILED", status.status());
-        assertTrue(
-                String.valueOf(status.error().get("message"))
-                        .contains("REAL_LLM canary runs are capped at 10 customers"),
-                String.valueOf(status.error().get("message")));
+                        Map.entry("cohortSelection", Map.of("cohortId", cohortId))));
+        IllegalArgumentException invalid = assertThrows(IllegalArgumentException.class, () ->
+                invokePure(provider, "enforceRealLlmCanary", originalPayload, "REAL_LLM", 100));
+        assertTrue(invalid.getMessage().contains("REAL_LLM canary runs are capped at 10 customers"), invalid.getMessage());
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.startRun(context, originalPayload, "PLATFORM_ADMIN"));
     }
 
     @Test
     void realLlmClockDrivenRunAllowsMonthlyDailyTenCustomerCanaryWithinBudget() throws Exception {
-        BankingPolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        BankingPolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 mock(RestTemplate.class),
                 Runnable::run);
@@ -2441,95 +2711,18 @@ class BankingPolicyWindTunnelExecutionProviderTest {
             String decisionMode,
             String decisionCadence) throws Exception {
         RestTemplate restTemplate = mock(RestTemplate.class);
-        when(restTemplate.exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(String.class)))
-                .thenReturn(ResponseEntity.ok("{}"));
-        when(restTemplate.exchange(
-                eq("http://agent-runtime.test/api/agents/runtime-state?simulationRunId=" + runId),
-                eq(HttpMethod.GET),
-                any(HttpEntity.class),
-                eq(Map.class)))
-                .thenReturn(runtimeStateResponse(runId, 0, 0, 0));
-        when(restTemplate.exchange(
-                org.mockito.ArgumentMatchers.<String>argThat(url -> url != null
-                        && url.toString().startsWith(
-                                "http://agent-runtime.test/api/agents/hybrid-decisions?simulationRunId=" + runId)),
-                eq(HttpMethod.GET),
-                any(HttpEntity.class),
-                eq(List.class)))
-                .thenReturn(realLlmHybridDecisionResponse());
-        BankingPolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
-                new ObjectMapper(),
-                restTemplate,
-                Runnable::run);
-        MutableContext context = new MutableContext(workspaceRoot);
-        Map<String, Object> parameters = new LinkedHashMap<>();
-        parameters.put("presetId", "saver-repricing");
-        parameters.put("executionMode", "CLOCK_DRIVEN_HYBRID");
-        parameters.put("opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2");
-        parameters.put("runPath", "CLOCK_DRIVEN_SIMULATION");
-        parameters.put("agentDecisionMode", decisionMode);
-        parameters.put("agentDecisionCadence", decisionCadence);
-        parameters.put("simulationHorizonDays", 7);
-        parameters.put("cohortId", "banking-balanced-banking-10-" + runId);
-        parameters.put("cohortTargetSize", 10);
-        if ("REAL_LLM".equals(decisionMode)) {
-            parameters.put("realLlmOptIn", true);
-            parameters.put("realLlmBudget", Map.of(
-                    "provider", "openai",
-                    "model", "gemini-2.5-flash-lite",
-                    "maxCalls", 70,
-                    "maxUsd", 1.0,
-                    "maxInputTokens", 150_000,
-                    "maxOutputTokens", 25_000));
-        }
-        Map<String, Object> metadata = BankingPolicyScenarioLabRunMetadata
-                .queued(parameters)
-                .withLifecycle("CLOCK_RUNNING", 0.91, false, null, null, null)
-                .writeTo(Map.of());
-        context.createRun(new PolicyWindTunnelExecutionContext.PolicyWindTunnelRunCreateRequest(
-                runId,
-                BankingPolicyWindTunnelManifest.EXPERIMENT_ID,
-                "banking-saver-repricing",
-                "CANDIDATE",
-                "SEEDED_DETERMINISTIC",
-                "saver-repricing",
-                "RUNNING",
-                System.currentTimeMillis(),
-                null,
-                null,
-                metadata));
-        stubSealedOpportunityReconciliation(restTemplate, runId);
-
-        provider.controlRun(context, runId, "FINALIZE", finalizationRequest(runId));
-
-        Map<String, Object> finalizedBundle = provider.loadBundle(context, runId);
-        Map<?, ?> summary = (Map<?, ?>) finalizedBundle.get("summary");
-        Map<?, ?> agentAudit = (Map<?, ?>) summary.get("hybridAgentAudit");
-        List<Map<String, Object>> agents = (List<Map<String, Object>>) agentAudit.get("agents");
+        var provider = provider(new ObjectMapper(), restTemplate, Runnable::run);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> audit = (Map<String, Object>) invokePure(provider, "buildDecisionAuditPayload",
+                realLlmHybridDecisionResponse().getBody(), "stored-fixture");
+        List<Map<String, Object>> agents = (List<Map<String, Object>>) audit.get("agents");
         List<Map<String, Object>> decisions = (List<Map<String, Object>>) agents.getFirst().get("decisions");
         assertEquals(2, decisions.size());
         assertEquals("I will wait today.", decisions.getFirst().get("customerVoice"));
-        Map<?, ?> runtimeTickDrain = (Map<?, ?>) agentAudit.get("runtimeTickDrain");
-        assertEquals(true, runtimeTickDrain.get("verified"));
-        assertEquals("DRAINED", runtimeTickDrain.get("status"));
-        verify(restTemplate, times(1)).exchange(
-                org.mockito.ArgumentMatchers.<String>argThat(url -> url != null
-                        && url.toString().contains("/api/agents/hybrid-decisions")
-                        && url.toString().contains("includeDecisions=true")),
-                eq(HttpMethod.GET),
-                any(HttpEntity.class),
-                eq(List.class));
-        verify(restTemplate, atLeast(1)).exchange(
-                org.mockito.ArgumentMatchers.<String>argThat(url -> url != null
-                        && url.toString().contains("/api/agents/hybrid-decisions")
-                        && url.toString().contains("includeDecisions=false")),
-                eq(HttpMethod.GET),
-                any(HttpEntity.class),
-                eq(List.class));
+        assertEquals("stored-fixture", audit.get("source"));
+        assertFalse(audit.containsKey("runtimeTickDrain"));
+        assertEquals(0, outboundHttpRequests.get());
+        verifyNoInteractions(restTemplate);
     }
 
     @Test
@@ -2549,14 +2742,13 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 any(HttpEntity.class),
                 eq(String.class)))
                 .thenReturn(ResponseEntity.ok("{}"));
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
         BankingRemotePolicyWindTunnelExecutionContext context =
                 BankingRemotePolicyWindTunnelTestContexts.durable(new ObjectMapper(), workspaceRoot);
-
-        PolicyWindTunnelRunRecord status = provider.startRun(context, withPinnedActivationSettings(Map.ofEntries(
+        Map<String, Object> originalPayload = withPinnedActivationSettings(Map.ofEntries(
                         Map.entry("presetId", "saver-repricing"),
                         Map.entry("executionMode", "CLOCK_DRIVEN_HYBRID"),
                         Map.entry("opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2"),
@@ -2575,14 +2767,11 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                                 "maxInputTokens", 150_000,
                                 "maxOutputTokens", 25_000)),
                         Map.entry("cohortId", cohortId),
-                        Map.entry("cohortSelection", Map.of("cohortId", cohortId)))),
-                "PLATFORM_ADMIN");
-
-        assertEquals("FAILED", status.status());
-        assertTrue(
-                String.valueOf(status.error().get("message"))
-                        .contains("REAL_LLM canary maxCalls must be between 1 and 70"),
-                String.valueOf(status.error().get("message")));
+                        Map.entry("cohortSelection", Map.of("cohortId", cohortId))));
+        IllegalArgumentException invalid = assertThrows(IllegalArgumentException.class, () ->
+                invokePure(provider, "enforceRealLlmCanary", originalPayload, "REAL_LLM", 2));
+        assertTrue(invalid.getMessage().contains("REAL_LLM canary maxCalls must be between 1 and 70"), invalid.getMessage());
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.startRun(context, originalPayload, "PLATFORM_ADMIN"));
     }
 
     @Test
@@ -2602,14 +2791,13 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 any(HttpEntity.class),
                 eq(String.class)))
                 .thenReturn(ResponseEntity.ok("{}"));
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
         BankingRemotePolicyWindTunnelExecutionContext context =
                 BankingRemotePolicyWindTunnelTestContexts.durable(new ObjectMapper(), workspaceRoot);
-
-        PolicyWindTunnelRunRecord status = provider.startRun(context, withPinnedActivationSettings(Map.ofEntries(
+        Map<String, Object> originalPayload = withPinnedActivationSettings(Map.ofEntries(
                         Map.entry("presetId", "saver-repricing"),
                         Map.entry("executionMode", "CLOCK_DRIVEN_HYBRID"),
                         Map.entry("opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2"),
@@ -2628,14 +2816,11 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                                 "maxInputTokens", 150_000,
                                 "maxOutputTokens", 25_000)),
                         Map.entry("cohortId", cohortId),
-                        Map.entry("cohortSelection", Map.of("cohortId", cohortId)))),
-                "PLATFORM_ADMIN");
-
-        assertEquals("FAILED", status.status());
-        assertTrue(
-                String.valueOf(status.error().get("message"))
-                        .contains("REAL_LLM canary budget maxCalls must be an integer within 32-bit range"),
-                String.valueOf(status.error().get("message")));
+                        Map.entry("cohortSelection", Map.of("cohortId", cohortId))));
+        IllegalArgumentException invalid = assertThrows(IllegalArgumentException.class, () ->
+                invokePure(provider, "enforceRealLlmCanary", originalPayload, "REAL_LLM", 2));
+        assertTrue(invalid.getMessage().contains("REAL_LLM canary budget maxCalls must be an integer within 32-bit range"), invalid.getMessage());
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.startRun(context, originalPayload, "PLATFORM_ADMIN"));
     }
 
     @Test
@@ -2655,14 +2840,13 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 any(HttpEntity.class),
                 eq(String.class)))
                 .thenReturn(ResponseEntity.ok("{}"));
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
         BankingRemotePolicyWindTunnelExecutionContext context =
                 BankingRemotePolicyWindTunnelTestContexts.durable(new ObjectMapper(), workspaceRoot);
-
-        PolicyWindTunnelRunRecord status = provider.startRun(context, withPinnedActivationSettings(Map.ofEntries(
+        Map<String, Object> originalPayload = withPinnedActivationSettings(Map.ofEntries(
                         Map.entry("presetId", "saver-repricing"),
                         Map.entry("executionMode", "CLOCK_DRIVEN_HYBRID"),
                         Map.entry("opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2"),
@@ -2681,14 +2865,11 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                                 "maxInputTokens", 150_000,
                                 "maxOutputTokens", 25_000)),
                         Map.entry("cohortId", cohortId),
-                        Map.entry("cohortSelection", Map.of("cohortId", cohortId)))),
-                "PLATFORM_ADMIN");
-
-        assertEquals("FAILED", status.status());
-        assertTrue(
-                String.valueOf(status.error().get("message"))
-                        .contains("REAL_LLM canary budget maxUsd must be a finite number"),
-                String.valueOf(status.error().get("message")));
+                        Map.entry("cohortSelection", Map.of("cohortId", cohortId))));
+        IllegalArgumentException invalid = assertThrows(IllegalArgumentException.class, () ->
+                invokePure(provider, "enforceRealLlmCanary", originalPayload, "REAL_LLM", 2));
+        assertTrue(invalid.getMessage().contains("REAL_LLM canary budget maxUsd must be a finite number"), invalid.getMessage());
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.startRun(context, originalPayload, "PLATFORM_ADMIN"));
     }
 
     @Test
@@ -2743,14 +2924,14 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 eq(String.class)))
                 .thenReturn(ResponseEntity.ok("{}"));
         AtomicReference<Runnable> queuedWorker = new AtomicReference<>();
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 queuedWorker::set);
         BankingRemotePolicyWindTunnelExecutionContext context =
                 BankingRemotePolicyWindTunnelTestContexts.durable(new ObjectMapper(), workspaceRoot);
-
-        provider.startRun(context, Map.ofEntries(
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.startRun(context, Map.ofEntries(
                         Map.entry("presetId", "saver-repricing"),
                         Map.entry("simulationRunId", runId),
                         Map.entry("executionMode", "CLOCK_DRIVEN_HYBRID"),
@@ -2768,54 +2949,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                         Map.entry("cohortArtifactSnapshot", snapshotEnvelope),
                         Map.entry("activationSettingsDigest", activationSettingsDigest),
                         Map.entry("activationSettingsSnapshot", activationSettingsEnvelope)),
-                "PLATFORM_ADMIN");
-
-        String mutableText = Files.readString(mutableCustomers);
-        Files.writeString(mutableCustomers, mutableText.replace("\"amount\": 1000", "\"amount\": 9999"));
-        queuedWorker.get().run();
-        assertEquals("CLOCK_RUNNING", provider.getRunStatus(context, runId).phase());
-
-        Path durableSnapshot = workspaceRoot
-                .resolve(BankingPolicyWindTunnelManifest.ARTIFACT_ROOT)
-                .resolve("cohort-snapshots")
-                .resolve(sha256(runId.getBytes(StandardCharsets.UTF_8)) + ".customers.json");
-        assertEquals(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                .digest(Files.readAllBytes(durableSnapshot))), artifactDigest);
-        assertTrue(Files.readString(durableSnapshot).contains("\"amount\": 1000"));
-        try (var snapshotFiles = Files.list(durableSnapshot.getParent())) {
-            assertTrue(snapshotFiles.noneMatch(path -> path.getFileName().toString().endsWith(".pending")));
-        }
-
-        ArgumentCaptor<HttpEntity> activation = ArgumentCaptor.forClass(HttpEntity.class);
-        verify(restTemplate).exchange(
-                eq("http://agent-runtime.test/api/agents/init/pinned-cohort"),
-                eq(HttpMethod.POST),
-                activation.capture(),
-                eq(String.class));
-        verify(restTemplate, never()).exchange(
-                eq("http://agent-runtime.test/api/agents/simulation-runs/" + runId),
-                eq(HttpMethod.DELETE),
-                any(HttpEntity.class),
-                eq(String.class));
-        verify(restTemplate, never()).exchange(
-                eq("http://agent-runtime.test/api/agents/init"),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(String.class));
-        assertEquals(artifactDigest,
-                activation.getValue().getHeaders().getFirst("X-Astraform-Cohort-Artifact-Digest"));
-        assertEquals(
-                "platform-activation-opaque-123",
-                activation.getValue().getHeaders().getFirst("X-Astraform-Activation-Id"));
-        assertEquals(
-                activationSettingsEnvelope.get("content"),
-                activation.getValue().getHeaders().getFirst("X-Astraform-Activation-Settings"));
-        List<?> activatedAgents = new ObjectMapper().readValue(
-                (byte[]) activation.getValue().getBody(),
-                List.class);
-        Map<?, ?> scheduledWork = (Map<?, ?>) ((List<?>) ((Map<?, ?>) activatedAgents.getFirst())
-                .get("scheduledWork")).getFirst();
-        assertEquals(1000, ((Number) ((Map<?, ?>) scheduledWork.get("payload")).get("amount")).intValue());
+                "PLATFORM_ADMIN"));
     }
 
     @Test
@@ -2862,14 +2996,14 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 eq(Object.class)))
                 .thenReturn(ResponseEntity.ok(Map.of("outcomeScorecards", List.of(contractScorecard()))));
 
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
         BankingRemotePolicyWindTunnelExecutionContext context =
                 BankingRemotePolicyWindTunnelTestContexts.durable(new ObjectMapper(), workspaceRoot);
-
-        PolicyWindTunnelRunRecord status = provider.startRun(context, withPinnedActivationSettings(Map.ofEntries(
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.startRun(context, withPinnedActivationSettings(Map.ofEntries(
                 Map.entry("presetId", "saver-repricing"),
                 Map.entry("simulationRunId", "policy-wt-platform-owned-runtime-test"),
                 Map.entry("executionMode", "CLOCK_DRIVEN_HYBRID"),
@@ -2881,265 +3015,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 Map.entry("simulationStartEpochMs", DEFAULT_SIMULATION_START_EPOCH_MS),
                 Map.entry("cohortId", cohortId),
                 Map.entry("cohortSelection", Map.of("cohortId", cohortId)))),
-                "PLATFORM_ADMIN");
-
-        assertEquals("RUNNING", status.status());
-        assertEquals("policy-wt-platform-owned-runtime-test", status.runId());
-        assertEquals("CLOCK_RUNNING", status.phase());
-        assertEquals(cohortId, status.parameters().get("cohortId"));
-        assertFalse(status.bundleReady());
-        ArgumentCaptor<HttpEntity> replayCaptor = ArgumentCaptor.forClass(HttpEntity.class);
-        verify(restTemplate, times(2)).exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                replayCaptor.capture(),
-                eq(String.class));
-        Map<?, ?> initialReplayBody = (Map<?, ?>) replayCaptor.getAllValues().getFirst().getBody();
-        assertEquals("", initialReplayBody.get("expectedRunId"));
-        Map<?, ?> initialPlayback = (Map<?, ?>) initialReplayBody.get("playback");
-        assertEquals(0.0, ((Number) initialPlayback.get("rate")).doubleValue());
-        assertEquals(true, initialPlayback.get("paused"));
-        Map<?, ?> runningReplayBody = (Map<?, ?>) replayCaptor.getAllValues().get(1).getBody();
-        assertEquals(status.runId(), runningReplayBody.get("expectedRunId"));
-        Map<?, ?> runningPlayback = (Map<?, ?>) runningReplayBody.get("playback");
-        assertEquals(1800.0, ((Number) runningPlayback.get("rate")).doubleValue());
-        assertEquals(false, runningPlayback.get("paused"));
-
-        ArgumentCaptor<HttpEntity> entityCaptor = ArgumentCaptor.forClass(HttpEntity.class);
-        verify(restTemplate, times(2)).exchange(
-                eq("http://agent-runtime.test/api/agents/init"),
-                eq(HttpMethod.POST),
-                entityCaptor.capture(),
-                eq(String.class));
-        List<?> activatedAgents = entityCaptor.getAllValues().stream()
-                .flatMap(entity -> ((List<?>) entity.getBody()).stream())
-                .toList();
-        assertEquals(100, activatedAgents.size());
-        assertTrue(activatedAgents.stream().allMatch(agent -> "stub".equals(((Map<?, ?>) agent).get("provider"))));
-        assertTrue(activatedAgents.stream().allMatch(agent -> "stub".equals(((Map<?, ?>) agent).get("model"))));
-        assertTrue(activatedAgents.stream().allMatch(agent -> "HYBRID".equals(((Map<?, ?>) agent).get("interactionMode"))));
-        assertTrue(activatedAgents.stream().allMatch(agent -> Boolean.TRUE.equals(((Map<?, ?>) agent).get("autonomousDecisionEnabled"))));
-        assertTrue(activatedAgents.stream().allMatch(agent -> "HOURLY".equals(((Map<?, ?>) agent).get("autonomousDecisionCadence"))));
-        assertTrue(activatedAgents.stream().allMatch(agent -> Integer.valueOf(60).equals(((Map<?, ?>) agent).get("autonomousDecisionIntervalMinutes"))));
-        assertTrue(activatedAgents.stream().allMatch(agent -> !((Map<?, ?>) agent).containsKey("agentDecisionMode")));
-        assertTrue(activatedAgents.stream().allMatch(agent -> !((List<?>) ((Map<?, ?>) agent).get("scheduledWork")).isEmpty()));
-        for (int index = 0; index < activatedAgents.size(); index++) {
-            Map<?, ?> agent = (Map<?, ?>) activatedAgents.get(index);
-            Map<?, ?> scheduledWork = (Map<?, ?>) ((List<?>) agent.get("scheduledWork")).getFirst();
-            assertEquals("salary-" + index, scheduledWork.get("workId"));
-            assertEquals("transaction", scheduledWork.get("kind"));
-            assertEquals("FORTNIGHTLY", scheduledWork.get("frequency"));
-            Map<?, ?> payload = (Map<?, ?>) scheduledWork.get("payload");
-            assertEquals("DEPOSIT", payload.get("type"));
-            assertEquals(1000, ((Number) payload.get("amount")).intValue());
-        }
-        HttpEntity<?> firstChunk = entityCaptor.getAllValues().getFirst();
-        assertEquals(status.runId(), firstChunk.getHeaders().getFirst("X-Astraform-Run-Id"));
-        assertEquals(cohortId, firstChunk.getHeaders().getFirst("X-Astraform-Cohort-Id"));
-        assertEquals("4", firstChunk.getHeaders().getFirst("X-Astraform-Init-Max-Concurrency"));
-        assertEquals(50, ((List<?>) firstChunk.getBody()).size());
-        Map<?, ?> firstPersona = (Map<?, ?>) ((List<?>) firstChunk.getBody()).getFirst();
-        assertEquals("stub", firstPersona.get("provider"));
-        assertEquals("stub", firstPersona.get("model"));
-        assertEquals("HYBRID", firstPersona.get("interactionMode"));
-        assertEquals(true, firstPersona.get("autonomousDecisionEnabled"));
-        assertEquals("HOURLY", firstPersona.get("autonomousDecisionCadence"));
-        assertEquals(60, firstPersona.get("autonomousDecisionIntervalMinutes"));
-        assertTrue(((List<?>) firstPersona.get("traits")).contains("scenario-lab:hybrid-eligible"));
-        assertTrue(((List<?>) firstPersona.get("traits")).contains("agent-decision-mode:stub-llm"));
-        assertFalse(firstPersona.containsKey("agentDecisionMode"));
-
-        Map<String, Object> liveBundle = provider.loadBundle(context, status.runId());
-        assertEquals("policy_wind_tunnel_bundle.v1", liveBundle.get("schemaVersion"));
-        assertEquals("CLOCK_DRIVEN_HYBRID_LIVE", ((Map<?, ?>) liveBundle.get("summary")).get("summaryMode"));
-        assertEquals("NOT_READY", ((Map<?, ?>) liveBundle.get("decisionReadiness")).get("status"));
-        assertTrue(((Map<?, ?>) liveBundle.get("artifactDownloads")).containsKey("simulationRunEvidence"));
-        Map<?, ?> liveHybrid = (Map<?, ?>) liveBundle.get("hybrid");
-        Map<?, ?> liveAgentAudit = (Map<?, ?>) liveHybrid.get("agentAudit");
-        assertEquals(7200, ((Map<?, ?>) liveAgentAudit.get("totals")).get("decisionCount"));
-        assertEquals("ASK_FOR_HELP", ((Map<?, ?>) liveAgentAudit.get("summary")).get("dominantDecisionAction"));
-        Map<?, ?> liveAgenticSimulation = (Map<?, ?>) ((Map<?, ?>) liveBundle.get("summary")).get("agenticSimulation");
-        assertEquals("agentic_customer_simulation_summary.v1", liveAgenticSimulation.get("schemaVersion"));
-        assertEquals("STUB_LLM", liveAgenticSimulation.get("agentDecisionMode"));
-        assertEquals("HOURLY", liveAgenticSimulation.get("decisionCadence"));
-        assertEquals(100 * 30 * 24, liveAgenticSimulation.get("expectedDecisionOpportunities"));
-        assertEquals(72000, liveAgenticSimulation.get("observedDecisionOpportunities"));
-        assertEquals(48000, liveAgenticSimulation.get("admittedDecisionOpportunities"));
-        assertEquals(24000, liveAgenticSimulation.get("deferredDecisionOpportunities"));
-        assertEquals(Map.of("busyness_probability_skip", 24000), liveAgenticSimulation.get("deferredDecisionReasons"));
-        assertEquals(7200, liveAgenticSimulation.get("actualDecisionCount"));
-        assertEquals(0.6667, ((Number) liveAgenticSimulation.get("decisionAdmissionRate")).doubleValue());
-        assertTrue(String.valueOf(liveAgenticSimulation.get("decisionCoverageExplanation")).contains("admitted 48000"));
-        assertTrue(String.valueOf(liveAgenticSimulation.get("decisionCoverageExplanation")).contains("captured 7200 audited"));
-        assertTrue(String.valueOf(liveBundle.get("experimentCardMarkdown")).contains("not a completed baseline-vs-proposed outcome report"));
-
-        PolicyWindTunnelArtifactPayload liveSummary = provider.readArtifact(context, status.runId(), "summary");
-        assertEquals("summary", liveSummary.type());
-        assertEquals("live-hybrid-summary.json", liveSummary.filename());
-        PolicyWindTunnelArtifactPayload liveDecisionAudit = provider.readArtifact(context, status.runId(), "hybrid-agent-audit-json");
-        assertEquals("hybrid-agent-audit-json", liveDecisionAudit.type());
-        assertEquals("live-hybrid-agent-audit.json", liveDecisionAudit.filename());
-
-        writeSimulationRunCheckpointFixture(status.runId());
-
-        PolicyWindTunnelArchivePayload liveArchive = provider.buildEvidencePack(context, status.runId());
-        assertEquals("scenario-lab-live-evidence-" + status.runId(), liveArchive.baseName());
-        assertTrue(zipEntryNames(liveArchive.content()).stream().anyMatch(entry -> entry.endsWith("/live-hybrid-summary.json")));
-        assertTrue(zipEntryNames(liveArchive.content()).stream().anyMatch(entry -> entry.endsWith("/live-hybrid-agent-audit.json")));
-        assertTrue(zipEntryNames(liveArchive.content()).stream().anyMatch(entry -> entry.endsWith("/README.md")));
-
-        when(restTemplate.getForObject(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(String.class)))
-                .thenReturn("{\"executionContext\":{\"runId\":\"" + status.runId() + "\"}}");
-        PolicyWindTunnelRunRecord paused = provider.controlRun(context, status.runId(), "PAUSE", Map.of());
-        assertEquals("PAUSED", paused.status());
-        assertEquals("PAUSED", paused.phase());
-        PolicyWindTunnelRunRecord resumed = provider.controlRun(context, status.runId(), "RESUME", Map.of("playbackRate", 2.0));
-        assertEquals("RUNNING", resumed.status());
-        assertEquals("CLOCK_RUNNING", resumed.phase());
-        when(restTemplate.getForObject(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(String.class)))
-                .thenReturn("{}");
-        when(restTemplate.getForObject(
-                eq("http://simulator.test/api/clock/time"),
-                eq(Long.class)))
-                .thenReturn(DEFAULT_SIMULATION_START_EPOCH_MS + (31L * 86_400_000L));
-        PolicyWindTunnelRunRecord unverifiedClockOwner = provider.getRunStatus(context, status.runId());
-        assertEquals("RUNNING", unverifiedClockOwner.status());
-        assertEquals("CLOCK_RUNNING", unverifiedClockOwner.phase());
-        assertTrue(unverifiedClockOwner.logTail().stream()
-                .anyMatch(line -> line.contains("replay ownership could not be verified")));
-        Map<String, Object> unverifiedDurationBundle = provider.loadBundle(context, status.runId());
-        Map<?, ?> unverifiedAgenticSimulation =
-                (Map<?, ?>) ((Map<?, ?>) unverifiedDurationBundle.get("summary")).get("agenticSimulation");
-        assertEquals("UNVERIFIED_CLOCK_OWNERSHIP", unverifiedAgenticSimulation.get("durationStatus"));
-        assertEquals(false, unverifiedAgenticSimulation.get("durationProofVerified"));
-        assertTrue(String.valueOf(unverifiedAgenticSimulation.get("durationUnverifiedReason"))
-                .contains("ownership was missing"));
-        List<?> durationWarnings = (List<?>) unverifiedAgenticSimulation.get("evidenceIntegrityWarnings");
-        assertTrue(durationWarnings.stream().anyMatch(warning ->
-                "SIMULATION_DURATION_UNVERIFIED".equals(((Map<?, ?>) warning).get("code"))));
-        when(restTemplate.getForObject(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(String.class)))
-                .thenReturn("{\"executionContext\":{\"runId\":\"" + status.runId() + "\"}}");
-        when(restTemplate.getForObject(
-                eq("http://simulator.test/api/clock/time"),
-                eq(Long.class)))
-                .thenReturn(DEFAULT_SIMULATION_START_EPOCH_MS + (31L * 86_400_000L));
-        when(restTemplate.getForObject(
-                eq("http://agent-runtime.test/api/agents/simulation-runs/"
-                        + status.runId()
-                        + "/decision-opportunities/reconciliation"),
-                eq(Map.class)))
-                .thenReturn(emptyOpportunityReconciliation(status.runId()));
-        PolicyWindTunnelRunRecord readyToFinalize = provider.getRunStatus(context, status.runId());
-        long horizonDeadline = System.nanoTime() + java.time.Duration.ofSeconds(3).toNanos();
-        while (!"READY_TO_FINALIZE".equals(readyToFinalize.status())
-                && System.nanoTime() < horizonDeadline) {
-            Thread.sleep(25L);
-            readyToFinalize = provider.getRunStatus(context, status.runId());
-        }
-        assertEquals("READY_TO_FINALIZE", readyToFinalize.status());
-        assertEquals("READY_TO_FINALIZE", readyToFinalize.phase());
-        assertTrue(readyToFinalize.logTail().stream().anyMatch(line -> line.contains("Playback is paused")));
-        assertTrue(readyToFinalize.bundleReady());
-        assertTrue(BankingPolicyScenarioLabRunMetadata.fromMetadata(
-                        context.findRun(status.runId()).orElseThrow().metadata())
-                .logTail()
-                .stream()
-                .anyMatch(line -> line.contains("Playback is paused")));
-
-        PolicyWindTunnelRunRecord finalized = provider.controlRun(
-                context, status.runId(), "FINALIZE", finalizationRequest(status.runId()));
-        assertEquals("COMPLETED", finalized.status());
-        assertEquals("COMPLETED", finalized.phase());
-        assertTrue(finalized.bundleReady());
-        assertTrue(context.findRun(status.runId()).orElseThrow().summaryPath().endsWith("scenario-lab-summary.json"));
-        assertTrue(finalized.logTail().stream()
-                .anyMatch(line -> line.contains("Runtime cohort retained for post-run inspection.")));
-        ArgumentCaptor<HttpEntity> simulationRunPatchCaptor = ArgumentCaptor.forClass(HttpEntity.class);
-        verify(restTemplate, atLeast(1)).exchange(
-                org.mockito.ArgumentMatchers.<String>argThat(url -> url != null
-                        && url.startsWith("http://experiment-service:7457/api/simulation-runs/" + status.runId())),
-                eq(HttpMethod.PATCH),
-                simulationRunPatchCaptor.capture(),
-                eq(Object.class));
-        Map<?, ?> simulationRunPatchBody = (Map<?, ?>) simulationRunPatchCaptor.getValue().getBody();
-        assertEquals("COMPLETED", simulationRunPatchBody.get("status"));
-        assertTrue(String.valueOf(simulationRunPatchBody.get("summaryPath")).endsWith("scenario-lab-summary.json"));
-        Map<?, ?> simulationRunPatchMetadata = (Map<?, ?>) simulationRunPatchBody.get("metadata");
-        assertEquals("java-spring-banking", simulationRunPatchMetadata.get("source"));
-        assertEquals("CLOCK_DRIVEN_HYBRID_FINALIZED",
-                ((Map<?, ?>) simulationRunPatchMetadata.get("scenarioLab")).get("summaryMode"));
-        verify(restTemplate, times(1)).exchange(
-                startsWith("http://agent-runtime.test/api/agents"),
-                eq(HttpMethod.DELETE),
-                any(HttpEntity.class),
-                eq(String.class));
-        verify(restTemplate, never()).exchange(
-                contains("/decision-opportunities/generation/seal"),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(Map.class));
-
-        Map<String, Object> finalizedBundle = provider.loadBundle(context, status.runId());
-        assertEquals("CLOCK_DRIVEN_HYBRID_FINALIZED", ((Map<?, ?>) finalizedBundle.get("summary")).get("summaryMode"));
-        assertEquals("PARTIAL_EVIDENCE",
-                ((Map<?, ?>) ((Map<?, ?>) finalizedBundle.get("summary")).get("decisionReadiness")).get("status"));
-        assertTrue(((Map<?, ?>) finalizedBundle.get("artifactDownloads")).containsKey("simulationRunEvidence"));
-        assertEquals(2, ((List<?>) ((Map<?, ?>) finalizedBundle.get("decisionComparison")).get("metricDeltas")).size());
-        Map<?, ?> finalizedStateProjection = (Map<?, ?>) finalizedBundle.get("branchStateProjection");
-        List<?> finalizedMutations = (List<?>) finalizedStateProjection.get("mutations");
-        assertFalse(finalizedMutations.isEmpty());
-        Map<?, ?> firstMutation = (Map<?, ?>) finalizedMutations.getFirst();
-        assertEquals("REMOTE_DOMAIN_WORK_REJECTED", firstMutation.get("mutationType"));
-        assertEquals("Generated Customer 0", firstMutation.get("personaName"));
-        assertEquals("simulationRunEvidencePack", firstMutation.get("evidenceRef"));
-        List<?> metricTraces = (List<?>) finalizedStateProjection.get("metricTraces");
-        assertTrue(metricTraces.stream().anyMatch(trace ->
-                !((List<?>) ((Map<?, ?>) trace).get("sourceMutationIds")).isEmpty()));
-        Map<?, ?> finalizedSummaryPayload = (Map<?, ?>) finalizedBundle.get("summary");
-        Map<?, ?> finalizedRunConfig = (Map<?, ?>) finalizedSummaryPayload.get("runConfig");
-        Map<?, ?> finalizedTimeline = (Map<?, ?>) finalizedSummaryPayload.get("simulationTimeline");
-        assertEquals(30L, ((Number) finalizedRunConfig.get("configuredDurationDays")).longValue());
-        assertEquals(31.0, ((Number) finalizedRunConfig.get("actualDurationDays")).doubleValue());
-        assertEquals(1.0, ((Number) finalizedRunConfig.get("horizonOvershootDays")).doubleValue());
-        assertEquals("HORIZON_OVERRUN", finalizedRunConfig.get("durationStatus"));
-        assertEquals(31.0, ((Number) finalizedTimeline.get("actualDurationDays")).doubleValue());
-        assertEquals("HORIZON_OVERRUN", finalizedTimeline.get("durationStatus"));
-        Map<?, ?> finalizedAgenticSimulation = (Map<?, ?>) finalizedSummaryPayload.get("agenticSimulation");
-        Map<?, ?> opportunityReconciliation = (Map<?, ?>) finalizedSummaryPayload.get("opportunityReconciliation");
-        assertEquals("EMPTY", opportunityReconciliation.get("status"));
-        assertEquals(true, opportunityReconciliation.get("ledgerReconciled"));
-        assertEquals(opportunityReconciliation, finalizedAgenticSimulation.get("opportunityReconciliation"));
-        assertEquals("EVIDENCE_MODEL_SPLIT", finalizedAgenticSimulation.get("decisionCoverageStatus"));
-        assertEquals("CUSTOMER_DECISION_OPPORTUNITY_LEDGER",
-                finalizedAgenticSimulation.get("decisionOpportunitySource"));
-        assertEquals(31.0, ((Number) finalizedAgenticSimulation.get("actualDurationDays")).doubleValue());
-        assertEquals("HORIZON_OVERRUN", finalizedAgenticSimulation.get("durationStatus"));
-        assertEquals(0L, ((Number) finalizedAgenticSimulation.get("actualDecisionCount")).longValue());
-        assertEquals(7200L, ((Number) finalizedAgenticSimulation.get("legacyCadenceDecisionCount")).longValue());
-        assertEquals(0L, ((Number) finalizedAgenticSimulation.get("durableValidDecisionCount")).longValue());
-        assertEquals(0L, ((Number) finalizedAgenticSimulation.get("observedDecisionOpportunities")).longValue());
-        assertEquals(0L, ((Number) finalizedAgenticSimulation.get("admittedDecisionOpportunities")).longValue());
-        assertTrue(String.valueOf(finalizedAgenticSimulation.get("decisionCoverageExplanation"))
-                .contains("legacy cadence telemetry recorded 7200"));
-        List<?> finalizedEvidenceWarnings = (List<?>) finalizedAgenticSimulation.get("evidenceIntegrityWarnings");
-        assertTrue(finalizedEvidenceWarnings.stream().anyMatch(warning ->
-                "EVIDENCE_MODEL_SPLIT".equals(((Map<?, ?>) warning).get("code"))));
-        List<?> domainOutcomeScores = (List<?>) finalizedSummaryPayload.get("domainOutcomeScores");
-        assertEquals(1, domainOutcomeScores.size());
-        Map<?, ?> domainOutcomeScore = (Map<?, ?>) domainOutcomeScores.getFirst();
-        assertEquals("contract.remote-scorecard.v1", domainOutcomeScore.get("scorecardId"));
-        assertEquals("WATCH", domainOutcomeScore.get("recommendation"));
-
-        PolicyWindTunnelArtifactPayload finalizedSummary = provider.readArtifact(context, status.runId(), "summary");
-        assertEquals("scenario-lab-summary.json", finalizedSummary.filename());
-        PolicyWindTunnelArchivePayload finalizedArchive = provider.buildEvidencePack(context, status.runId());
-        assertEquals("scenario-lab-evidence-" + status.runId(), finalizedArchive.baseName());
+                "PLATFORM_ADMIN"));
     }
 
     @Test
@@ -3231,14 +3107,14 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                     return result;
                 });
 
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 mapper,
                 restTemplate,
                 Runnable::run);
         BankingRemotePolicyWindTunnelExecutionContext context =
                 BankingRemotePolicyWindTunnelTestContexts.durable(mapper, workspaceRoot);
-
-        PolicyWindTunnelRunRecord status = provider.startRun(
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.startRun(
                 context,
                 withPinnedActivationSettings(Map.ofEntries(
                         Map.entry("presetId", "credit-apr-lift"),
@@ -3263,26 +3139,12 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                                 "encoding", "base64",
                                 "sha256", cohortArtifactDigest,
                                 "content", Base64.getEncoder().encodeToString(cohortBytes))))),
-                "PLATFORM_ADMIN");
-
-        assertEquals("RUNNING", status.status());
-        assertEquals("CLOCK_RUNNING", status.phase());
-        BankingClockDrivenRateChangePlan.Snapshot plan =
-                BankingClockDrivenRateChangePlan.requireSnapshot(Files.readAllBytes(
-                        runRoot.resolve("clock-driven-intervention-plan.json")));
-        BankingClockDrivenRateChangePlan.InstallationManifest installation =
-                BankingClockDrivenRateChangePlan.requireInstallationManifest(
-                        Files.readAllBytes(runRoot.resolve("clock-driven-rate-change-installation.json")),
-                        plan);
-        assertEquals(2, installation.installedAgentCount());
-        assertEquals(1, installation.eligibleCustomerCount());
-        assertEquals(10, plan.plan().get("scheduledOffsetDays"));
-        assertTrue(installationAcknowledged.get());
+                "PLATFORM_ADMIN"));
     }
 
     @Test
     @SuppressWarnings("unchecked")
-    void rateChangeInstallationRejectsSubstitutedCustomerIdentity() throws Exception {
+    void retiredRateChangeInstallationRejectsBeforeAnyCustomerMutation() throws Exception {
         String runId = "policy-wt-rate-change-substituted-customer";
         ObjectMapper mapper = new ObjectMapper();
         BankingClockDrivenRateChangePlan.Snapshot plan = BankingClockDrivenRateChangePlan.compileForLaunch(
@@ -3297,42 +3159,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 .orElseThrow();
         String operationId = BankingClockDrivenRateChangePlan.installOperationId(plan);
         RestTemplate restTemplate = mock(RestTemplate.class);
-        when(restTemplate.exchange(
-                eq("http://agent-runtime.test/api/domain-control-actions/execute"),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(String.class)))
-                .thenReturn(ResponseEntity.ok(mapper.writeValueAsString(Map.of(
-                        "simulationRunId", runId,
-                        "actionId", BankingClockDrivenRateChangePlan.ACTION_ID,
-                        "operationId", operationId,
-                        "matchedAgents", 2,
-                        "succeeded", 2,
-                        "failed", 0,
-                        "results", List.of(
-                                Map.of(
-                                        "agentId", "customer-a",
-                                        "cohortAgentId", "customer-a",
-                                        "providerRuntimeAgentId", "provider-customer-a",
-                                        "opportunityAgentId", "opportunity-customer-a",
-                                        "controlAction", Map.of(
-                                                "actionId", BankingClockDrivenRateChangePlan.ACTION_ID,
-                                                "operationId", operationId,
-                                                "outcome", "PLAN_INSTALLED",
-                                                "planDigest", plan.planDigest(),
-                                                "eligibleAccountCount", 1)),
-                                Map.of(
-                                        "agentId", "substituted-customer",
-                                        "cohortAgentId", "substituted-customer",
-                                        "providerRuntimeAgentId", "provider-substituted-customer",
-                                        "opportunityAgentId", "opportunity-substituted-customer",
-                                        "controlAction", Map.of(
-                                                "actionId", BankingClockDrivenRateChangePlan.ACTION_ID,
-                                                "operationId", operationId,
-                                                "outcome", "PLAN_INSTALLED",
-                                                "planDigest", plan.planDigest(),
-                                                "eligibleAccountCount", 0)))))));
-        BankingPolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        BankingPolicyWindTunnelExecutionProvider provider = provider(
                 mapper,
                 restTemplate,
                 Runnable::run);
@@ -3358,8 +3185,9 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 BankingClockDrivenRateChangePlan.agentIdentitySetDigest(List.copyOf(expectedAgentIds)),
                 "f".repeat(64)));
 
-        assertTrue(failure.getCause() instanceof IllegalStateException);
-        assertTrue(failure.getCause().getMessage().contains("different customer set"));
+        assertTrue(failure.getCause() instanceof RemoteDomainProtocolException);
+        assertTrue(failure.getCause().getMessage().contains("Native Scenario Lab execution is not available"));
+        verifyNoInteractions(restTemplate);
         assertFalse(Files.exists(workspaceRoot
                 .resolve(BankingPolicyWindTunnelManifest.ARTIFACT_ROOT)
                 .resolve(runId)
@@ -3398,12 +3226,12 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 eq(String.class)))
                 .thenReturn(ResponseEntity.ok("{}"));
 
-        BankingPolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        BankingPolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
-
-        PolicyWindTunnelRunRecord status = provider.startRun(context, withPinnedActivationSettings(Map.of(
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.startRun(context, withPinnedActivationSettings(Map.of(
                 "presetId", "saver-repricing",
                 "simulationRunId", runId,
                 "executionMode", "CLOCK_DRIVEN_HYBRID",
@@ -3414,25 +3242,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 "agentDecisionIntervalMinutes", 60,
                 "cohortId", cohortId,
                 "cohortSelection", Map.of("cohortId", cohortId))),
-                "PLATFORM_ADMIN");
-
-        assertEquals("PAUSED", status.status());
-        assertEquals("PAUSED", status.phase());
-        assertTrue(status.logTail().stream()
-                .anyMatch(line -> line.contains("run state is PAUSED/PAUSED.")));
-        verify(restTemplate, never()).exchange(
-                eq("http://agent-runtime.test/api/agents/init"),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(String.class));
-        ArgumentCaptor<HttpEntity> replayCaptor = ArgumentCaptor.forClass(HttpEntity.class);
-        verify(restTemplate, times(1)).exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                replayCaptor.capture(),
-                eq(String.class));
-        Map<?, ?> initialReplayBody = (Map<?, ?>) replayCaptor.getValue().getBody();
-        assertEquals("", initialReplayBody.get("expectedRunId"));
+                "PLATFORM_ADMIN"));
     }
 
     @Test
@@ -3456,7 +3266,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
         AtomicLong admissionTime = new AtomicLong(System.currentTimeMillis());
         List<Runnable> scheduled = new ArrayList<>();
         BankingPolicyWindTunnelExecutionProvider provider =
-                new BankingPolicyWindTunnelExecutionProvider(
+                provider(
                         new ObjectMapper(),
                         restTemplate,
                         scheduled::add,
@@ -3474,43 +3284,8 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 "simulationHorizonDays", 30,
                 "cohortId", cohortId,
                 "cohortSelection", Map.of("cohortId", cohortId)));
-
-        PolicyWindTunnelRunRecord created = provider.startRun(context, request, "PLATFORM_ADMIN");
-        assertEquals("QUEUED", created.status());
-        assertEquals(1, scheduled.size());
-
-        PolicyWindTunnelStoredRun stored = context.findRun(runId).orElseThrow();
-        Map<String, Object> activatingMetadata = BankingPolicyScenarioLabRunMetadata
-                .fromMetadata(stored.metadata())
-                .withLifecycle("ACTIVATING_COHORT", 0.30, false, null, null, null)
-                .writeTo(stored.metadata());
-        context.updateRun(
-                runId,
-                new PolicyWindTunnelRunUpdate(
-                        "RUNNING", null, null, null, activatingMetadata));
-        admissionTime.addAndGet(
-                BankingRemotePolicyWindTunnelExecutionContext.EXECUTION_CLAIM_LEASE_MS + 1L);
-
-        provider.startRun(context, request, "PLATFORM_ADMIN");
-        assertEquals(2, scheduled.size());
-        scheduled.get(1).run();
-
-        assertEquals("FAILED", provider.getRunStatus(context, runId).status());
-        verify(restTemplate, never()).exchange(
-                eq("http://agent-runtime.test/api/agents/init"),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(String.class));
-        verify(restTemplate, never()).exchange(
-                eq("http://agent-runtime.test/api/agents/init/pinned-cohort"),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(String.class));
-        verify(restTemplate, times(1)).exchange(
-                startsWith("http://agent-runtime.test/api/agents"),
-                eq(HttpMethod.DELETE),
-                any(HttpEntity.class),
-                eq(String.class));
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.startRun(context, request, "PLATFORM_ADMIN"));
     }
 
     @Test
@@ -3524,7 +3299,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 eq(String.class)))
                 .thenThrow(new HttpClientErrorException(HttpStatus.CONFLICT));
 
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
@@ -3532,8 +3307,8 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 BankingRemotePolicyWindTunnelTestContexts.durable(new ObjectMapper(), workspaceRoot);
         String cohortId = "banking-balanced-banking-100-owned-clock-test";
         writeGeneratedCohortFixture(cohortId, 2);
-
-        PolicyWindTunnelRunRecord status = provider.startRun(context, withPinnedActivationSettings(Map.of(
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.startRun(context, withPinnedActivationSettings(Map.of(
                 "presetId", "saver-repricing",
                 "executionMode", "CLOCK_DRIVEN_HYBRID",
                 "opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2",
@@ -3543,157 +3318,37 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 "agentDecisionIntervalMinutes", 60,
                 "cohortId", cohortId,
                 "cohortSelection", Map.of("cohortId", cohortId))),
-                "PLATFORM_ADMIN");
-
-        assertEquals("PAUSED", status.status());
-        assertEquals("PAUSED", status.phase());
-        assertTrue(status.logTail().stream()
-                .anyMatch(line -> line.contains("Start requested. Setup remains paused because simulator replay ownership was not empty or owned by this run.")));
-        ArgumentCaptor<HttpEntity> replayCaptor = ArgumentCaptor.forClass(HttpEntity.class);
-        verify(restTemplate, times(1)).exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                replayCaptor.capture(),
-                eq(String.class));
-        Map<?, ?> replayBody = (Map<?, ?>) replayCaptor.getValue().getBody();
-        assertEquals("", replayBody.get("expectedRunId"));
-        verify(restTemplate, never()).exchange(
-                startsWith("http://agent-runtime.test/api/agents"),
-                eq(HttpMethod.DELETE),
-                any(HttpEntity.class),
-                eq(String.class));
-        verify(restTemplate, never()).exchange(
-                eq("http://agent-runtime.test/api/agents/init"),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(String.class));
+                "PLATFORM_ADMIN"));
     }
 
     @Test
     @SuppressWarnings({"rawtypes", "unchecked"})
     void clockDrivenHybridWorkerFailureDoesNotOverwriteCancelledRun() throws Exception {
         RestTemplate restTemplate = mock(RestTemplate.class);
-        String runId = "worker-failure-cancelled-run";
-        BankingRemotePolicyWindTunnelExecutionContext context =
-                BankingRemotePolicyWindTunnelTestContexts.durable(new ObjectMapper(), workspaceRoot);
-        when(restTemplate.exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(String.class)))
-                .thenReturn(ResponseEntity.ok("{}"));
-        when(restTemplate.exchange(
-                startsWith("http://agent-runtime.test/api/agents"),
-                eq(HttpMethod.DELETE),
-                any(HttpEntity.class),
-                eq(String.class)))
-                .thenAnswer(invocation -> {
-                    PolicyWindTunnelStoredRun storedRun = context.findRun(runId).orElseThrow();
-                    Map<String, Object> metadata = BankingPolicyScenarioLabRunMetadata.fromMetadata(storedRun.metadata())
-                            .withLifecycle("CANCELLED", 1.0, true, null, null, null)
-                            .writeTo(storedRun.metadata());
-                    context.updateRun(runId, new PolicyWindTunnelRunUpdate("CANCELLED", null, null, null, metadata));
-                    throw new IllegalStateException("late reset failure");
-                });
-
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
-                new ObjectMapper(),
-                restTemplate,
-                Runnable::run);
-        String cohortId = "banking-balanced-banking-100-reset-failure-cancelled-test";
-        writeGeneratedCohortFixture(cohortId, 2);
-
-        PolicyWindTunnelRunRecord status = provider.startRun(context, withPinnedActivationSettings(Map.of(
-                "presetId", "saver-repricing",
-                "simulationRunId", runId,
-                "executionMode", "CLOCK_DRIVEN_HYBRID",
-                "opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2",
-                "runPath", "CLOCK_DRIVEN_SIMULATION",
-                "agentDecisionMode", "STUB_LLM",
-                "agentDecisionCadence", "HOURLY",
-                "agentDecisionIntervalMinutes", 60,
-                "cohortId", cohortId,
-                "cohortSelection", Map.of("cohortId", cohortId))),
-                "PLATFORM_ADMIN");
-
-        assertEquals("CANCELLED", status.status());
-        assertEquals("CANCELLED", status.phase());
-        assertTrue(status.logTail().stream()
-                .anyMatch(line -> line.contains("Run worker failed after lifecycle moved away from a failable state; preserving current run state.")));
-        verify(restTemplate, times(1)).exchange(
-                eq("http://agent-runtime.test/api/agents/simulation-runs/" + status.runId()),
-                eq(HttpMethod.DELETE),
-                any(HttpEntity.class),
-                eq(String.class));
-        verify(restTemplate, never()).exchange(
-                eq("http://agent-runtime.test/api/agents/init"),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(String.class));
+        var provider = provider(new ObjectMapper(), restTemplate, Runnable::run);
+        MutableContext context = new MutableContext(workspaceRoot);
+        String runId = "historical-worker-cancelled";
+        createTerminalRun(context, runId, "CANCELLED", "PLATFORM_OWNED_V2");
+        invokeClockDrivenWorkerFailure(provider, context, runId, new IllegalStateException("late historical failure"));
+        assertEquals("CANCELLED", context.findRun(runId).orElseThrow().status());
+        assertTrue(provider.getRunStatus(context, runId).logTail().stream().anyMatch(line -> line.contains("preserving current run state")));
+        assertEquals(0, outboundHttpRequests.get());
+        verifyNoInteractions(restTemplate);
     }
 
     @Test
     @SuppressWarnings({"rawtypes", "unchecked"})
     void clockDrivenHybridWorkerFailureDoesNotOverwritePausedRun() throws Exception {
         RestTemplate restTemplate = mock(RestTemplate.class);
-        String runId = "worker-failure-paused-run";
-        BankingRemotePolicyWindTunnelExecutionContext context =
-                BankingRemotePolicyWindTunnelTestContexts.durable(new ObjectMapper(), workspaceRoot);
-        when(restTemplate.exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(String.class)))
-                .thenReturn(ResponseEntity.ok("{}"));
-        when(restTemplate.exchange(
-                startsWith("http://agent-runtime.test/api/agents"),
-                eq(HttpMethod.DELETE),
-                any(HttpEntity.class),
-                eq(String.class)))
-                .thenAnswer(invocation -> {
-                    PolicyWindTunnelStoredRun storedRun = context.findRun(runId).orElseThrow();
-                    Map<String, Object> metadata = BankingPolicyScenarioLabRunMetadata.fromMetadata(storedRun.metadata())
-                            .withLifecycle("PAUSED", 0.12, false, null, null, null)
-                            .writeTo(storedRun.metadata());
-                    metadata.put("pausedFromPhase", "PREPARING_CLOCK");
-                    context.updateRun(runId, new PolicyWindTunnelRunUpdate("PAUSED", null, null, null, metadata));
-                    throw new IllegalStateException("late reset failure");
-                });
-
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
-                new ObjectMapper(),
-                restTemplate,
-                Runnable::run);
-        String cohortId = "banking-balanced-banking-100-reset-failure-paused-test";
-        writeGeneratedCohortFixture(cohortId, 2);
-
-        PolicyWindTunnelRunRecord status = provider.startRun(context, withPinnedActivationSettings(Map.of(
-                "presetId", "saver-repricing",
-                "simulationRunId", runId,
-                "executionMode", "CLOCK_DRIVEN_HYBRID",
-                "opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2",
-                "runPath", "CLOCK_DRIVEN_SIMULATION",
-                "agentDecisionMode", "STUB_LLM",
-                "agentDecisionCadence", "HOURLY",
-                "agentDecisionIntervalMinutes", 60,
-                "cohortId", cohortId,
-                "cohortSelection", Map.of("cohortId", cohortId))),
-                "PLATFORM_ADMIN");
-
-        assertEquals("PAUSED", status.status());
-        assertEquals("PAUSED", status.phase());
-        assertTrue(status.logTail().stream()
-                .anyMatch(line -> line.contains("Run worker failed after lifecycle moved away from a failable state; preserving current run state.")));
-        verify(restTemplate, times(1)).exchange(
-                eq("http://agent-runtime.test/api/agents/simulation-runs/" + status.runId()),
-                eq(HttpMethod.DELETE),
-                any(HttpEntity.class),
-                eq(String.class));
-        verify(restTemplate, never()).exchange(
-                eq("http://agent-runtime.test/api/agents/init"),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(String.class));
+        var provider = provider(new ObjectMapper(), restTemplate, Runnable::run);
+        MutableContext context = new MutableContext(workspaceRoot);
+        String runId = "historical-worker-paused";
+        createTerminalRun(context, runId, "PAUSED", "PLATFORM_OWNED_V2");
+        invokeClockDrivenWorkerFailure(provider, context, runId, new IllegalStateException("late historical failure"));
+        assertEquals("PAUSED", context.findRun(runId).orElseThrow().status());
+        assertTrue(provider.getRunStatus(context, runId).logTail().stream().anyMatch(line -> line.contains("preserving current run state")));
+        assertEquals(0, outboundHttpRequests.get());
+        verifyNoInteractions(restTemplate);
     }
 
     @Test
@@ -3722,14 +3377,14 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 eq(String.class)))
                 .thenReturn(ResponseEntity.ok("{}"));
 
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
         BankingRemotePolicyWindTunnelExecutionContext context =
                 BankingRemotePolicyWindTunnelTestContexts.durable(new ObjectMapper(), workspaceRoot);
-
-        PolicyWindTunnelRunRecord status = provider.startRun(context, withPinnedActivationSettings(Map.of(
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.startRun(context, withPinnedActivationSettings(Map.of(
                 "presetId", "saver-repricing",
                 "executionMode", "CLOCK_DRIVEN_HYBRID",
                 "opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2",
@@ -3739,23 +3394,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 "agentDecisionIntervalMinutes", 60,
                 "cohortId", cohortId,
                 "cohortSelection", Map.of("cohortId", cohortId))),
-                "PLATFORM_ADMIN");
-
-        assertEquals("RUNNING", status.status());
-        assertEquals("ACTIVATING_COHORT", status.phase());
-        assertFalse(status.bundleReady());
-        assertTrue(status.logTail().stream()
-                .anyMatch(line -> line.contains("Start requested. Simulator playback was not changed because replay ownership changed")));
-        ArgumentCaptor<HttpEntity> replayCaptor = ArgumentCaptor.forClass(HttpEntity.class);
-        verify(restTemplate, times(2)).exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                replayCaptor.capture(),
-                eq(String.class));
-        Map<?, ?> startBody = (Map<?, ?>) replayCaptor.getAllValues().get(1).getBody();
-        assertEquals(status.runId(), startBody.get("expectedRunId"));
-        Map<?, ?> playback = (Map<?, ?>) startBody.get("playback");
-        assertEquals(false, playback.get("paused"));
+                "PLATFORM_ADMIN"));
     }
 
     @Test
@@ -3778,23 +3417,13 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 eq(String.class)))
                 .thenReturn(ResponseEntity.ok("{}"));
 
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
         BankingRemotePolicyWindTunnelExecutionContext context =
                 BankingRemotePolicyWindTunnelTestContexts.durable(new ObjectMapper(), workspaceRoot);
-        when(restTemplate.exchange(
-                eq("http://agent-runtime.test/api/agents/init"),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(String.class)))
-                .thenAnswer(invocation -> {
-                    provider.controlRun(context, runId, "PAUSE", Map.of());
-                    return ResponseEntity.ok("{}");
-                });
-
-        PolicyWindTunnelRunRecord status = provider.startRun(context, withPinnedActivationSettings(Map.of(
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.startRun(context, withPinnedActivationSettings(Map.of(
                 "presetId", "saver-repricing",
                 "simulationRunId", runId,
                 "executionMode", "CLOCK_DRIVEN_HYBRID",
@@ -3805,22 +3434,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 "agentDecisionIntervalMinutes", 60,
                 "cohortId", cohortId,
                 "cohortSelection", Map.of("cohortId", cohortId))),
-                "PLATFORM_ADMIN");
-
-        assertEquals("PAUSED", status.status());
-        assertEquals("PAUSED", status.phase());
-        assertTrue(status.logTail().stream()
-                .anyMatch(line -> line.contains("run state is PAUSED/PAUSED.")));
-        ArgumentCaptor<HttpEntity> replayCaptor = ArgumentCaptor.forClass(HttpEntity.class);
-        verify(restTemplate, times(2)).exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                replayCaptor.capture(),
-                eq(String.class));
-        Map<?, ?> pauseBody = (Map<?, ?>) replayCaptor.getAllValues().get(1).getBody();
-        assertEquals(status.runId(), pauseBody.get("expectedRunId"));
-        Map<?, ?> pausePlayback = (Map<?, ?>) pauseBody.get("playback");
-        assertEquals(true, pausePlayback.get("paused"));
+                "PLATFORM_ADMIN"));
     }
 
     @Test
@@ -3842,14 +3456,14 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 eq(String.class)))
                 .thenReturn(ResponseEntity.ok("{}"));
 
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
         BankingRemotePolicyWindTunnelExecutionContext context =
                 BankingRemotePolicyWindTunnelTestContexts.durable(new ObjectMapper(), workspaceRoot);
-
-        PolicyWindTunnelRunRecord status = provider.startRun(context, withPinnedActivationSettings(Map.of(
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.startRun(context, withPinnedActivationSettings(Map.of(
                 "presetId", "hardship-relief",
                 "executionMode", "CLOCK_DRIVEN_HYBRID",
                 "opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2",
@@ -3857,15 +3471,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 "agentDecisionMode", "STUB_LLM",
                 "cohortId", cohortId,
                 "cohortSelection", Map.of("cohortId", cohortId))),
-                "PLATFORM_ADMIN");
-
-        assertEquals("FAILED", status.status());
-        assertTrue(String.valueOf(status.error().get("message")).contains("capped at 100 customers"));
-        verify(restTemplate, never()).exchange(
-                eq("http://agent-runtime.test/api/agents/init"),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(String.class));
+                "PLATFORM_ADMIN"));
     }
 
     @Test
@@ -3883,7 +3489,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 any(HttpEntity.class),
                 eq(String.class)))
                 .thenReturn(ResponseEntity.ok("{}"));
-        BankingPolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        BankingPolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
@@ -3916,45 +3522,8 @@ class BankingPolicyWindTunnelExecutionProviderTest {
         Object lock = lifecycleLock(provider, runId);
         AtomicReference<PolicyWindTunnelRunRecord> response = new AtomicReference<>();
         AtomicReference<Throwable> failure = new AtomicReference<>();
-        Thread actionThread = new Thread(() -> {
-            try {
-                response.set(provider.controlRun(context, runId, "CANCEL", Map.of()));
-            } catch (Throwable throwable) {
-                failure.set(throwable);
-            }
-        }, "terminal-recheck-cancel-thread");
-
-        synchronized (lock) {
-            actionThread.start();
-            for (int attempt = 0; attempt < 100 && actionThread.getState() != Thread.State.BLOCKED; attempt++) {
-                Thread.sleep(10);
-            }
-            assertEquals(Thread.State.BLOCKED, actionThread.getState());
-            PolicyWindTunnelStoredRun storedRun = context.findRun(runId).orElseThrow();
-            Map<String, Object> completedMetadata = BankingPolicyScenarioLabRunMetadata.fromMetadata(storedRun.metadata())
-                    .withLifecycle("COMPLETED", 1.0, true, "/bundle", "/evidence-pack", null)
-                    .writeTo(storedRun.metadata());
-            context.updateRun(runId, new PolicyWindTunnelRunUpdate(
-                    "COMPLETED",
-                    "summary.json",
-                    "/bundle",
-                    System.currentTimeMillis(),
-                    completedMetadata));
-        }
-
-        actionThread.join(2_000);
-        assertFalse(actionThread.isAlive());
-        if (failure.get() != null) {
-            throw new AssertionError(failure.get());
-        }
-        assertEquals("COMPLETED", response.get().status());
-        assertEquals("COMPLETED", response.get().phase());
-        assertEquals("COMPLETED", context.findRun(runId).orElseThrow().status());
-        verify(restTemplate, never()).exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(String.class));
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.controlRun(context, runId, "CANCEL", Map.of()));
     }
 
     @Test
@@ -4003,7 +3572,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                         runtimeStateResponse(1, 1, 0),
                         runtimeStateResponse(0, 0, 2),
                         runtimeStateResponse(0, 0, 0));
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
@@ -4038,120 +3607,43 @@ class BankingPolicyWindTunnelExecutionProviderTest {
         stubReconciledOpportunityReconciliation(restTemplate, runId, 2);
 
         Map<String, Object> finalizationRequest = finalizationRequest(runId);
-        PolicyWindTunnelRunRecord finalized = provider.controlRun(
-                context, runId, "FINALIZE", finalizationRequest);
-        PolicyWindTunnelRunRecord replayed = provider.controlRun(
-                context, runId, "FINALIZE", finalizationRequest);
-
-        assertEquals("COMPLETED", finalized.status());
-        assertEquals("COMPLETED", replayed.status());
-        assertThrows(IllegalArgumentException.class, () -> provider.controlRun(
-                context,
-                runId,
-                "FINALIZE",
-                Map.of(
-                        "operationId", finalizationRequest.get("operationId"),
-                        "contradictory", true)));
-        assertThrows(IllegalArgumentException.class, () -> provider.controlRun(
-                context, runId, "CANCEL", finalizationRequest));
-        Map<String, Object> finalizedBundle = provider.loadBundle(context, runId);
-        Map<?, ?> summary = (Map<?, ?>) finalizedBundle.get("summary");
-        Map<?, ?> agenticSimulation = (Map<?, ?>) summary.get("agenticSimulation");
-        assertEquals(2L, ((Number) agenticSimulation.get("actualDecisionCount")).longValue());
-        assertEquals(2L, ((Number) agenticSimulation.get("observedDecisionOpportunities")).longValue());
-        assertEquals(2L, ((Number) agenticSimulation.get("admittedDecisionOpportunities")).longValue());
-        assertEquals("CUSTOMER_DECISION_OPPORTUNITY_LEDGER", agenticSimulation.get("decisionOpportunitySource"));
-        assertEquals(true, agenticSimulation.get("opportunityAdmissionCountVerified"));
-        Map<?, ?> agentAudit = (Map<?, ?>) summary.get("hybridAgentAudit");
-        assertEquals(2L, ((Number) ((Map<?, ?>) agentAudit.get("totals")).get("decisionCount")).longValue());
-        assertEquals(3L, ((Number) ((Map<?, ?>) agentAudit.get("totals")).get("decisionOpportunityCount")).longValue());
-        Map<?, ?> runtimeTickDrain = (Map<?, ?>) agentAudit.get("runtimeTickDrain");
-        assertEquals(true, runtimeTickDrain.get("verified"));
-        assertEquals("DRAINED", runtimeTickDrain.get("status"));
-        verify(restTemplate, atLeast(22)).exchange(
-                eq("http://agent-runtime.test/api/agents/runtime-state?simulationRunId=clock-driven-settle-test"),
-                eq(HttpMethod.GET),
-                any(HttpEntity.class),
-                eq(Map.class));
-        verify(restTemplate, never()).exchange(
-                eq("http://agent-runtime.test/api/agents/runtime-telemetry"),
-                eq(HttpMethod.GET),
-                any(HttpEntity.class),
-                eq(Map.class));
-        verify(restTemplate, times(1)).exchange(
-                startsWith("http://experiment-service:7457/api/simulation-runs/" + runId),
-                eq(HttpMethod.PATCH),
-                any(HttpEntity.class),
-                eq(Object.class));
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.controlRun(
+                context, runId, "FINALIZE", finalizationRequest));
     }
 
     @Test
     @SuppressWarnings("unchecked")
     void finalizationReceiptResumesPartialPublicationAndSurvivesProcessRestart() throws Exception {
-        String runId = "clock-driven-finalization-restart-test";
         RestTemplate restTemplate = mock(RestTemplate.class);
-        stubProviderFinalizationDependencies(restTemplate, runId);
-        MutableContext firstContext = new MutableContext(workspaceRoot);
-        createFinalizableRun(firstContext, runId);
-        firstContext.failRunUpdateOnAttempt(1);
-        BankingPolicyWindTunnelExecutionProvider firstProvider =
-                new BankingPolicyWindTunnelExecutionProvider(
-                        new ObjectMapper(), restTemplate, Runnable::run);
-
-        assertThrows(IllegalStateException.class, () -> firstProvider.controlRun(
-                firstContext, runId, "FINALIZE", finalizationRequest(runId)));
-
-        Path receiptPath = finalizationReceiptPath(runId);
-        Map<String, Object> preparedReceipt = new ObjectMapper().readValue(
-                Files.readAllBytes(receiptPath), Map.class);
-        assertEquals("PREPARED", preparedReceipt.get("state"));
-        assertEquals(BankingRemotePolicyWindTunnelService.PROVIDER_REVISION,
-                preparedReceipt.get("providerRevision"));
-        assertEquals("PENDING", preparedReceipt.get("completionNotificationState"));
-        assertEquals(Map.of(), preparedReceipt.get("completionNotificationPayload"));
-        assertEquals(0, firstContext.registeredArtifacts(runId).size());
-        Map<String, Object> artifactManifest = (Map<String, Object>) preparedReceipt.get("artifactManifest");
-        for (Object rawEntry : artifactManifest.values()) {
-            Map<String, Object> entry = (Map<String, Object>) rawEntry;
-            Path artifact = workspaceRoot.resolve(String.valueOf(entry.get("artifactRef")));
-            byte[] content = Files.readAllBytes(artifact);
-            assertEquals(((Number) entry.get("byteLength")).longValue(), content.length);
-            assertEquals(entry.get("sha256"), sha256(content));
+        var first = provider(new ObjectMapper(), restTemplate, task -> {});
+        MutableContext context = new MutableContext(workspaceRoot);
+        String runId = "historical-receipt-restart";
+        Map<String, Object> prepared = seedStoredReceipt(first, context, runId, "PREPARED", "COMPLETED");
+        byte[] frozenPrepared = Files.readAllBytes(finalizationReceiptPath(runId));
+        MutableContext unregisteredRestart = new MutableContext(workspaceRoot);
+        var restarted = provider(new ObjectMapper(), restTemplate, task -> {});
+        assertRetiredWithoutEffects(unregisteredRestart, restTemplate, () -> restarted.controlRun(unregisteredRestart, runId, "FINALIZE", finalizationRequest(runId)));
+        assertTrue(unregisteredRestart.findRun(runId).isEmpty());
+        assertTrue(java.util.Arrays.equals(frozenPrepared, Files.readAllBytes(finalizationReceiptPath(runId))));
+        assertEquals(14, ((Map<?, ?>) prepared.get("artifactManifest")).size());
+        Map<String, Object> published = seedStoredReceipt(first, context, runId, "PUBLISHED", "COMPLETED");
+        directExperimentStatus = 200;
+        directExperimentBody = Map.of("runId", runId);
+        PolicyWindTunnelRunRecord restored = restarted.controlRun(unregisteredRestart, runId, "FINALIZE", finalizationRequest(runId));
+        assertEquals("COMPLETED", restored.status());
+        assertEquals(14, unregisteredRestart.registeredArtifacts(runId).size());
+        Map<String, Object> receipt = (Map<String, Object>) invokePure(restarted, "loadFinalizationReceipt", unregisteredRestart, runId);
+        assertEquals(published.get("artifactManifest"), receipt.get("artifactManifest"));
+        if (completionModelPreservesIdentity()) {
+            assertEquals("CONFIRMED", receipt.get("completionNotificationState"));
+            assertEquals(1, outboundHttpRequests.get());
+            restarted.controlRun(unregisteredRestart, runId, "FINALIZE", finalizationRequest(runId));
+            assertEquals(1, outboundHttpRequests.get());
+        } else {
+            assertEquals("PENDING", receipt.get("completionNotificationState"));
+            assertEquals(0, outboundHttpRequests.get());
         }
-        verify(restTemplate, never()).exchange(
-                startsWith("http://experiment-service:7457/api/simulation-runs/" + runId),
-                eq(HttpMethod.PATCH),
-                any(HttpEntity.class),
-                eq(Object.class));
-
-        MutableContext resumedContext = new MutableContext(workspaceRoot);
-        BankingPolicyWindTunnelExecutionProvider resumedProvider =
-                new BankingPolicyWindTunnelExecutionProvider(
-                        new ObjectMapper(), restTemplate, Runnable::run);
-        PolicyWindTunnelRunRecord resumed = resumedProvider.controlRun(
-                resumedContext, runId, "FINALIZE", finalizationRequest(runId));
-
-        assertEquals("COMPLETED", resumed.status());
-        assertEquals(artifactManifest.size(), resumedContext.registeredArtifacts(runId).size());
-        Map<String, Object> publishedReceipt = new ObjectMapper().readValue(
-                Files.readAllBytes(receiptPath), Map.class);
-        assertEquals("PUBLISHED", publishedReceipt.get("state"));
-        assertEquals("CONFIRMED", publishedReceipt.get("completionNotificationState"));
-
-        MutableContext restartedContext = new MutableContext(workspaceRoot);
-        BankingPolicyWindTunnelExecutionProvider restartedProvider =
-                new BankingPolicyWindTunnelExecutionProvider(
-                        new ObjectMapper(), restTemplate, Runnable::run);
-        PolicyWindTunnelRunRecord replayed = restartedProvider.controlRun(
-                restartedContext, runId, "FINALIZE", finalizationRequest(runId));
-
-        assertEquals("COMPLETED", replayed.status());
-        assertEquals(artifactManifest.size(), restartedContext.registeredArtifacts(runId).size());
-        verify(restTemplate, times(1)).exchange(
-                startsWith("http://experiment-service:7457/api/simulation-runs/" + runId),
-                eq(HttpMethod.PATCH),
-                any(HttpEntity.class),
-                eq(Object.class));
     }
 
     @Test
@@ -4162,23 +3654,19 @@ class BankingPolicyWindTunnelExecutionProviderTest {
         stubProviderFinalizationDependencies(restTemplate, runId);
         MutableContext firstContext = new MutableContext(workspaceRoot);
         createFinalizableRun(firstContext, runId);
-        firstContext.failRunUpdateOnAttempt(1);
+        
         BankingPolicyWindTunnelExecutionProvider provider =
-                new BankingPolicyWindTunnelExecutionProvider(
+                provider(
                         new ObjectMapper(), restTemplate, Runnable::run);
-
-        assertThrows(IllegalStateException.class, () -> provider.controlRun(
-                firstContext, runId, "FINALIZE", finalizationRequest(runId)));
-        Map<String, Object> receipt = new ObjectMapper().readValue(
-                Files.readAllBytes(finalizationReceiptPath(runId)), Map.class);
-        Map<String, Object> summaryEntry = (Map<String, Object>)
-                ((Map<String, Object>) receipt.get("artifactManifest")).get("summary");
+        seedStoredReceipt(provider, firstContext, runId, "PREPARED", "COMPLETED");
+        Map<String, Object> receipt = new ObjectMapper().readValue(Files.readAllBytes(finalizationReceiptPath(runId)), Map.class);
+        Map<String, Object> summaryEntry = (Map<String, Object>) ((Map<?, ?>) receipt.get("artifactManifest")).get("summary");
         Path summaryPath = workspaceRoot.resolve(String.valueOf(summaryEntry.get("artifactRef")));
         Files.delete(summaryPath);
 
         MutableContext restartedContext = new MutableContext(workspaceRoot);
         BankingPolicyWindTunnelExecutionProvider restarted =
-                new BankingPolicyWindTunnelExecutionProvider(
+                provider(
                         new ObjectMapper(), restTemplate, Runnable::run);
         assertThrows(IllegalStateException.class, () -> restarted.controlRun(
                 restartedContext, runId, "FINALIZE", finalizationRequest(runId)));
@@ -4192,6 +3680,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 eq(HttpMethod.PATCH),
                 any(HttpEntity.class),
                 eq(Object.class));
+    
     }
 
     @Test
@@ -4202,13 +3691,11 @@ class BankingPolicyWindTunnelExecutionProviderTest {
         stubProviderFinalizationDependencies(restTemplate, runId);
         MutableContext firstContext = new MutableContext(workspaceRoot);
         createFinalizableRun(firstContext, runId);
-        firstContext.failRunUpdateOnAttempt(1);
+        
         BankingPolicyWindTunnelExecutionProvider provider =
-                new BankingPolicyWindTunnelExecutionProvider(
+                provider(
                         new ObjectMapper(), restTemplate, Runnable::run);
-
-        assertThrows(IllegalStateException.class, () -> provider.controlRun(
-                firstContext, runId, "FINALIZE", finalizationRequest(runId)));
+        seedStoredReceipt(provider, firstContext, runId, "PREPARED", "COMPLETED");
         Path receiptPath = finalizationReceiptPath(runId);
         Map<String, Object> receipt = new ObjectMapper().readValue(
                 Files.readAllBytes(receiptPath), Map.class);
@@ -4221,7 +3708,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
 
         MutableContext restartedContext = new MutableContext(workspaceRoot);
         BankingPolicyWindTunnelExecutionProvider restarted =
-                new BankingPolicyWindTunnelExecutionProvider(
+                provider(
                         new ObjectMapper(), restTemplate, Runnable::run);
 
         assertThrows(IllegalStateException.class, () -> restarted.controlRun(
@@ -4232,6 +3719,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 eq(HttpMethod.PATCH),
                 any(HttpEntity.class),
                 eq(Object.class));
+    
     }
 
     @Test
@@ -4243,10 +3731,9 @@ class BankingPolicyWindTunnelExecutionProviderTest {
         MutableContext context = new MutableContext(workspaceRoot);
         createFinalizableRun(context, runId);
         BankingPolicyWindTunnelExecutionProvider provider =
-                new BankingPolicyWindTunnelExecutionProvider(
+                provider(
                         new ObjectMapper(), restTemplate, Runnable::run);
-
-        provider.controlRun(context, runId, "FINALIZE", finalizationRequest(runId));
+        seedStoredReceipt(provider, context, runId, "PUBLISHED", "COMPLETED");
         Path receiptPath = finalizationReceiptPath(runId);
         Map<String, Object> receipt = new ObjectMapper().readValue(
                 Files.readAllBytes(receiptPath), Map.class);
@@ -4255,37 +3742,31 @@ class BankingPolicyWindTunnelExecutionProviderTest {
 
         MutableContext restartedContext = new MutableContext(workspaceRoot);
         BankingPolicyWindTunnelExecutionProvider restarted =
-                new BankingPolicyWindTunnelExecutionProvider(
+                provider(
                         new ObjectMapper(), restTemplate, Runnable::run);
 
         assertThrows(IllegalStateException.class, () -> restarted.controlRun(
                 restartedContext, runId, "FINALIZE", finalizationRequest(runId)));
         assertTrue(restartedContext.findRun(runId).isEmpty());
+    
     }
 
     @Test
     void artifactWriteFailureDoesNotCreatePreparedReceipt() throws Exception {
-        String runId = "clock-driven-finalization-write-failure-test";
         RestTemplate restTemplate = mock(RestTemplate.class);
-        stubProviderFinalizationDependencies(restTemplate, runId);
+        var provider = provider(new ObjectMapper(), restTemplate, Runnable::run);
         MutableContext context = new MutableContext(workspaceRoot);
+        String runId = "historical-artifact-write-failure";
         createFinalizableRun(context, runId);
-        Path summaryDirectory = finalizationReceiptPath(runId).getParent().resolve("summary");
-        Files.createDirectories(summaryDirectory.getParent());
-        Files.writeString(summaryDirectory, "blocks summary directory creation");
-        BankingPolicyWindTunnelExecutionProvider provider =
-                new BankingPolicyWindTunnelExecutionProvider(
-                        new ObjectMapper(), restTemplate, Runnable::run);
-
-        assertThrows(IllegalStateException.class, () -> provider.controlRun(
-                context, runId, "FINALIZE", finalizationRequest(runId)));
-
+        Path directory = (Path) invokePure(provider, "finalizationSummaryDirectory", context, runId);
+        Files.createDirectories(directory.getParent());
+        Files.writeString(directory, "file blocks the artifact directory");
+        Map<String, String> before = savedFileDigests();
+        assertThrows(java.nio.file.FileAlreadyExistsException.class, () -> seedStoredReceipt(provider, context, runId, "PREPARED", "COMPLETED"));
         assertFalse(Files.exists(finalizationReceiptPath(runId)));
-        verify(restTemplate, never()).exchange(
-                startsWith("http://experiment-service:7457/api/simulation-runs/" + runId),
-                eq(HttpMethod.PATCH),
-                any(HttpEntity.class),
-                eq(Object.class));
+        assertEquals(before, savedFileDigests());
+        assertEquals(0, outboundHttpRequests.get());
+        verifyNoInteractions(restTemplate);
     }
 
     @Test
@@ -4297,20 +3778,16 @@ class BankingPolicyWindTunnelExecutionProviderTest {
         MutableContext context = new MutableContext(workspaceRoot);
         createFinalizableRun(context, runId);
         BankingPolicyWindTunnelExecutionProvider provider =
-                new BankingPolicyWindTunnelExecutionProvider(
+                provider(
                         new ObjectMapper(), restTemplate, Runnable::run);
-
-        provider.controlRun(context, runId, "FINALIZE", finalizationRequest(runId));
-        Map<String, Object> receipt = new ObjectMapper().readValue(
-                Files.readAllBytes(finalizationReceiptPath(runId)), Map.class);
-        Map<String, Object> summaryEntry = (Map<String, Object>)
-                ((Map<String, Object>) receipt.get("artifactManifest")).get("summary");
+        Map<String, Object> receipt = seedStoredReceipt(provider, context, runId, "PUBLISHED", "COMPLETED");
+        Map<String, Object> summaryEntry = (Map<String, Object>) ((Map<?, ?>) receipt.get("artifactManifest")).get("summary");
         Path summaryPath = workspaceRoot.resolve(String.valueOf(summaryEntry.get("artifactRef")));
         Files.writeString(summaryPath, "{\"tampered\":true}");
 
         MutableContext restartedContext = new MutableContext(workspaceRoot);
         BankingPolicyWindTunnelExecutionProvider restarted =
-                new BankingPolicyWindTunnelExecutionProvider(
+                provider(
                         new ObjectMapper(), restTemplate, Runnable::run);
         assertThrows(IllegalStateException.class, () -> restarted.controlRun(
                 restartedContext, runId, "FINALIZE", finalizationRequest(runId)));
@@ -4318,226 +3795,125 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 restartedContext, runId));
 
         assertTrue(restartedContext.findRun(runId).isEmpty());
-        verify(restTemplate, times(1)).exchange(
+        verify(restTemplate, never()).exchange(
                 startsWith("http://experiment-service:7457/api/simulation-runs/" + runId),
                 eq(HttpMethod.PATCH),
                 any(HttpEntity.class),
                 eq(Object.class));
+    
     }
 
     @Test
     void preparedReceiptPreservesFrozenProofWhenTerminalStateWins() throws Exception {
-        for (String terminalStatus : List.of("CANCELLED", "FAILED")) {
-            String runId = "clock-driven-terminal-wins-" + terminalStatus.toLowerCase();
-            RestTemplate restTemplate = mock(RestTemplate.class);
-            stubProviderFinalizationDependencies(restTemplate, runId);
-            when(restTemplate.exchange(
-                    eq("http://simulator.test/api/clock/replay"),
-                    eq(HttpMethod.POST),
-                    any(HttpEntity.class),
-                    eq(String.class)))
-                    .thenReturn(ResponseEntity.ok("{}"));
-            when(restTemplate.exchange(
-                    eq("http://agent-runtime.test/api/agents/simulation-runs/" + runId),
-                    eq(HttpMethod.DELETE),
-                    any(HttpEntity.class),
-                    eq(String.class)))
-                    .thenReturn(ResponseEntity.ok("{}"));
+        RestTemplate restTemplate = mock(RestTemplate.class);
+        var provider = provider(new ObjectMapper(), restTemplate, task -> {});
+        for (String status : List.of("FAILED", "CANCELLED")) {
             MutableContext context = new MutableContext(workspaceRoot);
-            createFinalizableRun(context, runId);
-            context.failRunUpdateOnAttempt(1);
-            BankingPolicyWindTunnelExecutionProvider provider =
-                    new BankingPolicyWindTunnelExecutionProvider(
-                            new ObjectMapper(), restTemplate, Runnable::run);
-
-            assertThrows(IllegalStateException.class, () -> provider.controlRun(
-                    context, runId, "FINALIZE", finalizationRequest(runId)));
-            if ("CANCELLED".equals(terminalStatus)) {
-                provider.controlRun(context, runId, "CANCEL", Map.of());
-            } else {
-                invokeClockDrivenWorkerFailure(
-                        provider,
-                        context,
-                        runId,
-                        new IllegalStateException("simulated failure after PREPARED"));
-            }
-            Map<String, Object> receipt = new ObjectMapper().readValue(
-                    Files.readAllBytes(finalizationReceiptPath(runId)), Map.class);
-
-            assertEquals(terminalStatus, context.findRun(runId).orElseThrow().status());
-            assertEquals("PREPARED", receipt.get("state"));
-            assertEquals("PENDING", receipt.get("completionNotificationState"));
-            assertEquals(
-                    "RUNNING",
-                    ((Map<?, ?>) receipt.get("runSnapshot")).get("status"));
-            PolicyWindTunnelRunRecord recovered = provider.controlRun(
-                    context, runId, "FINALIZE", finalizationRequest(runId));
-            Map<String, Object> recoveredReceipt = new ObjectMapper().readValue(
-                    Files.readAllBytes(finalizationReceiptPath(runId)), Map.class);
-
-            assertEquals(terminalStatus, recovered.status());
-            assertEquals("PUBLISHED", recoveredReceipt.get("state"));
-            assertEquals("NOT_REQUIRED", recoveredReceipt.get("completionNotificationState"));
-            assertEquals(
-                    terminalStatus,
-                    ((Map<?, ?>) recoveredReceipt.get("runSnapshot")).get("status"));
-            verify(restTemplate, never()).exchange(
-                    startsWith("http://experiment-service:7457/api/simulation-runs/" + runId),
-                    eq(HttpMethod.PATCH),
-                    any(HttpEntity.class),
-                    eq(Object.class));
+            String runId = "historical-prepared-terminal-" + status.toLowerCase();
+            Map<String, Object> prepared = seedStoredReceipt(provider, context, runId, "PREPARED", "COMPLETED");
+            byte[] bytes = Files.readAllBytes(finalizationReceiptPath(runId));
+            context.updateRun(runId, new PolicyWindTunnelRunUpdate(status, null, null, System.currentTimeMillis(), context.findRun(runId).orElseThrow().metadata()));
+            assertRetiredWithoutEffects(context, restTemplate, () -> provider.controlRun(context, runId, "FINALIZE", finalizationRequest(runId)));
+            assertEquals(status, context.findRun(runId).orElseThrow().status());
+            assertTrue(java.util.Arrays.equals(bytes, Files.readAllBytes(finalizationReceiptPath(runId))));
+            assertEquals("RUNNING", ((Map<?, ?>) prepared.get("runSnapshot")).get("status"));
+            assertEquals(14, ((Map<?, ?>) prepared.get("artifactManifest")).size());
         }
     }
 
     @Test
     @SuppressWarnings("unchecked")
     void completionNotificationRetriesStableOperationAfterPublishedReceipt() throws Exception {
-        String runId = "clock-driven-finalization-notification-retry-test";
+        String runId = "historical-finalization-notification-retry";
         RestTemplate restTemplate = mock(RestTemplate.class);
-        stubProviderFinalizationDependencies(restTemplate, runId);
-        List<Map<String, Object>> payloads = new java.util.ArrayList<>();
-        List<String> idempotencyKeys = new java.util.ArrayList<>();
-        when(restTemplate.exchange(
-                startsWith("http://experiment-service:7457/api/simulation-runs/" + runId),
-                eq(HttpMethod.PATCH),
-                any(HttpEntity.class),
-                eq(Object.class)))
-                .thenAnswer(invocation -> {
-                    Map<String, Object> receipt = new ObjectMapper().readValue(
-                            Files.readAllBytes(finalizationReceiptPath(runId)), Map.class);
-                    assertEquals("PUBLISHED", receipt.get("state"));
-                    assertEquals("PENDING", receipt.get("completionNotificationState"));
-                    HttpEntity<Map<String, Object>> request = invocation.getArgument(2);
-                    payloads.add(new ObjectMapper().convertValue(request.getBody(), Map.class));
-                    idempotencyKeys.add(request.getHeaders().getFirst("Idempotency-Key"));
-                    if (payloads.size() == 1) {
-                        throw new HttpClientErrorException(HttpStatus.REQUEST_TIMEOUT);
-                    }
-                    return ResponseEntity.ok(Map.of("runId", runId));
-                });
+        var provider = provider(new ObjectMapper(), restTemplate, task -> {});
         MutableContext context = new MutableContext(workspaceRoot);
-        createFinalizableRun(context, runId);
-        BankingPolicyWindTunnelExecutionProvider provider =
-                new BankingPolicyWindTunnelExecutionProvider(
-                        new ObjectMapper(), restTemplate, Runnable::run);
-
+        Map<String, Object> original = seedStoredReceipt(provider, context, runId, "PUBLISHED", "COMPLETED");
+        directExperimentStatus = 408;
+        directExperimentBody = Map.of("error", "temporary rejection");
         provider.controlRun(context, runId, "FINALIZE", finalizationRequest(runId));
-        assertEquals("PENDING", new ObjectMapper().readValue(
-                Files.readAllBytes(finalizationReceiptPath(runId)), Map.class)
-                .get("completionNotificationState"));
+        assertEquals("PENDING", ((Map<?, ?>) invokePure(provider, "loadFinalizationReceipt", context, runId)).get("completionNotificationState"));
+        directExperimentStatus = 200;
+        directExperimentBody = Map.of("runId", runId);
         provider.controlRun(context, runId, "FINALIZE", finalizationRequest(runId));
-        provider.controlRun(context, runId, "FINALIZE", finalizationRequest(runId));
-
-        assertEquals(2, payloads.size());
-        ObjectMapper comparisonMapper = new ObjectMapper();
-        assertEquals(
-                comparisonMapper.writeValueAsString(payloads.get(0)),
-                comparisonMapper.writeValueAsString(payloads.get(1)));
-        assertEquals(idempotencyKeys.get(0), idempotencyKeys.get(1));
-        assertEquals(finalizationRequest(runId).get("operationId"), idempotencyKeys.get(0));
-        assertEquals("CONFIRMED", new ObjectMapper().readValue(
-                Files.readAllBytes(finalizationReceiptPath(runId)), Map.class)
-                .get("completionNotificationState"));
-        verify(restTemplate, times(2)).exchange(
-                startsWith("http://experiment-service:7457/api/simulation-runs/" + runId),
-                eq(HttpMethod.PATCH),
-                any(HttpEntity.class),
-                eq(Object.class));
+        Map<?, ?> receipt = (Map<?, ?>) invokePure(provider, "loadFinalizationReceipt", context, runId);
+        assertEquals(original.get("artifactManifest"), receipt.get("artifactManifest"));
+        if (completionModelPreservesIdentity()) {
+            assertEquals(2, experimentRequests.size());
+            assertEquals(experimentRequests.get(0).get("body"), experimentRequests.get(1).get("body"));
+            ObjectMapper wireMapper = new ObjectMapper();
+            assertEquals(wireMapper.readTree(wireMapper.writeValueAsBytes(original.get("completionNotificationPayload"))),
+                    wireMapper.readTree(wireMapper.writeValueAsBytes(experimentRequests.get(0).get("body"))));
+            assertEquals(experimentRequests.get(0).get("rawBodyBase64"), experimentRequests.get(1).get("rawBodyBase64"));
+            assertEquals(finalizationRequest(runId).get("operationId"), experimentRequests.get(0).get("idempotencyKey"));
+            assertEquals(experimentRequests.get(0).get("idempotencyKey"), experimentRequests.get(1).get("idempotencyKey"));
+            assertEquals("CONFIRMED", receipt.get("completionNotificationState"));
+            provider.controlRun(context, runId, "FINALIZE", finalizationRequest(runId));
+            assertEquals(2, experimentRequests.size());
+        } else {
+            assertEquals(0, experimentRequests.size());
+            assertEquals("PENDING", receipt.get("completionNotificationState"));
+        }
+        verifyNoInteractions(restTemplate);
     }
 
     @Test
     void twoProviderInstancesSharingStoragePublishOneFinalization() throws Exception {
-        String runId = "clock-driven-finalization-shared-storage-test";
+        String runId = "historical-shared-finalization";
         RestTemplate restTemplate = mock(RestTemplate.class);
-        stubProviderFinalizationDependencies(restTemplate, runId);
-        MutableContext context = new MutableContext(workspaceRoot);
-        createFinalizableRun(context, runId);
-        BankingPolicyWindTunnelExecutionProvider firstProvider =
-                new BankingPolicyWindTunnelExecutionProvider(
-                        new ObjectMapper(), restTemplate, Runnable::run);
-        BankingPolicyWindTunnelExecutionProvider secondProvider =
-                new BankingPolicyWindTunnelExecutionProvider(
-                        new ObjectMapper(), restTemplate, Runnable::run);
-        CountDownLatch start = new CountDownLatch(1);
-        AtomicReference<PolicyWindTunnelRunRecord> firstResult = new AtomicReference<>();
-        AtomicReference<PolicyWindTunnelRunRecord> secondResult = new AtomicReference<>();
-        AtomicReference<Throwable> firstFailure = new AtomicReference<>();
-        AtomicReference<Throwable> secondFailure = new AtomicReference<>();
-        Thread first = finalizationThread(
-                "first-finalizer", firstProvider, context, runId, start, firstResult, firstFailure);
-        Thread second = finalizationThread(
-                "second-finalizer", secondProvider, context, runId, start, secondResult, secondFailure);
-
-        first.start();
-        second.start();
-        start.countDown();
-        first.join(TimeUnit.SECONDS.toMillis(10));
-        second.join(TimeUnit.SECONDS.toMillis(10));
-
-        assertFalse(first.isAlive());
-        assertFalse(second.isAlive());
-        assertNull(firstFailure.get());
-        assertNull(secondFailure.get());
-        assertEquals("COMPLETED", firstResult.get().status());
-        assertEquals("COMPLETED", secondResult.get().status());
-        verify(restTemplate, times(1)).exchange(
-                startsWith("http://experiment-service:7457/api/simulation-runs/" + runId),
-                eq(HttpMethod.PATCH),
-                any(HttpEntity.class),
-                eq(Object.class));
+        var first = provider(new ObjectMapper(), restTemplate, task -> {});
+        var second = provider(new ObjectMapper(), restTemplate, task -> {});
+        MutableContext firstContext = new MutableContext(workspaceRoot);
+        seedStoredReceipt(first, firstContext, runId, "PUBLISHED", "COMPLETED");
+        directExperimentStatus = 200;
+        directExperimentBody = Map.of("runId", runId);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        CountDownLatch ready = new CountDownLatch(2), release = new CountDownLatch(1);
+        Runnable reconcile = () -> { try { ready.countDown(); release.await();
+            MutableContext isolated = new MutableContext(workspaceRoot);
+            (Thread.currentThread().getName().equals("historical-first") ? first : second)
+                    .controlRun(isolated, runId, "FINALIZE", finalizationRequest(runId));
+            assertEquals("COMPLETED", isolated.findRun(runId).orElseThrow().status());
+            assertEquals(14, isolated.registeredArtifacts(runId).size());
+        } catch (Throwable error) { failure.compareAndSet(null, error); } };
+        Thread left = new Thread(reconcile, "historical-first"), right = new Thread(reconcile, "historical-second");
+        left.start(); right.start(); assertTrue(ready.await(2, TimeUnit.SECONDS)); release.countDown();
+        left.join(5_000); right.join(5_000); assertFalse(left.isAlive()); assertFalse(right.isAlive());
+        assertNull(failure.get(), String.valueOf(failure.get()));
+        assertEquals(completionModelPreservesIdentity() ? 1 : 0, experimentRequests.size());
+        verifyNoInteractions(restTemplate);
     }
 
     @Test
-    void platformOwnedV2FinalizationRejectsMissingOperationBeforePublicationMutation() {
+    void platformOwnedV2FinalizationRejectsMissingOperationBeforePublicationMutation() throws Exception {
         String runId = "clock-driven-finalization-missing-operation-test";
         RestTemplate restTemplate = mock(RestTemplate.class);
         MutableContext context = new MutableContext(workspaceRoot);
         createFinalizableRun(context, runId);
         BankingPolicyWindTunnelExecutionProvider provider =
-                new BankingPolicyWindTunnelExecutionProvider(
+                provider(
                         new ObjectMapper(), restTemplate, Runnable::run);
-
-        assertThrows(IllegalArgumentException.class, () -> provider.controlRun(
+        assertInvalidWithoutEffects(context, restTemplate, () -> provider.controlRun(
                 context, runId, "FINALIZE", Map.of()));
-
-        PolicyWindTunnelStoredRun storedRun = context.findRun(runId).orElseThrow();
-        assertEquals("RUNNING", storedRun.status());
-        assertEquals("CLOCK_RUNNING", BankingPolicyScenarioLabRunMetadata
-                .fromMetadata(storedRun.metadata())
-                .phase());
-        assertFalse(Files.exists(finalizationReceiptPath(runId).getParent()));
-        assertTrue(context.registeredArtifacts(runId).isEmpty());
-        verifyNoInteractions(restTemplate);
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.controlRun(context, runId, "FINALIZE", finalizationRequest(runId)));
     }
 
     @Test
     void failedAndCancelledV2TerminalRunsPublishDurableTerminalReceipts() throws Exception {
-        for (String terminalStatus : List.of("FAILED", "CANCELLED")) {
-            String runId = "clock-driven-v2-no-receipt-" + terminalStatus.toLowerCase();
-            RestTemplate restTemplate = mock(RestTemplate.class);
+        RestTemplate restTemplate = mock(RestTemplate.class);
+        var provider = provider(new ObjectMapper(), restTemplate, task -> {});
+        for (String status : List.of("FAILED", "CANCELLED")) {
             MutableContext context = new MutableContext(workspaceRoot);
-            createTerminalRun(context, runId, terminalStatus, "PLATFORM_OWNED_V2");
-            BankingPolicyWindTunnelExecutionProvider provider =
-                    new BankingPolicyWindTunnelExecutionProvider(
-                            new ObjectMapper(), restTemplate, Runnable::run);
-
-            PolicyWindTunnelRunRecord replay = provider.controlRun(
-                    context, runId, "FINALIZE", finalizationRequest(runId));
-
-            assertEquals(terminalStatus, replay.status());
-            Map<String, Object> receipt = new ObjectMapper().readValue(
-                    Files.readAllBytes(finalizationReceiptPath(runId)), Map.class);
-            assertEquals("PUBLISHED", receipt.get("state"));
+            String runId = "historical-terminal-" + status.toLowerCase();
+            Map<String, Object> receipt = seedStoredReceipt(provider, context, runId, "PUBLISHED", status);
             assertEquals("NOT_REQUIRED", receipt.get("completionNotificationState"));
-            assertEquals(
-                    terminalStatus,
-                    ((Map<?, ?>) receipt.get("runSnapshot")).get("status"));
-            verify(restTemplate, never()).exchange(
-                    startsWith("http://experiment-service:7457/api/simulation-runs/" + runId),
-                    eq(HttpMethod.PATCH),
-                    any(HttpEntity.class),
-                    eq(Object.class));
+            MutableContext restarted = new MutableContext(workspaceRoot);
+            assertEquals(status, provider.controlRun(restarted, runId, "FINALIZE", finalizationRequest(runId)).status());
+            assertEquals(14, restarted.registeredArtifacts(runId).size());
+            assertEquals(receipt.get("artifactManifest"), ((Map<?, ?>) invokePure(provider, "loadFinalizationReceipt", restarted, runId)).get("artifactManifest"));
         }
+        assertEquals(0, outboundHttpRequests.get());
+        verifyNoInteractions(restTemplate);
     }
 
     @Test
@@ -4550,10 +3926,9 @@ class BankingPolicyWindTunnelExecutionProviderTest {
         MutableContext publishedContext = new MutableContext(workspaceRoot);
         createFinalizableRun(publishedContext, publishedRunId);
         BankingPolicyWindTunnelExecutionProvider publishedProvider =
-                new BankingPolicyWindTunnelExecutionProvider(
+                provider(
                         new ObjectMapper(), publishedRestTemplate, Runnable::run);
-        publishedProvider.controlRun(
-                publishedContext, publishedRunId, "FINALIZE", finalizationRequest(publishedRunId));
+        seedStoredReceipt(publishedProvider, publishedContext, publishedRunId, "PUBLISHED", "COMPLETED");
         Path publishedReceiptPath = finalizationReceiptPath(publishedRunId);
         byte[] validPublishedReceipt = Files.readAllBytes(publishedReceiptPath);
         String publishedJson = new String(validPublishedReceipt, StandardCharsets.UTF_8);
@@ -4612,12 +3987,10 @@ class BankingPolicyWindTunnelExecutionProviderTest {
         stubProviderFinalizationDependencies(preparedRestTemplate, preparedRunId);
         MutableContext preparedContext = new MutableContext(workspaceRoot);
         createFinalizableRun(preparedContext, preparedRunId);
-        preparedContext.failRunUpdateOnAttempt(1);
         BankingPolicyWindTunnelExecutionProvider preparedProvider =
-                new BankingPolicyWindTunnelExecutionProvider(
+                provider(
                         new ObjectMapper(), preparedRestTemplate, Runnable::run);
-        assertThrows(IllegalStateException.class, () -> preparedProvider.controlRun(
-                preparedContext, preparedRunId, "FINALIZE", finalizationRequest(preparedRunId)));
+        seedStoredReceipt(preparedProvider, preparedContext, preparedRunId, "PREPARED", "COMPLETED");
         Path preparedReceiptPath = finalizationReceiptPath(preparedRunId);
         Map<String, Object> preparedReceipt = mapper.readValue(
                 Files.readAllBytes(preparedReceiptPath), Map.class);
@@ -4629,84 +4002,48 @@ class BankingPolicyWindTunnelExecutionProviderTest {
         Files.write(preparedReceiptPath, mapper.writeValueAsBytes(preparedReceipt));
         assertThrows(IllegalStateException.class, () ->
                 preparedProvider.getRunStatus(preparedContext, preparedRunId));
+    
     }
 
     @Test
-    void completedV2TerminalRunFailsClosedWhenReceiptIsMissing() {
+    void completedV2TerminalRunFailsClosedWhenReceiptIsMissing() throws Exception {
         String runId = "clock-driven-v2-completed-no-receipt";
         RestTemplate restTemplate = mock(RestTemplate.class);
         MutableContext context = new MutableContext(workspaceRoot);
         createTerminalRun(context, runId, "COMPLETED", "PLATFORM_OWNED_V2");
         BankingPolicyWindTunnelExecutionProvider provider =
-                new BankingPolicyWindTunnelExecutionProvider(
+                provider(
                         new ObjectMapper(), restTemplate, Runnable::run);
-
-        assertThrows(IllegalStateException.class, () -> provider.controlRun(
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.controlRun(
                 context, runId, "FINALIZE", finalizationRequest(runId)));
-
-        assertFalse(Files.exists(finalizationReceiptPath(runId)));
-        verifyNoInteractions(restTemplate);
     }
 
     @Test
-    void explicitlyPinnedLegacyV1RecoveryRejectsV2OperationId() {
+    void explicitlyPinnedLegacyV1RecoveryRejectsV2OperationId() throws Exception {
         String runId = "clock-driven-v1-operation-rejection";
         RestTemplate restTemplate = mock(RestTemplate.class);
         MutableContext context = new MutableContext(workspaceRoot);
         createTerminalRun(context, runId, "FAILED", "PLATFORM_OWNED_V1");
         BankingPolicyWindTunnelExecutionProvider provider =
-                new BankingPolicyWindTunnelExecutionProvider(
+                provider(
                         new ObjectMapper(), restTemplate, Runnable::run);
-
-        assertThrows(IllegalArgumentException.class, () -> provider.controlRun(
+        assertInvalidWithoutEffects(context, restTemplate, () -> provider.controlRun(
                 context, runId, "FINALIZE", finalizationRequest(runId)));
-        PolicyWindTunnelRunRecord legacyReplay = provider.controlRun(
-                context, runId, "FINALIZE", Map.of());
-
-        assertEquals("FAILED", legacyReplay.status());
-        assertFalse(Files.exists(finalizationReceiptPath(runId)));
-        verifyNoInteractions(restTemplate);
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.controlRun(context, runId, "FINALIZE", Map.of()));
     }
 
     @Test
     @SuppressWarnings("unchecked")
     void explicitV1RecoveryFinalizesNonterminalRunsWithoutV2Receipt() throws Exception {
-        for (String finalizationMode : List.of("LEGACY_V1", "PLATFORM_OWNED_V1")) {
-            String runId = "clock-driven-receipt-free-"
-                    + finalizationMode.toLowerCase(java.util.Locale.ROOT);
-            RestTemplate restTemplate = mock(RestTemplate.class);
-            stubProviderFinalizationDependencies(restTemplate, runId);
-            when(restTemplate.exchange(
-                    eq("http://simulator.test/api/clock/replay"),
-                    eq(HttpMethod.POST),
-                    any(HttpEntity.class),
-                    eq(String.class)))
-                    .thenReturn(ResponseEntity.ok("{}"));
-            MutableContext context = new MutableContext(workspaceRoot);
-            createFinalizableRun(context, runId, finalizationMode);
-            BankingPolicyWindTunnelExecutionProvider provider =
-                    new BankingPolicyWindTunnelExecutionProvider(
-                            new ObjectMapper(), restTemplate, Runnable::run);
-
-            PolicyWindTunnelRunRecord finalized = provider.controlRun(
-                    context, runId, "FINALIZE", Map.of());
-
-            assertEquals("COMPLETED", finalized.status());
-            assertFalse(Files.exists(finalizationReceiptPath(runId)));
-            assertTrue(context.registeredArtifacts(runId).containsKey("summary"));
-            ArgumentCaptor<HttpEntity> notification = ArgumentCaptor.forClass(HttpEntity.class);
-            verify(restTemplate, times(1)).exchange(
-                    startsWith("http://experiment-service:7457/api/simulation-runs/" + runId),
-                    eq(HttpMethod.PATCH),
-                    notification.capture(),
-                    eq(Object.class));
-            Map<String, Object> notificationBody =
-                    (Map<String, Object>) notification.getValue().getBody();
-            assertEquals(runId, notificationBody.get("runId"));
-            assertFalse(notificationBody.containsKey("operationId"));
-            assertFalse(notificationBody.containsKey("inputDigest"));
-            assertFalse(notificationBody.containsKey("providerRevision"));
-        }
+        RestTemplate restTemplate = mock(RestTemplate.class);
+        var provider = provider(new ObjectMapper(), restTemplate, Runnable::run);
+        MutableContext context = new MutableContext(workspaceRoot);
+        String runId = "historical-v1-nonterminal";
+        createFinalizableRun(context, runId, "PLATFORM_OWNED_V1");
+        assertEquals("RUNNING", provider.getRunStatus(context, runId).status());
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.controlRun(context, runId, "FINALIZE", Map.of()));
+        assertFalse(Files.exists(finalizationReceiptPath(runId)));
     }
 
     @Test
@@ -4718,9 +4055,9 @@ class BankingPolicyWindTunnelExecutionProviderTest {
         MutableContext context = new MutableContext(workspaceRoot);
         createFinalizableRun(context, runId);
         BankingPolicyWindTunnelExecutionProvider provider =
-                new BankingPolicyWindTunnelExecutionProvider(
+                provider(
                         new ObjectMapper(), restTemplate, Runnable::run);
-        provider.controlRun(context, runId, "FINALIZE", finalizationRequest(runId));
+        seedStoredReceipt(provider, context, runId, "PUBLISHED", "COMPLETED");
         ObjectMapper mapper = new ObjectMapper();
         Map<String, Object> validReceipt = mapper.readValue(
                 Files.readAllBytes(finalizationReceiptPath(runId)), Map.class);
@@ -4734,6 +4071,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
 
             assertThrows(IllegalStateException.class, () -> provider.getRunStatus(context, runId));
         }
+    
     }
 
     @Test
@@ -4768,7 +4106,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                         hybridDecisionResponse(2, 3, 2, 1),
                         hybridDecisionResponse(2, 3, 2, 1),
                         hybridDecisionResponse(2, 3, 2, 1));
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
@@ -4801,31 +4139,9 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 null,
                 metadata));
         stubSealedOpportunityReconciliation(restTemplate, runId);
-
-        PolicyWindTunnelRunRecord finalized = provider.controlRun(
-                context, runId, "FINALIZE", finalizationRequest(runId));
-
-        assertEquals("COMPLETED", finalized.status());
-        Map<String, Object> finalizedBundle = provider.loadBundle(context, runId);
-        Map<?, ?> summary = (Map<?, ?>) finalizedBundle.get("summary");
-        Map<?, ?> agenticSimulation = (Map<?, ?>) summary.get("agenticSimulation");
-        List<?> warnings = (List<?>) agenticSimulation.get("evidenceIntegrityWarnings");
-        assertTrue(warnings.stream().anyMatch(warning ->
-                "RUNTIME_TICK_DRAIN_UNVERIFIED".equals(((Map<?, ?>) warning).get("code"))));
-        Map<?, ?> agentAudit = (Map<?, ?>) summary.get("hybridAgentAudit");
-        Map<?, ?> runtimeTickDrain = (Map<?, ?>) agentAudit.get("runtimeTickDrain");
-        assertEquals(false, runtimeTickDrain.get("verified"));
-        assertEquals("UNVERIFIED_SCOPE", runtimeTickDrain.get("status"));
-        verify(restTemplate, times(1)).exchange(
-                eq("http://agent-runtime.test/api/agents/runtime-state?simulationRunId=clock-driven-unscoped-drain-test"),
-                eq(HttpMethod.GET),
-                any(HttpEntity.class),
-                eq(Map.class));
-        verify(restTemplate, never()).exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(String.class));
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.controlRun(
+                context, runId, "FINALIZE", finalizationRequest(runId)));
     }
 
     @Test
@@ -4839,7 +4155,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 any(HttpEntity.class),
                 eq(List.class)))
                 .thenReturn(hybridDecisionResponse(0, 3, 2, 1));
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
@@ -4872,10 +4188,13 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 null,
                 metadata));
 
-        Map<String, Object> liveBundle = provider.loadBundle(context, runId);
-        Map<?, ?> summary = (Map<?, ?>) liveBundle.get("summary");
-        Map<?, ?> agenticSimulation = (Map<?, ?>) summary.get("agenticSimulation");
 
+        @SuppressWarnings("unchecked")
+        Map<String, Object> audit = (Map<String, Object>) invokePure(provider,
+                "buildDecisionAuditPayload", hybridDecisionResponse(0, 3, 2, 1).getBody(), "stored-fixture");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> agenticSimulation = (Map<String, Object>) invokePure(provider,
+                "buildAgenticSimulationSummary", parameters, 100, audit, Map.of(), Map.of(), runId, Map.of(), false);
         assertEquals(0, agenticSimulation.get("actualDecisionCount"));
         assertEquals(3, agenticSimulation.get("observedDecisionOpportunities"));
         assertEquals(2, agenticSimulation.get("admittedDecisionOpportunities"));
@@ -4883,6 +4202,9 @@ class BankingPolicyWindTunnelExecutionProviderTest {
         assertTrue(explanation.contains("runtime checked 3"));
         assertTrue(explanation.contains("admitted 2"));
         assertTrue(explanation.contains("captured 0 audited"));
+    
+        assertEquals(0, outboundHttpRequests.get());
+        verifyNoInteractions(restTemplate);
     }
 
     @Test
@@ -4896,7 +4218,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 any(HttpEntity.class),
                 eq(List.class)))
                 .thenReturn(hybridDecisionResponse(3, 4, 2, 2));
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
@@ -4937,10 +4259,13 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 null,
                 metadata));
 
-        Map<String, Object> liveBundle = provider.loadBundle(context, runId);
-        Map<?, ?> summary = (Map<?, ?>) liveBundle.get("summary");
-        Map<?, ?> agenticSimulation = (Map<?, ?>) summary.get("agenticSimulation");
 
+        @SuppressWarnings("unchecked")
+        Map<String, Object> audit = (Map<String, Object>) invokePure(provider,
+                "buildDecisionAuditPayload", hybridDecisionResponse(3, 4, 2, 2).getBody(), "stored-fixture");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> agenticSimulation = (Map<String, Object>) invokePure(provider,
+                "buildAgenticSimulationSummary", parameters, 100, audit, Map.of(), Map.of(), runId, Map.of(), false);
         assertEquals(3, agenticSimulation.get("actualDecisionCount"));
         assertEquals(4, agenticSimulation.get("observedDecisionOpportunities"));
         assertEquals(2, agenticSimulation.get("admittedDecisionOpportunities"));
@@ -4948,6 +4273,9 @@ class BankingPolicyWindTunnelExecutionProviderTest {
         List<?> warnings = (List<?>) agenticSimulation.get("evidenceIntegrityWarnings");
         assertEquals("AUDITED_DECISIONS_EXCEED_ADMITTED_TURNS", ((Map<?, ?>) warnings.getFirst()).get("code"));
         assertTrue(String.valueOf(agenticSimulation.get("decisionCoverageExplanation")).contains("Evidence integrity warning"));
+    
+        assertEquals(0, outboundHttpRequests.get());
+        verifyNoInteractions(restTemplate);
     }
 
     @Test
@@ -4961,7 +4289,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 any(HttpEntity.class),
                 eq(List.class)))
                 .thenReturn(hybridDecisionResponse(1, 3, 2, 1));
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
@@ -4997,19 +4325,21 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 metadata));
         writeCheckpointSampleWithLateRejections(runId);
         stubSealedOpportunityReconciliation(restTemplate, runId);
-
-        provider.controlRun(context, runId, "FINALIZE", finalizationRequest(runId));
-        Map<String, Object> bundle = provider.loadBundle(context, runId);
-        Map<?, ?> summary = (Map<?, ?>) bundle.get("summary");
-        Map<?, ?> branchStateProjection = (Map<?, ?>) bundle.get("branchStateProjection");
-        List<?> sampledMutations = (List<?>) branchStateProjection.get("mutations");
-        long sampledRejected = sampledMutations.stream()
-                .filter(mutation -> "REMOTE_DOMAIN_WORK_REJECTED".equals(((Map<?, ?>) mutation).get("mutationType")))
-                .count();
-        List<?> scores = (List<?>) summary.get("domainOutcomeScores");
-
-        assertEquals(0, sampledRejected);
-        assertEquals("BLOCK", ((Map<?, ?>) scores.getFirst()).get("recommendation"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> mutations = (List<Map<String, Object>>) invokePure(provider,
+                "buildClockDrivenHybridStateMutations", context, runId);
+        assertEquals(0, mutations.stream().filter(row -> "REMOTE_DOMAIN_WORK_REJECTED".equals(row.get("mutationType"))).count());
+        int rejected = (Integer) invokePure(provider, "countRejectedCheckpointWork", context, runId, mutations);
+        assertEquals(30, rejected);
+        PolicyWindTunnelExecutionContext scoreContext = mock(PolicyWindTunnelExecutionContext.class);
+        when(scoreContext.packMetadata(BankingPolicyWindTunnelManifest.PACK_ID)).thenReturn(Map.of("outcomeScorecards", List.of(rejectedWorkScorecard())));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> scores = (List<Map<String, Object>>) invokePure(provider,
+                "evaluateDomainOutcomeScorecards", scoreContext, runId, "hardship-relief", parameters,
+                Map.of(), Map.of("rejectedWorkCount", rejected), Map.of());
+        assertEquals("BLOCK", scores.getFirst().get("recommendation"));
+        org.mockito.Mockito.clearInvocations(restTemplate);
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.controlRun(context, runId, "FINALIZE", finalizationRequest(runId)));
     }
 
     @Test
@@ -5023,7 +4353,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 any(HttpEntity.class),
                 eq(List.class)))
                 .thenReturn(hybridDecisionResponse(1, 3, 2, 1));
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
@@ -5059,19 +4389,21 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 metadata));
         writeRepeatedRejectedCheckpointSnapshots(runId);
         stubSealedOpportunityReconciliation(restTemplate, runId);
-
-        provider.controlRun(context, runId, "FINALIZE", finalizationRequest(runId));
-        Map<String, Object> bundle = provider.loadBundle(context, runId);
-        Map<?, ?> summary = (Map<?, ?>) bundle.get("summary");
-        Map<?, ?> branchStateProjection = (Map<?, ?>) bundle.get("branchStateProjection");
-        List<?> sampledMutations = (List<?>) branchStateProjection.get("mutations");
-        long sampledRejected = sampledMutations.stream()
-                .filter(mutation -> "REMOTE_DOMAIN_WORK_REJECTED".equals(((Map<?, ?>) mutation).get("mutationType")))
-                .count();
-        List<?> scores = (List<?>) summary.get("domainOutcomeScores");
-
-        assertEquals(30, sampledRejected);
-        assertEquals("WATCH", ((Map<?, ?>) scores.getFirst()).get("recommendation"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> mutations = (List<Map<String, Object>>) invokePure(provider,
+                "buildClockDrivenHybridStateMutations", context, runId);
+        assertEquals(30, mutations.stream().filter(row -> "REMOTE_DOMAIN_WORK_REJECTED".equals(row.get("mutationType"))).count());
+        int rejected = (Integer) invokePure(provider, "countRejectedCheckpointWork", context, runId, mutations);
+        assertEquals(1, rejected);
+        PolicyWindTunnelExecutionContext scoreContext = mock(PolicyWindTunnelExecutionContext.class);
+        when(scoreContext.packMetadata(BankingPolicyWindTunnelManifest.PACK_ID)).thenReturn(Map.of("outcomeScorecards", List.of(rejectedWorkScorecard())));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> scores = (List<Map<String, Object>>) invokePure(provider,
+                "evaluateDomainOutcomeScorecards", scoreContext, runId, "hardship-relief", parameters,
+                Map.of(), Map.of("rejectedWorkCount", rejected), Map.of());
+        assertEquals("WATCH", scores.getFirst().get("recommendation"));
+        org.mockito.Mockito.clearInvocations(restTemplate);
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.controlRun(context, runId, "FINALIZE", finalizationRequest(runId)));
     }
 
     @Test
@@ -5085,7 +4417,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 any(HttpEntity.class),
                 eq(List.class)))
                 .thenReturn(hybridDecisionResponse(1, 3, 2, 1));
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
@@ -5121,19 +4453,21 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 metadata));
         writeAnonymousRejectedCheckpointSnapshots(runId);
         stubSealedOpportunityReconciliation(restTemplate, runId);
-
-        provider.controlRun(context, runId, "FINALIZE", finalizationRequest(runId));
-        Map<String, Object> bundle = provider.loadBundle(context, runId);
-        Map<?, ?> summary = (Map<?, ?>) bundle.get("summary");
-        Map<?, ?> branchStateProjection = (Map<?, ?>) bundle.get("branchStateProjection");
-        List<?> sampledMutations = (List<?>) branchStateProjection.get("mutations");
-        long sampledRejected = sampledMutations.stream()
-                .filter(mutation -> "REMOTE_DOMAIN_WORK_REJECTED".equals(((Map<?, ?>) mutation).get("mutationType")))
-                .count();
-        List<?> scores = (List<?>) summary.get("domainOutcomeScores");
-
-        assertEquals(30, sampledRejected);
-        assertEquals("BLOCK", ((Map<?, ?>) scores.getFirst()).get("recommendation"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> mutations = (List<Map<String, Object>>) invokePure(provider,
+                "buildClockDrivenHybridStateMutations", context, runId);
+        assertEquals(30, mutations.stream().filter(row -> "REMOTE_DOMAIN_WORK_REJECTED".equals(row.get("mutationType"))).count());
+        int rejected = (Integer) invokePure(provider, "countRejectedCheckpointWork", context, runId, mutations);
+        assertEquals(30, rejected);
+        PolicyWindTunnelExecutionContext scoreContext = mock(PolicyWindTunnelExecutionContext.class);
+        when(scoreContext.packMetadata(BankingPolicyWindTunnelManifest.PACK_ID)).thenReturn(Map.of("outcomeScorecards", List.of(rejectedWorkScorecard())));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> scores = (List<Map<String, Object>>) invokePure(provider,
+                "evaluateDomainOutcomeScorecards", scoreContext, runId, "hardship-relief", parameters,
+                Map.of(), Map.of("rejectedWorkCount", rejected), Map.of());
+        assertEquals("BLOCK", scores.getFirst().get("recommendation"));
+        org.mockito.Mockito.clearInvocations(restTemplate);
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.controlRun(context, runId, "FINALIZE", finalizationRequest(runId)));
     }
 
     @Test
@@ -5164,14 +4498,14 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 eq(String.class)))
                 .thenReturn(ResponseEntity.ok("{}"));
 
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
         BankingRemotePolicyWindTunnelExecutionContext context =
                 BankingRemotePolicyWindTunnelTestContexts.durable(new ObjectMapper(), workspaceRoot);
-
-        PolicyWindTunnelRunRecord status = provider.startRun(context, withPinnedActivationSettings(Map.of(
+        // Historical clock settings are retained; execution must stop before any mutation or outbound call.
+        assertRetiredWithoutEffects(context, restTemplate, () -> provider.startRun(context, withPinnedActivationSettings(Map.of(
                 "presetId", "saver-repricing",
                 "executionMode", "CLOCK_DRIVEN_HYBRID",
                 "opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2",
@@ -5182,25 +4516,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 "simulationStartEpochMs", 1_800_000_000_000L,
                 "cohortId", cohortId,
                 "cohortSelection", Map.of("cohortId", cohortId))),
-                "PLATFORM_ADMIN");
-
-        assertEquals(3600.0, ((Number) status.parameters().get("playbackRate")).doubleValue());
-        ArgumentCaptor<HttpEntity> replayCaptor = ArgumentCaptor.forClass(HttpEntity.class);
-        verify(restTemplate, times(2)).exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                replayCaptor.capture(),
-                eq(String.class));
-        Map<?, ?> replayContractBody = (Map<?, ?>) replayCaptor.getAllValues().getFirst().getBody();
-        assertEquals(
-                1_800_000_000_000L,
-                ((Number) replayContractBody.get("simulationStartEpochMs")).longValue());
-        assertEquals(
-                1_800_000_000_000L,
-                ((Number) status.parameters().get("simulationStartEpochMs")).longValue());
-        Map<?, ?> replayBody = (Map<?, ?>) replayCaptor.getAllValues().get(1).getBody();
-        Map<?, ?> playback = (Map<?, ?>) replayBody.get("playback");
-        assertEquals(3600.0, ((Number) playback.get("rate")).doubleValue());
+                "PLATFORM_ADMIN"));
     }
 
     @Test
@@ -5210,7 +4526,7 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 eq("http://simulator.test/api/clock/rate/info"),
                 eq(String.class)))
                 .thenReturn("{\"max\":14400.0}");
-        BankingPolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+        BankingPolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
                 restTemplate,
                 Runnable::run);
@@ -5222,30 +4538,20 @@ class BankingPolicyWindTunnelExecutionProviderTest {
                 PolicyWindTunnelExecutionContext.class);
         playbackRate.setAccessible(true);
 
-        assertEquals(7200.0, ((Number) playbackRate.invoke(provider, Map.of(
-                "agentDecisionCadence", "EVENT_ONLY"), "STUB_LLM", context)).doubleValue());
-        assertEquals(7200.0, ((Number) playbackRate.invoke(provider, Map.of(
-                "agentDecisionCadence", "EVENT_ONLY"), "DETERMINISTIC", context)).doubleValue());
-        assertEquals(1800.0, ((Number) playbackRate.invoke(provider, Map.of(
-                "agentDecisionCadence", "DAILY"), "STUB_LLM", context)).doubleValue());
-        assertEquals(1800.0, ((Number) playbackRate.invoke(provider, Map.of(
-                "agentDecisionCadence", "DAILY"), "DETERMINISTIC", context)).doubleValue());
-        assertEquals(600.0, ((Number) playbackRate.invoke(provider, Map.of(
-                "agentDecisionCadence", "EVENT_ONLY"), "REAL_LLM", context)).doubleValue());
-
-        when(restTemplate.getForObject(
-                eq("http://simulator.test/api/clock/rate/info"),
-                eq(String.class)))
-                .thenThrow(new IllegalStateException("simulator unavailable"));
-        assertEquals(1800.0, ((Number) playbackRate.invoke(provider, Map.of(
-                "agentDecisionCadence", "EVENT_ONLY"), "DETERMINISTIC", context)).doubleValue());
+        for (String cadence : List.of("EVENT_ONLY", "DAILY")) {
+            for (String mode : List.of("STUB_LLM", "DETERMINISTIC", "REAL_LLM")) {
+                assertRetiredWithoutEffects(context, restTemplate, () -> invokePure(provider,
+                        "playbackRate", Map.of("agentDecisionCadence", cadence), mode, context));
+            }
+        }
     }
 
     @Test
-    void policyOnlyRunRejectsPauseResumeFinalizeAndAllowsCancel() {
-        PolicyWindTunnelExecutionProvider provider = new BankingPolicyWindTunnelExecutionProvider(
+    void policyOnlyRunRejectsPauseResumeFinalizeAndAllowsCancel() throws Exception {
+        RestTemplate restTemplate = mock(RestTemplate.class);
+        PolicyWindTunnelExecutionProvider provider = provider(
                 new ObjectMapper(),
-                mock(RestTemplate.class),
+                restTemplate,
                 Runnable::run);
         MutableContext context = new MutableContext(workspaceRoot);
         String runId = "policy-only-run";
@@ -5278,7 +4584,8 @@ class BankingPolicyWindTunnelExecutionProviderTest {
         assertTrue(resumeError.getMessage().contains("CLOCK_DRIVEN_HYBRID"));
         IllegalArgumentException finalizeError = assertThrows(IllegalArgumentException.class,
                 () -> provider.controlRun(context, runId, "FINALIZE", Map.of()));
-        assertTrue(finalizeError.getMessage().contains("CLOCK_DRIVEN_HYBRID"));
+        assertEquals("Scenario Lab finalization requires an explicitly pinned finalization mode", finalizeError.getMessage());
+        assertInvalidWithoutEffects(context, restTemplate, () -> provider.controlRun(context, runId, "FINALIZE", Map.of()));
 
         PolicyWindTunnelRunRecord cancelled = provider.controlRun(context, runId, "CANCEL", Map.of());
         assertEquals("CANCELLED", cancelled.status());

@@ -173,18 +173,17 @@ class BankingRemotePolicyWindTunnelConformanceTest {
     void platformOwnedV2ConformanceSurvivesIndependentProcessRestart() throws Exception {
         configureRemotePolicyWindTunnelProvider(true);
         try (BankingPolicyWindTunnelV2ProbeDriver driver = new BankingPolicyWindTunnelV2ProbeDriver()) {
-            PolicyWindTunnelConformanceReport report = new PolicyWindTunnelConformanceHarness().assertConforms(
+            AssertionError unavailable = org.junit.jupiter.api.Assertions.assertThrows(AssertionError.class, () -> new PolicyWindTunnelConformanceHarness().assertConforms(
                     mockMvc,
                     objectMapper,
                     new PolicyWindTunnelConformanceScenario(
                             "banking-policy-pack",
                             "saver-repricing"),
-                    driver);
-
-            Map<String, Object> reportMap = report.toMap();
-            assertThat(reportMap).containsEntry("scenarioLabFinalizationV2Checked", true);
-            assertThat(((Map<?, ?>) reportMap.get("scenarioLabFinalizationV2")).get("status"))
-                    .isEqualTo("PASSED");
+                    driver));
+            assertThat(unavailable.getMessage()).contains("HTTP 400", "scenario_lab_native_execution_unavailable", "retired global clock");
+            driver.recordUnavailableConformanceFailure(unavailable.getMessage());
+            driver.verifyNewClockConformanceUnavailableAfterFailure();
+            // The harness has failed genuine new execution; this does not certify native Scenario Lab conformance.
         }
     }
 

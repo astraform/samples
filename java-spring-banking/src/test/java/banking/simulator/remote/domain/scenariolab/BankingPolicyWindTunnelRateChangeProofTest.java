@@ -6,12 +6,8 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
-import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestTemplate;
 
-import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -24,9 +20,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
-import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
-import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
-import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
 class BankingPolicyWindTunnelRateChangeProofTest {
 
@@ -278,62 +271,23 @@ class BankingPolicyWindTunnelRateChangeProofTest {
         PolicyWindTunnelExecutionContext context = mock(PolicyWindTunnelExecutionContext.class);
         when(context.workspaceRoot()).thenReturn(workspaceRoot);
         when(context.agentRuntimeUrl()).thenReturn("http://agent-runtime");
-        RestTemplate unavailableRuntime = new RestTemplate();
-        MockRestServiceServer unavailableServer = MockRestServiceServer
-                .bindTo(unavailableRuntime)
-                .build();
-        unavailableServer.expect(method(org.springframework.http.HttpMethod.GET))
-                .andRespond(withStatus(HttpStatus.FORBIDDEN));
-        BankingPolicyWindTunnelExecutionProvider providerWithUnavailableAudit =
-                new BankingPolicyWindTunnelExecutionProvider(
-                        objectMapper,
-                        unavailableRuntime,
-                        Runnable::run);
-
-        assertThatThrownBy(() -> providerWithUnavailableAudit.assessClockDrivenRateChangeProof(
-                        context,
-                        runId,
-                        String.valueOf(input.get("presetId")),
-                        parameters,
-                        "fresh-private-capability"))
-                .isInstanceOf(
-                        BankingPolicyWindTunnelExecutionProvider
-                                .OpportunityCorrelationAuditUnavailableException.class)
-                .hasMessageContaining("403");
-        unavailableServer.verify();
-
-        RestTemplate malformedRuntime = new RestTemplate();
-        MockRestServiceServer malformedServer = MockRestServiceServer
-                .bindTo(malformedRuntime)
-                .build();
-        malformedServer.expect(method(org.springframework.http.HttpMethod.GET))
-                .andRespond(withSuccess(
-                        "{\"simulationRunId\":\"first\",\"simulationRunId\":\"second\"}"
-                                .getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                        MediaType.APPLICATION_JSON));
-        BankingPolicyWindTunnelExecutionProvider providerWithMalformedAudit =
-                new BankingPolicyWindTunnelExecutionProvider(
-                        objectMapper,
-                        malformedRuntime,
-                        Runnable::run);
-
-        assertThatThrownBy(() -> providerWithMalformedAudit.assessClockDrivenRateChangeProof(
-                        context,
-                        runId,
-                        String.valueOf(input.get("presetId")),
-                        parameters,
-                        "fresh-private-capability"))
-                .isInstanceOf(
-                        BankingPolicyWindTunnelExecutionProvider
-                                .OpportunityCorrelationAuditUnavailableException.class)
-                .hasMessageContaining("strict UTF-8 JSON");
-        malformedServer.verify();
+        RestTemplate retiredTransport = mock(RestTemplate.class);
+        BankingPolicyWindTunnelExecutionProvider retiredProvider =
+                new BankingPolicyWindTunnelExecutionProvider(objectMapper, retiredTransport, Runnable::run);
+        for (String capability : List.of("fresh-private-capability", "")) {
+            assertThatThrownBy(() -> retiredProvider.assessClockDrivenRateChangeProof(
+                            context, runId, String.valueOf(input.get("presetId")), parameters, capability))
+                    .isInstanceOf(BankingPolicyWindTunnelExecutionProvider
+                            .OpportunityCorrelationAuditUnavailableException.class)
+                    .hasMessageContaining("retired Runtime correlation-audit endpoint");
+        }
+        org.mockito.Mockito.verifyNoInteractions(retiredTransport);
         assertThat(workspaceRoot.resolve("output/policy-wind-tunnel/runs/" + runId + "/summary"))
                 .doesNotExist();
     }
 
     @Test
-    void correlationAuditRequiresExactJsonMediaTypeAndStreamsWithinFourMiB(
+    void retiredCorrelationAuditHasNoHttpPathWhileStoredProofStillValidates(
             @TempDir Path workspaceRoot) throws Exception {
         Map<String, Object> fixture = fixture();
         Map<String, Object> input = map(fixture.get("input"));
@@ -371,79 +325,28 @@ class BankingPolicyWindTunnelRateChangeProofTest {
         PolicyWindTunnelExecutionContext context = mock(PolicyWindTunnelExecutionContext.class);
         when(context.workspaceRoot()).thenReturn(workspaceRoot);
         when(context.agentRuntimeUrl()).thenReturn("http://agent-runtime");
-        byte[] validAudit = objectMapper.writeValueAsBytes(fixture.get("expectedCorrelationAudit"));
-
-        RestTemplate extraParameterRuntime = new RestTemplate();
-        MockRestServiceServer extraParameterServer = MockRestServiceServer
-                .bindTo(extraParameterRuntime)
-                .build();
-        extraParameterServer.expect(method(org.springframework.http.HttpMethod.GET))
-                .andRespond(withSuccess(
-                        validAudit,
-                        MediaType.parseMediaType("application/json;charset=UTF-8;profile=proof")));
-        BankingPolicyWindTunnelExecutionProvider extraParameterProvider =
-                new BankingPolicyWindTunnelExecutionProvider(
-                        objectMapper,
-                        extraParameterRuntime,
-                        Runnable::run);
-        assertThatThrownBy(() -> extraParameterProvider.assessClockDrivenRateChangeProof(
-                        context,
-                        runId,
-                        String.valueOf(input.get("presetId")),
-                        parameters,
+        RestTemplate retiredTransport = new RestTemplate();
+        java.util.concurrent.atomic.AtomicInteger outboundRequests = new java.util.concurrent.atomic.AtomicInteger();
+        retiredTransport.getInterceptors().add((request, body, execution) -> {
+            outboundRequests.incrementAndGet();
+            throw new AssertionError("Retired correlation transport must never execute");
+        });
+        BankingPolicyWindTunnelExecutionProvider retiredProvider =
+                new BankingPolicyWindTunnelExecutionProvider(objectMapper, retiredTransport, Runnable::run);
+        assertThatThrownBy(() -> retiredProvider.assessClockDrivenRateChangeProof(
+                        context, runId, String.valueOf(input.get("presetId")), parameters,
                         "fresh-private-capability"))
-                .isInstanceOf(
-                        BankingPolicyWindTunnelExecutionProvider
-                                .OpportunityCorrelationAuditUnavailableException.class)
-                .hasMessageContaining("exact JSON proof response");
-        extraParameterServer.verify();
-
-        RestTemplate oversizedRuntime = new RestTemplate();
-        MockRestServiceServer oversizedServer = MockRestServiceServer
-                .bindTo(oversizedRuntime)
-                .build();
-        oversizedServer.expect(method(org.springframework.http.HttpMethod.GET))
-                .andRespond(withSuccess(new byte[4 * 1024 * 1024 + 1], MediaType.APPLICATION_JSON));
-        BankingPolicyWindTunnelExecutionProvider oversizedProvider =
-                new BankingPolicyWindTunnelExecutionProvider(
-                        objectMapper,
-                        oversizedRuntime,
-                        Runnable::run);
-        assertThatThrownBy(() -> oversizedProvider.assessClockDrivenRateChangeProof(
-                        context,
-                        runId,
-                        String.valueOf(input.get("presetId")),
-                        parameters,
-                        "fresh-private-capability"))
-                .isInstanceOf(
-                        BankingPolicyWindTunnelExecutionProvider
-                                .OpportunityCorrelationAuditUnavailableException.class)
-                .hasMessageContaining("exceeds the 4 MiB transport limit");
-        oversizedServer.verify();
-
-        RestTemplate utf8Runtime = new RestTemplate();
-        MockRestServiceServer utf8Server = MockRestServiceServer.bindTo(utf8Runtime).build();
-        utf8Server.expect(method(org.springframework.http.HttpMethod.GET))
-                .andRespond(withSuccess(
-                        validAudit,
-                        MediaType.parseMediaType("application/json;charset=UTF-8")));
-        BankingPolicyWindTunnelExecutionProvider utf8Provider =
-                new BankingPolicyWindTunnelExecutionProvider(
-                        objectMapper,
-                        utf8Runtime,
-                        Runnable::run);
-        assertThat(utf8Provider.assessClockDrivenRateChangeProof(
-                        context,
-                        runId,
-                        String.valueOf(input.get("presetId")),
-                        parameters,
-                        "fresh-private-capability").required())
-                .isTrue();
-        utf8Server.verify();
+                .isInstanceOf(BankingPolicyWindTunnelExecutionProvider
+                        .OpportunityCorrelationAuditUnavailableException.class)
+                .hasMessageContaining("retired Runtime correlation-audit endpoint");
+        assertThat(outboundRequests.get()).isZero();
+        assertThat(retiredProvider.verifyClockDrivenRateChangeProof(
+                        plan, installation, map(fixture.get("expectedCorrelationAudit")), "STUB_LLM")
+                .chainIntegrityVerified()).isTrue();
     }
 
     @Test
-    void correlationAuditProviderRevisionIsEncodedExactlyOnce(@TempDir Path workspaceRoot)
+    void retiredCorrelationAuditDoesNotConsultLegacyRuntimeConfiguration(@TempDir Path workspaceRoot)
             throws Exception {
         Map<String, Object> fixture = fixture();
         Map<String, Object> input = map(fixture.get("input"));
@@ -481,32 +384,17 @@ class BankingPolicyWindTunnelRateChangeProofTest {
         PolicyWindTunnelExecutionContext context = mock(PolicyWindTunnelExecutionContext.class);
         when(context.workspaceRoot()).thenReturn(workspaceRoot);
         when(context.agentRuntimeUrl()).thenReturn("http://agent-runtime");
-        RestTemplate runtime = new RestTemplate();
-        MockRestServiceServer runtimeServer = MockRestServiceServer.bindTo(runtime).build();
-        java.util.concurrent.atomic.AtomicReference<URI> uri =
-                new java.util.concurrent.atomic.AtomicReference<>();
-        byte[] audit = objectMapper.writeValueAsBytes(fixture.get("expectedCorrelationAudit"));
-        runtimeServer.expect(request -> uri.set(request.getURI()))
-                .andExpect(method(org.springframework.http.HttpMethod.GET))
-                .andRespond(withSuccess(audit, MediaType.APPLICATION_JSON));
-        BankingPolicyWindTunnelExecutionProvider providerWithRuntime =
-                new BankingPolicyWindTunnelExecutionProvider(objectMapper, runtime, Runnable::run);
-
-        BankingPolicyWindTunnelExecutionProvider.RateChangeProofAssessment assessment =
-                providerWithRuntime.assessClockDrivenRateChangeProof(
-                        context,
-                        runId,
-                        String.valueOf(input.get("presetId")),
-                        parameters,
-                        "fresh-private-capability");
-
-        assertThat(assessment.required()).isTrue();
-        runtimeServer.verify();
-        assertThat(uri.get().getRawQuery())
-                .contains("providerRevision=build-sha256%3A")
-                .doesNotContain("%253A");
-        assertThat(uri.get().getQuery())
-                .contains("providerRevision=build-sha256:");
+        RestTemplate retiredTransport = mock(RestTemplate.class);
+        BankingPolicyWindTunnelExecutionProvider retiredProvider =
+                new BankingPolicyWindTunnelExecutionProvider(objectMapper, retiredTransport, Runnable::run);
+        assertThatThrownBy(() -> retiredProvider.assessClockDrivenRateChangeProof(
+                        context, runId, String.valueOf(input.get("presetId")), parameters,
+                        "fresh-private-capability"))
+                .isInstanceOf(BankingPolicyWindTunnelExecutionProvider
+                        .OpportunityCorrelationAuditUnavailableException.class)
+                .hasMessageContaining("stored proof evidence");
+        org.mockito.Mockito.verify(context, org.mockito.Mockito.never()).agentRuntimeUrl();
+        org.mockito.Mockito.verifyNoInteractions(retiredTransport);
     }
 
     private void writeProofInputs(

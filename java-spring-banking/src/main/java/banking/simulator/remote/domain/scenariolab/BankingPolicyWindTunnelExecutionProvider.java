@@ -1,5 +1,9 @@
 package banking.simulator.remote.domain.scenariolab;
 
+import ai.astraform.platform.client.ApiClient;
+import ai.astraform.platform.client.api.SimulationRunsApi;
+import ai.astraform.platform.client.model.SimulationRunUpdateRequest;
+import tools.jackson.core.type.TypeReference;
 import ai.astraform.remote.domain.sdk.EvaluationRunReport;
 import ai.astraform.remote.domain.sdk.RegressionDeltaReport;
 import tools.jackson.core.JacksonException;
@@ -11,14 +15,10 @@ import tools.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
-import org.springframework.web.client.HttpStatusCodeException;
-import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 import ai.astraform.remote.domain.sdk.PolicyWindTunnelArchivePayload;
 import ai.astraform.remote.domain.sdk.PolicyWindTunnelArtifactMetadata;
@@ -45,10 +45,8 @@ import banking.simulator.remote.domain.BankingRemotePolicyWindTunnelService;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.math.BigDecimal;
 import java.math.BigInteger;
-import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -116,7 +114,6 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
     private static final String CLOCK_DRIVEN_INTERVENTION_PLAN_SCHEMA_FIELD =
             "clockDrivenInterventionPlanSchemaVersion";
     private static final int MAX_ACTIVATION_SETTINGS_BYTES = 16 * 1024;
-    private static final int MAX_CORRELATION_AUDIT_BYTES = 4 * 1024 * 1024;
     private static final String OPPORTUNITY_RECONCILIATION_SCHEMA_VERSION =
             "customer_decision_opportunity_reconciliation.v1";
     private static final String OPPORTUNITY_AGENT_AUDIT_SCHEMA_VERSION =
@@ -422,6 +419,8 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
     private final BankingPolicyWindTunnelEvidenceService evidenceService;
     private final DomainOutcomeScorecardEvaluator scorecardEvaluator;
     private final RestTemplate restTemplate;
+    private final SimulationRunsApi simulationRunsApi;
+    private final ObjectMapper simulationMapper;
     private final Executor executor;
     private final LongSupplier currentTimeMillis;
     private final Runnable afterLaunchAdmission;
@@ -539,6 +538,18 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
             LongSupplier currentTimeMillis,
             Runnable afterLaunchAdmission,
             BiConsumer<String, String> afterFinalizationReceiptPrepared) {
+        this(objectMapper, restTemplate, executor, currentTimeMillis, afterLaunchAdmission,
+                afterFinalizationReceiptPrepared, null);
+    }
+
+    BankingPolicyWindTunnelExecutionProvider(
+            ObjectMapper objectMapper,
+            RestTemplate restTemplate,
+            Executor executor,
+            LongSupplier currentTimeMillis,
+            Runnable afterLaunchAdmission,
+            BiConsumer<String, String> afterFinalizationReceiptPrepared,
+            ApiClient simulationClient) {
         this.objectMapper = objectMapper.rebuild()
                 .findAndAddModules()
                 .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
@@ -551,6 +562,18 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
         this.evidenceService = new BankingPolicyWindTunnelEvidenceService(this.objectMapper);
         this.scorecardEvaluator = new DomainOutcomeScorecardEvaluator();
         this.restTemplate = restTemplate;
+        if (simulationClient == null) {
+            String experimentServiceUrl = trimTrailingSlash(System.getenv("EXPERIMENT_SERVICE_URL"));
+            if (experimentServiceUrl.isBlank()) {
+                experimentServiceUrl = "http://experiment-service:7457";
+            }
+            simulationClient = new ApiClient()
+                    .setConnectTimeout(Duration.ofSeconds(5))
+                    .setReadTimeout(Duration.ofSeconds(30));
+            simulationClient.updateBaseUri(experimentServiceUrl);
+        }
+        this.simulationRunsApi = new SimulationRunsApi(simulationClient);
+        this.simulationMapper = simulationClient.getObjectMapper();
         this.executor = executor;
         this.currentTimeMillis = currentTimeMillis;
         this.afterLaunchAdmission = afterLaunchAdmission;
@@ -590,6 +613,11 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
             Map<String, Object> payload,
             String executionRole) {
         requireCanonicalLaunchExecutionMode(payload);
+        Map<String, Object> launchPayload = objectMap(payload);
+        if (launchPayload.containsKey(FINALIZATION_MODE_FIELD)) {
+            requireExactFinalizationMode(launchPayload.get(FINALIZATION_MODE_FIELD));
+        }
+        requireNativeScenarioLabExecution("scenario-lab-launch");
         BankingPolicyScenarioLabRequest resolved = presetService.resolveRequest(payload, executionRole);
         validateAndPinLaunchFinalizationMode(resolved.normalizedPayload());
         requirePlatformOwnedV2Storage(context, resolved.normalizedPayload());
@@ -886,15 +914,52 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
             String action,
             Map<String, Object> payload,
             String opportunityCorrelationCapability) {
-        restoreFinalizationReceiptIfPresent(context, runId);
-        var storedRun = context.findRun(runId)
-                .orElseThrow(() -> new IllegalArgumentException("Unknown runId: " + runId));
         String normalizedAction = stringValue(action).toUpperCase(Locale.ROOT);
+        if (!Set.of(LIFECYCLE_ACTION_CANCEL, LIFECYCLE_ACTION_PAUSE, LIFECYCLE_ACTION_RESUME,
+                LIFECYCLE_ACTION_SET_PLAYBACK_RATE, LIFECYCLE_ACTION_FINALIZE).contains(normalizedAction)) {
+            throw new IllegalArgumentException("Unsupported Scenario Lab lifecycle action: " + action);
+        }
         if (!LIFECYCLE_ACTION_FINALIZE.equals(normalizedAction)
                 && !stringValue(objectMap(payload).get("operationId")).isBlank()) {
             throw new IllegalArgumentException(
                     "Scenario Lab finalization operationId is only valid for FINALIZE");
         }
+        FinalizationOperation operation = LIFECYCLE_ACTION_FINALIZE.equals(normalizedAction)
+                ? finalizationOperation(payload) : null;
+        Map<String, Object> recordedReceipt = loadFinalizationReceipt(context, runId);
+        var originalRun = context.findRun(runId).orElse(null);
+        if (originalRun == null && recordedReceipt.isEmpty()) {
+            throw new IllegalArgumentException("Unknown runId: " + runId);
+        }
+        boolean recordedCompletionReconciliation = LIFECYCLE_ACTION_FINALIZE.equals(normalizedAction)
+                && FINALIZATION_RECEIPT_PUBLISHED.equals(stringValue(recordedReceipt.get("state")));
+        if (LIFECYCLE_ACTION_FINALIZE.equals(normalizedAction)) {
+            String mode = !recordedReceipt.isEmpty()
+                    ? stringValue(recordedReceipt.get("finalizationMode"))
+                    : finalizationMode(originalRun.metadata());
+            requireFinalizationOperation(runId, mode, operation);
+            if (originalRun != null) {
+                validateFinalizationOperation(originalRun.metadata(), operation);
+            }
+            if (recordedCompletionReconciliation) {
+                String inputDigest = operation == null
+                        ? sha256Hex(canonicalJsonBytes(finalizationRequest(payload))) : operation.inputDigest();
+                validateFinalizationReceipt(recordedReceipt, runId, mode, operation, inputDigest);
+                requirePublishedArtifacts(context, objectMap(recordedReceipt.get("artifactManifest")));
+            }
+        }
+        boolean requiresClockExecution = originalRun != null
+                && isClockDrivenHybrid(readPolicyMetadata(originalRun.metadata()).parameters())
+                && (!isTerminalStatus(originalRun.status()) || LIFECYCLE_ACTION_FINALIZE.equals(normalizedAction));
+        if (!recordedCompletionReconciliation
+                && (requiresClockExecution || !recordedReceipt.isEmpty())
+                && Set.of(LIFECYCLE_ACTION_CANCEL, LIFECYCLE_ACTION_PAUSE, LIFECYCLE_ACTION_RESUME,
+                        LIFECYCLE_ACTION_SET_PLAYBACK_RATE, LIFECYCLE_ACTION_FINALIZE).contains(normalizedAction)) {
+            requireNativeScenarioLabExecution("scenario-lab-" + normalizedAction.toLowerCase(Locale.ROOT));
+        }
+        restoreFinalizationReceiptIfPresent(context, runId);
+        var storedRun = context.findRun(runId)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown runId: " + runId));
         if (isTerminalStatus(storedRun.status())
                 && !LIFECYCLE_ACTION_FINALIZE.equals(normalizedAction)) {
             return getRunStatus(context, runId);
@@ -1068,9 +1133,6 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
             PolicyWindTunnelExecutionContext context,
             String runId) throws IOException {
         PolicyWindTunnelStoredRun storedRun = findStoredRun(context, runId);
-        if (shouldUseLiveHybridBundle(storedRun)) {
-            return buildClockDrivenHybridLiveBundle(context, storedRun);
-        }
         return evidenceService.loadBundle(context, runId);
     }
 
@@ -1085,9 +1147,6 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
             return finalizationArtifact;
         }
         PolicyWindTunnelStoredRun storedRun = findStoredRun(context, runId);
-        if (shouldUseLiveHybridBundle(storedRun)) {
-            return buildClockDrivenHybridLiveArtifact(context, storedRun, artifactType);
-        }
         return evidenceService.readArtifact(context, runId, artifactType);
     }
 
@@ -1102,9 +1161,6 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
             return finalizationArtifact;
         }
         PolicyWindTunnelStoredRun storedRun = findStoredRun(context, runId);
-        if (shouldUseLiveHybridBundle(storedRun)) {
-            return clockDrivenHybridLiveArtifactMetadata(artifactType);
-        }
         return evidenceService.readArtifactMetadata(context, runId, artifactType);
     }
 
@@ -1183,9 +1239,6 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
             PolicyWindTunnelExecutionContext context,
             String runId) throws IOException {
         PolicyWindTunnelStoredRun storedRun = findStoredRun(context, runId);
-        if (shouldUseLiveHybridBundle(storedRun)) {
-            return buildClockDrivenHybridEvidencePack(context, storedRun);
-        }
         return evidenceService.buildEvidencePack(context, runId);
     }
 
@@ -1194,11 +1247,6 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
             PolicyWindTunnelExecutionContext context,
             String runId) throws IOException {
         PolicyWindTunnelStoredRun storedRun = findStoredRun(context, runId);
-        if (shouldUseLiveHybridBundle(storedRun)) {
-            return new PolicyWindTunnelArtifactMetadata(
-                    "application/zip",
-                    "scenario-lab-live-evidence-" + safeToken(storedRun.runId()) + ".zip");
-        }
         return evidenceService.buildEvidencePackMetadata(context, runId);
     }
 
@@ -1214,6 +1262,7 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
             String runId,
             BankingPolicyScenarioLabRequest resolved,
             String resumeSourcePhase) {
+        requireNativeScenarioLabExecution("scenario-lab-worker-execution");
         BankingPolicyScenarioLabRuntime runtime =
                 new BankingPolicyScenarioLabRuntime(objectMapper, restTemplate, context);
         try {
@@ -1802,90 +1851,7 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
             Set<String> expectedAgentIds,
             String expectedIdentitySetDigest,
             String cohortArtifactDigest) {
-        int expectedAgentCount = expectedAgentIds.size();
-        String operationId = BankingClockDrivenRateChangePlan.installOperationId(snapshot);
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("domainId", BankingPolicyWindTunnelManifest.DOMAIN_ID);
-        body.put("actionId", BankingClockDrivenRateChangePlan.ACTION_ID);
-        body.put("operationId", operationId);
-        body.put("simulationRunId", runId);
-        body.put("target", Map.of(
-                "scope", "BROADCAST",
-                "selector", Map.of("simulationRunId", runId)));
-        body.put("inputs", BankingClockDrivenRateChangePlan.controlActionInputs(snapshot));
-        body.put("requestedBy", "banking-policy-wind-tunnel-provider");
-        body.put("reason", "Install the launch-pinned day-10 credit-card rate-change plan");
-        body.put("simulationTimeEpochMs", snapshot.plan().get("simulationStartEpochMs"));
-
-        Map<String, Object> response = postJsonObject(
-                context.agentRuntimeUrl() + "/api/domain-control-actions/execute",
-                body,
-                HttpHeaders.EMPTY);
-        int matched = exactResponseCount(response.get("matchedAgents"), "matchedAgents");
-        int succeeded = exactResponseCount(response.get("succeeded"), "succeeded");
-        int failed = exactResponseCount(response.get("failed"), "failed");
-        if (!runId.equals(stringValue(response.get("simulationRunId")))
-                || !BankingClockDrivenRateChangePlan.ACTION_ID.equals(stringValue(response.get("actionId")))
-                || !operationId.equals(stringValue(response.get("operationId")))
-                || matched != expectedAgentCount
-                || succeeded != expectedAgentCount
-                || failed != 0) {
-            throw new IllegalStateException(
-                    "Agent runtime did not prove exact installation of the clock-driven intervention plan.");
-        }
-        List<Map<String, Object>> results = listOfMaps(response.get("results"));
-        if (results.size() != expectedAgentCount) {
-            throw new IllegalStateException(
-                    "Agent runtime omitted per-agent rate-change installation evidence.");
-        }
-        List<BankingClockDrivenRateChangePlan.InstallationCustomer> customers = new ArrayList<>();
-        Set<String> cohortAgentIds = new HashSet<>();
-        Set<String> providerRuntimeAgentIds = new HashSet<>();
-        Set<String> opportunityAgentIds = new HashSet<>();
-        for (Map<String, Object> result : results) {
-            String cohortAgentId = exactProofText(result.get("cohortAgentId"), "cohortAgentId");
-            String providerRuntimeAgentId = exactProofText(
-                    result.get("providerRuntimeAgentId"), "providerRuntimeAgentId");
-            String opportunityAgentId = exactProofText(
-                    result.get("opportunityAgentId"), "opportunityAgentId");
-            Map<String, Object> controlAction = objectMap(result.get("controlAction"));
-            int eligibleAccountCount = exactResponseCount(
-                    controlAction.get("eligibleAccountCount"),
-                    "eligibleAccountCount");
-            if (!cohortAgentIds.add(cohortAgentId)
-                    || !providerRuntimeAgentIds.add(providerRuntimeAgentId)
-                    || !opportunityAgentIds.add(opportunityAgentId)
-                    || !BankingClockDrivenRateChangePlan.ACTION_ID.equals(
-                            stringValue(controlAction.get("actionId")))
-                    || !operationId.equals(stringValue(controlAction.get("operationId")))
-                    || !"PLAN_INSTALLED".equals(stringValue(controlAction.get("outcome")))
-                    || !snapshot.planDigest().equals(stringValue(controlAction.get("planDigest")))) {
-                throw new IllegalStateException(
-                        "Agent runtime returned contradictory per-agent rate-change installation evidence.");
-            }
-            customers.add(new BankingClockDrivenRateChangePlan.InstallationCustomer(
-                    cohortAgentId,
-                    providerRuntimeAgentId,
-                    opportunityAgentId,
-                    eligibleAccountCount));
-        }
-        if (!cohortAgentIds.equals(expectedAgentIds)) {
-            throw new IllegalStateException(
-                    "Agent runtime installed the rate-change plan for a different customer set.");
-        }
-        BankingClockDrivenRateChangePlan.InstallationManifest installation =
-                BankingClockDrivenRateChangePlan.installationManifest(
-                        snapshot, customers, cohortArtifactDigest);
-        if (!installation.agentIdentitySetDigest().equals(expectedIdentitySetDigest)) {
-            throw new IllegalStateException(
-                    "Rate-change installation identity digest contradicts the pinned cohort.");
-        }
-        persistClockDrivenInstallationManifest(context, runId, installation);
-        appendLog(
-                context,
-                runId,
-                "Pinned rate-change plan installed for " + succeeded
-                        + " customers; CC001 changes from 19% to 24% at simulated day 10.");
+        throw nativeScenarioLabExecutionUnavailable("scenario-lab-domain-control");
     }
 
     private void persistClockDrivenInstallationManifest(
@@ -2220,20 +2186,7 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
     }
 
     private double simulatorMaxPlaybackRate(PolicyWindTunnelExecutionContext context) {
-        try {
-            String body = restTemplate.getForObject(context.simulatorUrl() + "/api/clock/rate/info", String.class);
-            if (blank(body)) {
-                return HYBRID_FAST_PLAYBACK_RATE;
-            }
-            Map<String, Object> payload = objectMap(objectMapper.readValue(body, Map.class));
-            double max = toDouble(payload.get("max"), HYBRID_FAST_PLAYBACK_RATE);
-            return max > 0 ? max : HYBRID_FAST_PLAYBACK_RATE;
-        } catch (Exception e) {
-            log.debug("Simulator playback metadata unavailable; using policy playback max {}: {}",
-                    formatPlaybackRate(HYBRID_FAST_PLAYBACK_RATE),
-                    e.getMessage());
-            return HYBRID_FAST_PLAYBACK_RATE;
-        }
+        throw nativeScenarioLabExecutionUnavailable("scenario-lab-clock-read");
     }
 
     private boolean applyHybridReplayContract(
@@ -2242,26 +2195,7 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
             BankingPolicyScenarioLabRequest resolved,
             double playbackRate,
             String resumeSourcePhase) {
-        List<String> expectedRunIds = replayClaimExpectedRunIds(runId, resumeSourcePhase);
-        for (String expectedRunId : expectedRunIds) {
-            Map<String, Object> replay = hybridReplayContractPayload(runId, resolved);
-            if (expectedRunId != null) {
-                replay.put("expectedRunId", expectedRunId);
-            }
-            try {
-                postJson(context.simulatorUrl() + "/api/clock/replay", replay, HttpHeaders.EMPTY);
-                appendLog(context, runId, "Applied deterministic replay contract to simulator clock.");
-                return true;
-            } catch (IllegalStateException e) {
-                if (isReplayOwnershipConflict(e)) {
-                    continue;
-                }
-                throw e;
-            }
-        }
-        appendLog(context, runId,
-                "Replay contract was not applied because simulator replay ownership was neither empty nor owned by this run.");
-        return false;
+        throw nativeScenarioLabExecutionUnavailable("scenario-lab-clock-replay");
     }
 
     private List<String> replayClaimExpectedRunIds(String runId, String resumeSourcePhase) {
@@ -2329,14 +2263,7 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
     }
 
     private void clearActiveAgents(PolicyWindTunnelExecutionContext context, String runId) {
-        ResponseEntity<String> response = restTemplate.exchange(
-                context.agentRuntimeUrl() + "/api/agents/simulation-runs/" + urlEncode(runId),
-                HttpMethod.DELETE,
-                new HttpEntity<>(null, HttpHeaders.EMPTY),
-                String.class);
-        if (!response.getStatusCode().is2xxSuccessful()) {
-            throw new IllegalStateException("Agent reset failed with status " + response.getStatusCode().value());
-        }
+        throw nativeScenarioLabExecutionUnavailable("scenario-lab-runtime-reset");
     }
 
     private void activateAgentChunk(
@@ -2347,23 +2274,7 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
             int chunkNumber,
             int chunkCount,
             List<Map<String, Object>> agents) {
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.set("X-Astraform-Run-Id", runId);
-        headers.set("X-Astraform-Cohort-Id", cohortId);
-        if (!stringValue(cohortArtifactDigest).isBlank()) {
-            headers.set("X-Astraform-Cohort-Artifact-Digest", cohortArtifactDigest);
-        }
-        headers.set("X-Astraform-Activation-Id", runId + "-chunk-" + chunkNumber);
-        headers.set("X-Astraform-Init-Max-Concurrency", String.valueOf(HYBRID_ACTIVATION_INIT_MAX_CONCURRENCY));
-        try {
-            postJson(context.agentRuntimeUrl() + "/api/agents/init", agents, headers);
-        } catch (IllegalStateException e) {
-            throw new IllegalStateException("Agent activation chunk " + chunkNumber + "/" + chunkCount
-                    + " failed: " + e.getMessage(), e);
-        }
-        appendLog(context, runId, "Activated chunk " + chunkNumber + "/" + chunkCount
-                + " (" + agents.size() + " customers).");
+        throw nativeScenarioLabExecutionUnavailable("scenario-lab-cohort-activation");
     }
 
     private void activatePinnedCohort(
@@ -2374,43 +2285,7 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
             String agentDecisionMode,
             Map<String, Object> parameters,
             int agentCount) {
-        ActivationSettingsSnapshot activationSettings = activationSettingsSnapshot(parameters);
-        if (!agentDecisionMode.equals(stringValue(
-                activationSettings.settings().get("agentDecisionMode")))) {
-            throw new IllegalStateException(
-                    "Platform-owned activation settings do not match the accepted run mode.");
-        }
-        String activationId = stringValue(parameters.get("activationId"));
-        if (activationId.isBlank()) {
-            throw new IllegalStateException(
-                    "Platform-owned activation requires the platform-owned activationId.");
-        }
-
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.set("X-Astraform-Run-Id", runId);
-        headers.set("X-Astraform-Cohort-Id", cohortId);
-        headers.set("X-Astraform-Cohort-Artifact-Digest", snapshot.artifactDigest());
-        headers.set("X-Astraform-Activation-Id", activationId);
-        headers.set("X-Astraform-Init-Max-Concurrency", String.valueOf(HYBRID_ACTIVATION_INIT_MAX_CONCURRENCY));
-        try {
-            headers.set("X-Astraform-Activation-Settings", activationSettings.encodedContent());
-            ResponseEntity<String> response = restTemplate.exchange(
-                    context.agentRuntimeUrl() + "/api/agents/init/pinned-cohort",
-                    HttpMethod.POST,
-                    new HttpEntity<>(snapshot.content(), headers),
-                    String.class);
-            if (!response.getStatusCode().is2xxSuccessful()) {
-                throw new IllegalStateException(
-                        "Agent runtime returned status " + response.getStatusCode().value());
-            }
-        } catch (Exception activationFailure) {
-            throw new IllegalStateException(
-                    "Pinned cohort activation failed: "
-                            + firstNonBlank(activationFailure.getMessage(), activationFailure.getClass().getSimpleName()),
-                    activationFailure);
-        }
-        appendLog(context, runId, "Activated pinned cohort (" + agentCount + " customers).");
+        throw nativeScenarioLabExecutionUnavailable("scenario-lab-cohort-activation");
     }
 
     private boolean startSimulatorClockAfterActivation(
@@ -2668,19 +2543,7 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
             String runId,
             Map<String, Object> update,
             String actionLabel) {
-        Map<String, Object> guardedUpdate = new LinkedHashMap<>(update);
-        guardedUpdate.put("expectedRunId", runId);
-        try {
-            postJson(context.simulatorUrl() + "/api/clock/replay", guardedUpdate, HttpHeaders.EMPTY);
-            return true;
-        } catch (IllegalStateException e) {
-            if (isReplayOwnershipConflict(e)) {
-                appendLog(context, runId, actionLabel
-                        + ". Simulator playback was not changed because replay ownership changed before the simulator accepted the update.");
-                return false;
-            }
-            throw e;
-        }
+        throw nativeScenarioLabExecutionUnavailable("scenario-lab-clock-control");
     }
 
     private boolean isReplayOwnershipConflict(Exception e) {
@@ -2707,69 +2570,6 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
         } catch (Exception e) {
             appendLog(context, runId, "Active runtime cohort cleanup was not confirmed: "
                     + firstNonBlank(e.getMessage(), e.getClass().getSimpleName()));
-        }
-    }
-
-    private void postJson(String url, Object body, HttpHeaders extraHeaders) {
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        if (extraHeaders != null && !extraHeaders.isEmpty()) {
-            headers.addAll(extraHeaders);
-        }
-        try {
-            ResponseEntity<String> response = restTemplate.exchange(
-                    url,
-                    HttpMethod.POST,
-                    new HttpEntity<>(body, headers),
-                    String.class);
-            if (!response.getStatusCode().is2xxSuccessful()) {
-                throw new IllegalStateException("POST " + url + " failed with status " + response.getStatusCode().value());
-            }
-        } catch (HttpStatusCodeException e) {
-            String responseBody = e.getResponseBodyAsString();
-            throw new IllegalStateException("POST " + url + " failed with status " + e.getStatusCode().value()
-                    + (blank(responseBody) ? "" : ": " + responseBody), e);
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> postJsonObject(String url, Object body, HttpHeaders extraHeaders) {
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
-        if (extraHeaders != null && !extraHeaders.isEmpty()) {
-            headers.addAll(extraHeaders);
-        }
-        try {
-            ResponseEntity<String> response = restTemplate.exchange(
-                    url,
-                    HttpMethod.POST,
-                    new HttpEntity<>(body, headers),
-                    String.class);
-            if (!response.getStatusCode().is2xxSuccessful()
-                    || response.getBody() == null
-                    || response.getBody().isBlank()) {
-                throw new IllegalStateException(
-                        "POST " + url + " did not return a successful JSON object response");
-            }
-            Object decoded = objectMapper.readValue(response.getBody(), Object.class);
-            if (!(decoded instanceof Map<?, ?> map)) {
-                throw new IllegalStateException("POST " + url + " response must be a JSON object");
-            }
-            Map<String, Object> result = new LinkedHashMap<>();
-            for (Map.Entry<?, ?> entry : map.entrySet()) {
-                if (!(entry.getKey() instanceof String key)) {
-                    throw new IllegalStateException("POST " + url + " response keys must be strings");
-                }
-                result.put(key, entry.getValue());
-            }
-            return result;
-        } catch (HttpStatusCodeException e) {
-            String responseBody = e.getResponseBodyAsString();
-            throw new IllegalStateException("POST " + url + " failed with status " + e.getStatusCode().value()
-                    + (blank(responseBody) ? "" : ": " + responseBody), e);
-        } catch (JacksonException invalidJson) {
-            throw new IllegalStateException("POST " + url + " returned invalid JSON", invalidJson);
         }
     }
 
@@ -3066,25 +2866,11 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
     }
 
     private Map<String, Object> fetchSimulatorReplay(PolicyWindTunnelExecutionContext context) {
-        try {
-            String body = restTemplate.getForObject(context.simulatorUrl() + "/api/clock/replay", String.class);
-            if (blank(body)) {
-                return Map.of();
-            }
-            return objectMap(objectMapper.readValue(body, Map.class));
-        } catch (Exception e) {
-            log.debug("Simulator replay context unavailable for clock-driven lifecycle: {}", e.getMessage());
-            return Map.of();
-        }
+        throw nativeScenarioLabExecutionUnavailable("scenario-lab-clock-read");
     }
 
     private Long fetchSimulationTimeEpochMs(PolicyWindTunnelExecutionContext context) {
-        try {
-            return restTemplate.getForObject(context.simulatorUrl() + "/api/clock/time", Long.class);
-        } catch (Exception e) {
-            log.debug("Simulator time unavailable for clock-driven lifecycle: {}", e.getMessage());
-            return null;
-        }
+        throw nativeScenarioLabExecutionUnavailable("scenario-lab-clock-read");
     }
 
     private String estimateWallClockDuration(String horizonDaysValue, double playbackRate) {
@@ -3340,21 +3126,7 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
             PolicyWindTunnelExecutionContext context,
             String runId,
             boolean includeDecisionRows) {
-        try {
-            ResponseEntity<List> response = restTemplate.exchange(
-                    context.agentRuntimeUrl() + "/api/agents/hybrid-decisions?simulationRunId=" + urlEncode(runId)
-                            + "&includeDecisions=" + includeDecisionRows,
-                    HttpMethod.GET,
-                    new HttpEntity<>(null, HttpHeaders.EMPTY),
-                    List.class);
-            if (response == null || !response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
-                return emptyDecisionAudit("agent-runtime-unavailable");
-            }
-            return buildDecisionAuditPayload(listOfMaps(response.getBody()), "agent-runtime");
-        } catch (Exception e) {
-            log.debug("Decision audit not available for live clock-driven bundle: {}", e.getMessage());
-            return emptyDecisionAudit("agent-runtime-unavailable");
-        }
+        throw nativeScenarioLabExecutionUnavailable("scenario-lab-runtime-audit");
     }
 
     private boolean shouldIncludeRuntimeDecisionRows(PolicyWindTunnelExecutionContext context, String runId) {
@@ -3416,68 +3188,7 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
 
     @SuppressWarnings("rawtypes")
     private RuntimeTickDrainResult waitForRuntimeTickDrain(PolicyWindTunnelExecutionContext context, String runId) {
-        if (runId == null || runId.isBlank()) {
-            return RuntimeTickDrainResult.unverified(
-                    "MISSING_RUN_ID",
-                    "Runtime tick drain could not be verified because the simulation run id was missing.");
-        }
-        long timeoutMillis = Math.max(1_000L, RUNTIME_TICK_DRAIN_TIMEOUT_MILLIS);
-        long pollMillis = Math.max(100L, HYBRID_DECISION_AUDIT_SETTLE_POLL_MILLIS);
-        int requiredStableSamples = Math.max(1, RUNTIME_TICK_DRAIN_STABLE_SAMPLES);
-        long deadlineNanos = System.nanoTime() + (timeoutMillis * 1_000_000L);
-        String lastSignature = null;
-        int stableSamples = 0;
-        while (System.nanoTime() < deadlineNanos) {
-            try {
-                ResponseEntity<Map> response = restTemplate.exchange(
-                        context.agentRuntimeUrl() + "/api/agents/runtime-state?simulationRunId=" + urlEncode(runId),
-                        HttpMethod.GET,
-                        new HttpEntity<>(null, HttpHeaders.EMPTY),
-                        Map.class);
-                Map<String, Object> payload = response != null && response.getBody() != null
-                        ? objectMap(response.getBody())
-                        : Map.of();
-                if (!runtimeTickDrainResponseMatchesRun(payload, runId)) {
-                    log.warn(
-                            "Runtime tick drain response for run {} was not scoped to the requested run; skipping drain readiness sample.",
-                            runId);
-                    return RuntimeTickDrainResult.unverified(
-                            "UNVERIFIED_SCOPE",
-                            "Runtime tick drain could not be verified because agent-runtime returned an unscoped or mismatched runtime-state payload.");
-                }
-                String signature = runtimeTickDrainSignature(payload);
-                if (runtimeTickDrainComplete(payload)) {
-                    if (signature.equals(lastSignature)) {
-                        stableSamples++;
-                    } else {
-                        lastSignature = signature;
-                        stableSamples = 1;
-                    }
-                    if (stableSamples >= requiredStableSamples) {
-                        return RuntimeTickDrainResult.drained();
-                    }
-                } else {
-                    lastSignature = signature;
-                    stableSamples = 0;
-                }
-            } catch (Exception e) {
-                log.debug("Runtime tick telemetry unavailable while finalizing audit: {}", e.getMessage());
-                return RuntimeTickDrainResult.unverified(
-                        "UNAVAILABLE",
-                        "Runtime tick drain could not be verified because agent-runtime runtime-state telemetry was unavailable.");
-            }
-            try {
-                Thread.sleep(pollMillis);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return RuntimeTickDrainResult.unverified(
-                        "INTERRUPTED",
-                        "Runtime tick drain verification was interrupted before a stable drained sample was observed.");
-            }
-        }
-        return RuntimeTickDrainResult.unverified(
-                "TIMEOUT",
-                "Runtime tick drain could not be verified before the finalization drain timeout.");
+        throw nativeScenarioLabExecutionUnavailable("scenario-lab-runtime-drain");
     }
 
     private Map<String, Object> withRuntimeTickDrain(
@@ -6547,92 +6258,9 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
             String runId,
             String triggerType,
             String capability) {
-        String providerRevision = BankingRemotePolicyWindTunnelService.PROVIDER_REVISION;
-        if (capability == null || capability.isBlank() || !capability.equals(capability.trim())) {
-            throw new OpportunityCorrelationAuditUnavailableException(
-                    "Finalization request does not contain a private opportunity correlation capability");
-        }
-        String url = context.agentRuntimeUrl()
-                + "/api/agents/simulation-runs/"
-                + urlEncode(runId)
-                + "/decision-opportunities/correlation-audit?triggerType="
-                + urlEncode(triggerType)
-                + "&domainId="
-                + urlEncode(BankingPolicyWindTunnelManifest.DOMAIN_ID)
-                + "&providerRevision="
-                + urlEncode(providerRevision);
-        HttpHeaders headers = new HttpHeaders();
-        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
-        headers.set("X-Astraform-Opportunity-Correlation-Capability", capability);
-        byte[] body;
-        try {
-            body = restTemplate.execute(
-                    URI.create(url),
-                    HttpMethod.GET,
-                    request -> request.getHeaders().putAll(headers),
-                    response -> {
-                        MediaType contentType = response.getHeaders().getContentType();
-                        if (response.getStatusCode() != HttpStatus.OK
-                                || !isStrictJsonContentType(contentType)) {
-                            throw new OpportunityCorrelationAuditUnavailableException(
-                                    "Opportunity correlation audit transport is not an exact JSON proof response");
-                        }
-                        return readBoundedCorrelationAudit(response.getBody());
-                    });
-        } catch (HttpStatusCodeException unavailable) {
-            throw new OpportunityCorrelationAuditUnavailableException(
-                    "Opportunity correlation audit failed with status "
-                            + unavailable.getStatusCode().value(),
-                    unavailable);
-        } catch (ResourceAccessException unavailable) {
-            throw new OpportunityCorrelationAuditUnavailableException(
-                    "Opportunity correlation audit is unavailable",
-                    unavailable);
-        }
-        if (body == null || body.length == 0) {
-            throw new OpportunityCorrelationAuditUnavailableException(
-                    "Opportunity correlation audit transport is not an exact JSON proof response");
-        }
-        try {
-            Object decoded = objectMapper.readValue(body, Object.class);
-            return exactProofObject(decoded, "correlationAudit");
-        } catch (JacksonException invalidJson) {
-            throw new OpportunityCorrelationAuditUnavailableException(
-                    "Opportunity correlation audit is not strict UTF-8 JSON",
-                    invalidJson);
-        }
-    }
-
-    private static boolean isStrictJsonContentType(MediaType contentType) {
-        if (contentType == null
-                || !"application".equalsIgnoreCase(contentType.getType())
-                || !"json".equalsIgnoreCase(contentType.getSubtype())) {
-            return false;
-        }
-        Map<String, String> parameters = contentType.getParameters();
-        if (parameters.isEmpty()) {
-            return true;
-        }
-        return parameters.size() == 1
-                && parameters.keySet().stream().allMatch("charset"::equalsIgnoreCase)
-                && StandardCharsets.UTF_8.equals(contentType.getCharset());
-    }
-
-    private static byte[] readBoundedCorrelationAudit(InputStream input) throws IOException {
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        byte[] buffer = new byte[8192];
-        while (true) {
-            int remainingWithOverflowByte = MAX_CORRELATION_AUDIT_BYTES - output.size() + 1;
-            int read = input.read(buffer, 0, Math.min(buffer.length, remainingWithOverflowByte));
-            if (read < 0) {
-                return output.toByteArray();
-            }
-            if (output.size() + read > MAX_CORRELATION_AUDIT_BYTES) {
-                throw new OpportunityCorrelationAuditUnavailableException(
-                        "Opportunity correlation audit exceeds the 4 MiB transport limit");
-            }
-            output.write(buffer, 0, read);
-        }
+        throw new OpportunityCorrelationAuditUnavailableException(
+                "The retired Runtime correlation-audit endpoint is unavailable. "
+                        + "Use stored proof evidence until native Scenario Lab audit is implemented.");
     }
 
     static final class OpportunityCorrelationAuditUnavailableException extends RuntimeException {
@@ -7102,25 +6730,7 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
     private Map<String, Object> fetchDecisionOpportunityReconciliation(
             PolicyWindTunnelExecutionContext context,
             String runId) {
-        try {
-            String reconciliationBaseUrl = context.agentRuntimeUrl()
-                    + "/api/agents/simulation-runs/"
-                    + urlEncode(runId)
-                    + "/decision-opportunities";
-            Map<String, Object> response = restTemplate.getForObject(
-                    reconciliationBaseUrl + "/reconciliation",
-                    Map.class);
-            if (!opportunityReconciliationIsValid(response, runId)) {
-                return unavailableOpportunityReconciliation(runId);
-            }
-            return new LinkedHashMap<>(response);
-        } catch (Exception error) {
-            log.warn(
-                    "Customer decision opportunity reconciliation unavailable for run {} ({})",
-                    runId,
-                    error.getClass().getSimpleName());
-            return unavailableOpportunityReconciliation(runId);
-        }
+        throw nativeScenarioLabExecutionUnavailable("scenario-lab-opportunity-reconciliation");
     }
 
     private static Map<String, Object> unavailableOpportunityReconciliation(String runId) {
@@ -7647,19 +7257,16 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
     }
 
     private Map<String, Object> fetchSimulationRunRecord(String runId) {
-        String experimentServiceUrl = trimTrailingSlash(System.getenv("EXPERIMENT_SERVICE_URL"));
-        if (experimentServiceUrl.isBlank()) {
-            experimentServiceUrl = "http://experiment-service:7457";
-        }
         try {
-            Object body = restTemplate.getForObject(
-                    experimentServiceUrl + "/api/simulation-runs/" + urlEncode(runId),
-                    Object.class);
-            return objectMap(body);
-        } catch (Exception e) {
+            var record = simulationRunsApi.getSimulationRun(runId);
+            if (record == null || !runId.equals(record.getRunId())) {
+                throw new IllegalStateException("Simulation run response does not identify the requested run");
+            }
+            return simulationMapper.convertValue(record, new TypeReference<LinkedHashMap<String, Object>>() {});
+        } catch (Exception unavailable) {
             log.debug("Simulation run ledger record unavailable for {}: {}",
                     runId,
-                    firstNonBlank(e.getMessage(), e.getClass().getSimpleName()));
+                    firstNonBlank(unavailable.getMessage(), unavailable.getClass().getSimpleName()));
             return Map.of();
         }
     }
@@ -7668,26 +7275,26 @@ public final class BankingPolicyWindTunnelExecutionProvider implements PolicyWin
             PolicyWindTunnelExecutionContext context,
             String runId,
             Map<String, Object> payload) {
-        String experimentServiceUrl = trimTrailingSlash(System.getenv("EXPERIMENT_SERVICE_URL"));
-        if (experimentServiceUrl.isBlank()) {
-            experimentServiceUrl = "http://experiment-service:7457";
-        }
         try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            String operationId = stringValue(payload.get("operationId"));
-            if (!operationId.isBlank()) {
-                headers.set("Idempotency-Key", operationId);
+            // Use the selected SDK's mapper and typed request. An older model must not silently drop
+            // the durable finalization identity, input digest or provider revision before a mutation.
+            JsonNode original = simulationMapper.readTree(simulationMapper.writeValueAsBytes(payload));
+            SimulationRunUpdateRequest request = simulationMapper.treeToValue(
+                    original, SimulationRunUpdateRequest.class);
+            JsonNode serialized = simulationMapper.readTree(simulationMapper.writeValueAsBytes(request));
+            if (!original.equals(serialized)) {
+                throw new IllegalStateException(
+                        "The selected Java SDK cannot preserve the complete simulation-run completion payload. "
+                                + "Use a typed SDK that supports every configured field; notification remains pending.");
             }
-            ResponseEntity<Object> response = restTemplate.exchange(
-                    experimentServiceUrl + "/api/simulation-runs/" + urlEncode(runId),
-                    HttpMethod.PATCH,
-                    new HttpEntity<>(payload, headers),
-                    Object.class);
-            return response.getStatusCode().is2xxSuccessful();
-        } catch (Exception e) {
+            String operationId = stringValue(payload.get("operationId"));
+            Map<String, String> headers = operationId.isBlank()
+                    ? Map.of() : Map.of("Idempotency-Key", operationId);
+            var response = simulationRunsApi.updateSimulationRunWithHttpInfo(runId, request, headers);
+            return response.getStatusCode() >= 200 && response.getStatusCode() < 300;
+        } catch (Exception unconfirmed) {
             appendLog(context, runId, "Completed run, but E24 simulation-run ledger closure was not confirmed: "
-                    + firstNonBlank(e.getMessage(), e.getClass().getSimpleName()));
+                    + firstNonBlank(unconfirmed.getMessage(), unconfirmed.getClass().getSimpleName()));
             return false;
         }
     }

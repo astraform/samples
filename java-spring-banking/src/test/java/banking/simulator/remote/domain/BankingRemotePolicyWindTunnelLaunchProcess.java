@@ -1,10 +1,7 @@
 package banking.simulator.remote.domain;
 
-import ai.astraform.remote.domain.sdk.RemoteDomainProtocolException;
 import ai.astraform.remote.domain.sdk.PolicyWindTunnelExecutionContext.PolicyWindTunnelRunCreateRequest;
 import ai.astraform.remote.domain.sdk.PolicyWindTunnelExecutionContext.PolicyWindTunnelRunUpdate;
-import banking.simulator.remote.domain.scenariolab.BankingPolicyWindTunnelExecutionProvider;
-import banking.simulator.remote.domain.scenariolab.BankingPolicyWindTunnelTestProviders;
 import tools.jackson.databind.ObjectMapper;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -13,17 +10,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
-import java.util.Base64;
 import java.util.HexFormat;
-import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicBoolean;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.client.RestTemplate;
 
-/** Subprocess fixture for proving provider launch admission across JVMs. */
+/** Subprocess fixture for proving the existing durable admission owner across JVMs, without runtime execution. */
 public final class BankingRemotePolicyWindTunnelLaunchProcess {
     private BankingRemotePolicyWindTunnelLaunchProcess() {
     }
@@ -48,34 +38,6 @@ public final class BankingRemotePolicyWindTunnelLaunchProcess {
         awaitGate(gate);
 
         ObjectMapper objectMapper = new ObjectMapper().rebuild().findAndAddModules().build();
-        byte[] activationSettings = objectMapper.writeValueAsBytes(Map.of(
-                "schemaVersion", "scenario_lab_pinned_cohort_activation.v1",
-                "agentDecisionMode", "STUB_LLM",
-                "agentDecisionCadence", "EVENT_ONLY"));
-        String activationSettingsDigest = HexFormat.of().formatHex(
-                MessageDigest.getInstance("SHA-256").digest(activationSettings));
-        Map<String, Object> request = new LinkedHashMap<>(Map.ofEntries(
-                Map.entry("presetId", "saver-repricing"),
-                Map.entry("simulationRunId", runId),
-                Map.entry("executionMode", "CLOCK_DRIVEN_HYBRID"),
-                Map.entry("runPath", "CLOCK_DRIVEN_SIMULATION"),
-                Map.entry("agentDecisionMode", "STUB_LLM"),
-                Map.entry("agentDecisionCadence", "EVENT_ONLY"),
-                Map.entry("opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2"),
-                Map.entry("simulationHorizonDays", 1),
-                Map.entry("simulationStartEpochMs", 1_800_000_000_000L),
-                Map.entry("prePolicyDays", 0),
-                Map.entry("postPolicyDays", 1),
-                Map.entry("candidateRate", candidateRate),
-                Map.entry("activationSettingsDigest", activationSettingsDigest),
-                Map.entry("activationSettingsSnapshot", Map.of(
-                        "schemaVersion", "scenario_lab_pinned_activation_settings_snapshot.v1",
-                        "contentType", "application/json",
-                        "encoding", "base64url",
-                        "sha256", activationSettingsDigest,
-                        "content", Base64.getUrlEncoder().withoutPadding()
-                                .encodeToString(activationSettings)))));
-
         BankingRemotePolicyWindTunnelExecutionContext context =
                 new BankingRemotePolicyWindTunnelExecutionContext(
                         objectMapper,
@@ -86,20 +48,20 @@ public final class BankingRemotePolicyWindTunnelLaunchProcess {
         if (!context.configurePlatformOwnedV2Storage(true)) {
             throw new IllegalStateException("shared storage probe failed");
         }
-        BankingPolicyWindTunnelExecutionProvider provider =
-                new BankingPolicyWindTunnelExecutionProvider(
-                        objectMapper,
-                        new RestTemplate(),
-                        ignored -> appendActivation(activationLog));
-        try {
-            provider.startRun(context, request, "PLATFORM_ADMIN");
-            System.out.println("ADMITTED");
-        } catch (RemoteDomainProtocolException conflict) {
-            if (conflict.status().value() != 409) {
-                throw conflict;
-            }
+        var request = admissionRequest(runId, System.currentTimeMillis(),
+                Map.of("candidateRate", candidateRate));
+        String digest = "sha256:" + HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                .digest(objectMapper.writeValueAsBytes(Map.of("candidateRate", candidateRate))));
+        var admission = context.admitLaunch(request, digest, ready.getFileName().toString(),
+                System.currentTimeMillis());
+        if (admission.outcome() == BankingRemotePolicyWindTunnelExecutionContext.LaunchAdmissionOutcome.CONFLICT) {
             System.out.println("CONFLICT");
+            return;
         }
+        if (admission.startsFreshExecution()) {
+            context.executeWithClaim(admission.executionClaim(), () -> appendActivation(activationLog));
+        }
+        System.out.println("ADMITTED");
     }
 
     private static void runClaimWorker(
@@ -121,7 +83,7 @@ public final class BankingRemotePolicyWindTunnelLaunchProcess {
             throw new IllegalStateException("shared storage probe failed");
         }
         if ("queued-admitter".equals(mode) || "queued-takeover".equals(mode)) {
-            runQueuedProvider(context, objectMapper, ready, gate, resultLog, runId, mode);
+            runQueuedAdmission(context, ready, gate, resultLog, runId, mode);
             return;
         }
         long initialNow = 1_800_000_000_000L;
@@ -198,113 +160,48 @@ public final class BankingRemotePolicyWindTunnelLaunchProcess {
         System.out.println("TAKEOVER_COMPLETED");
     }
 
-    private static void runQueuedProvider(
+    private static void runQueuedAdmission(
             BankingRemotePolicyWindTunnelExecutionContext context,
-            ObjectMapper objectMapper,
             Path ready,
             Path gate,
             Path activationLog,
             String runId,
             String mode) throws Exception {
-        long wallClockNow = System.currentTimeMillis();
-        long providerNow = "queued-admitter".equals(mode)
-                ? Math.subtractExact(
-                        wallClockNow,
-                        BankingRemotePolicyWindTunnelExecutionContext.EXECUTION_CLAIM_LEASE_MS + 1L)
-                : wallClockNow;
-        Map<String, Object> request = providerLaunchRequest(runId);
-        AtomicBoolean executionStarted = new AtomicBoolean();
-        RestTemplate restTemplate = recordingRestTemplate(activationLog);
-
+        long now = "queued-admitter".equals(mode)
+                ? System.currentTimeMillis() - BankingRemotePolicyWindTunnelExecutionContext.EXECUTION_CLAIM_LEASE_MS - 1L
+                : System.currentTimeMillis();
         if ("queued-takeover".equals(mode)) {
             Files.writeString(ready, "ready");
             awaitGate(gate);
+            now = System.currentTimeMillis();
         }
-        BankingPolicyWindTunnelExecutionProvider provider =
-                BankingPolicyWindTunnelTestProviders.withAdmissionBoundary(
-                        objectMapper,
-                        restTemplate,
-                        work -> {
-                            executionStarted.set(true);
-                            work.run();
-                        },
-                        () -> providerNow,
-                        "queued-admitter".equals(mode)
-                                ? () -> haltAfterAdmission(ready)
-                                : () -> {
-                                });
-
-        provider.startRun(context, request, "PLATFORM_ADMIN");
-        if (!executionStarted.get()) {
+        var admission = context.admitLaunch(admissionRequest(runId, now, Map.of()),
+                "sha256:" + "d".repeat(64), ready.getFileName().toString(), now);
+        if ("queued-admitter".equals(mode)) {
+            if (!admission.startsFreshExecution()) {
+                throw new IllegalStateException("queued worker admission was not created");
+            }
+            haltAfterAdmission(ready);
+        }
+        if (!admission.recoversExistingExecution()) {
             System.out.println("REPLAY_NO_EXECUTION");
             return;
         }
-        var current = context.findRun(runId).orElseThrow();
-        context.updateRun(
-                runId,
-                new PolicyWindTunnelRunUpdate(
-                        "COMPLETED",
-                        null,
-                        null,
-                        System.currentTimeMillis(),
-                        current.metadata()));
+        context.executeWithClaim(admission.executionClaim(), () -> {
+            appendActivation(activationLog);
+            context.updateRun(runId, new PolicyWindTunnelRunUpdate(
+                    "COMPLETED", null, null, System.currentTimeMillis(),
+                    context.findRun(runId).orElseThrow().metadata()));
+        });
         System.out.println("QUEUED_RECOVERED");
     }
 
-    private static Map<String, Object> providerLaunchRequest(String runId) throws Exception {
-        byte[] activationSettings = """
-                {"agentDecisionCadence":"EVENT_ONLY","agentDecisionMode":"STUB_LLM","schemaVersion":"scenario_lab_pinned_cohort_activation.v1"}
-                """.strip().getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        String activationSettingsDigest = HexFormat.of().formatHex(
-                MessageDigest.getInstance("SHA-256").digest(activationSettings));
-        String cohortId = runId + "-cohort";
-        return new LinkedHashMap<>(Map.ofEntries(
-                Map.entry("presetId", "saver-repricing"),
-                Map.entry("simulationRunId", runId),
-                Map.entry("executionMode", "CLOCK_DRIVEN_HYBRID"),
-                Map.entry("runPath", "CLOCK_DRIVEN_SIMULATION"),
-                Map.entry("agentDecisionMode", "STUB_LLM"),
-                Map.entry("agentDecisionCadence", "EVENT_ONLY"),
-                Map.entry("opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2"),
-                Map.entry("simulationHorizonDays", 1),
-                Map.entry("prePolicyDays", 0),
-                Map.entry("postPolicyDays", 1),
-                Map.entry("candidateRate", 0.08),
-                Map.entry("cohortId", cohortId),
-                Map.entry("cohortSelection", Map.of("cohortId", cohortId)),
-                Map.entry("activationSettingsDigest", activationSettingsDigest),
-                Map.entry("activationSettingsSnapshot", Map.of(
-                        "schemaVersion", "scenario_lab_pinned_activation_settings_snapshot.v1",
-                        "contentType", "application/json",
-                        "encoding", "base64url",
-                        "sha256", activationSettingsDigest,
-                        "content", Base64.getUrlEncoder().withoutPadding()
-                                .encodeToString(activationSettings)))));
-    }
-
-    private static RestTemplate recordingRestTemplate(Path activationLog) {
-        RestTemplate restTemplate = org.mockito.Mockito.mock(RestTemplate.class);
-        org.mockito.Mockito.when(restTemplate.getForObject(
-                        org.mockito.ArgumentMatchers.anyString(),
-                        org.mockito.ArgumentMatchers.eq(String.class)))
-                .thenReturn("{\"max\":7200}");
-        org.mockito.Mockito.when(restTemplate.exchange(
-                        org.mockito.ArgumentMatchers.anyString(),
-                        org.mockito.ArgumentMatchers.any(HttpMethod.class),
-                        org.mockito.ArgumentMatchers.any(HttpEntity.class),
-                        org.mockito.ArgumentMatchers.eq(String.class)))
-                .thenAnswer(invocation -> {
-                    String url = invocation.getArgument(0);
-                    HttpMethod method = invocation.getArgument(1);
-                    if (url.endsWith("/api/products") && HttpMethod.GET.equals(method)) {
-                        return ResponseEntity.notFound().build();
-                    }
-                    if (url.endsWith("/api/agents/init") && HttpMethod.POST.equals(method)) {
-                        appendActivation(activationLog);
-                    }
-                    return ResponseEntity.ok("{}");
-                });
-        return restTemplate;
+    private static PolicyWindTunnelRunCreateRequest admissionRequest(
+            String runId, long now, Map<String, Object> parameters) {
+        return new PolicyWindTunnelRunCreateRequest(
+                runId, "banking-scenario-lab", "banking-policy-compare", "CANDIDATE",
+                "SEEDED_DETERMINISTIC", "saver-repricing", "QUEUED", now,
+                null, null, Map.of("phase", "QUEUED", "parameters", parameters));
     }
 
     private static void haltAfterAdmission(Path ready) {

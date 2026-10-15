@@ -4,35 +4,23 @@ import banking.simulator.remote.domain.scenariolab.BankingPolicyWindTunnelExecut
 import ai.astraform.remote.domain.sdk.PolicyWindTunnelExecutionContext;
 import ai.astraform.remote.domain.sdk.PolicyWindTunnelExecutionContext.PolicyWindTunnelRunCreateRequest;
 import ai.astraform.remote.domain.sdk.PolicyWindTunnelExecutionContext.PolicyWindTunnelRunUpdate;
-import ai.astraform.remote.domain.sdk.PolicyWindTunnelRunRecord;
 import ai.astraform.remote.domain.sdk.RemoteDomainProtocolException;
 import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.RestTemplate;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.MessageDigest;
-import java.util.Base64;
-import java.util.HexFormat;
 import java.util.Map;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 class BankingRemotePolicyWindTunnelExecutionContextTest {
 
@@ -97,63 +85,39 @@ class BankingRemotePolicyWindTunnelExecutionContextTest {
         ObjectMapper objectMapper = new ObjectMapper().rebuild().findAndAddModules().build();
         BankingRemotePolicyWindTunnelExecutionContext firstContext = context(objectMapper);
         BankingRemotePolicyWindTunnelExecutionContext secondContext = context(objectMapper);
-        AtomicInteger scheduled = new AtomicInteger();
-        BankingPolicyWindTunnelExecutionProvider firstProvider = new BankingPolicyWindTunnelExecutionProvider(
-                objectMapper,
-                stubbedRuntimeRestTemplate(),
-                ignored -> scheduled.incrementAndGet());
-        BankingPolicyWindTunnelExecutionProvider secondProvider = new BankingPolicyWindTunnelExecutionProvider(
-                objectMapper,
-                stubbedRuntimeRestTemplate(),
-                ignored -> scheduled.incrementAndGet());
-        byte[] activationSettings = objectMapper.writeValueAsBytes(Map.of(
-                "schemaVersion", "scenario_lab_pinned_cohort_activation.v1",
-                "agentDecisionMode", "STUB_LLM",
-                "agentDecisionCadence", "EVENT_ONLY"));
-        String activationSettingsDigest = HexFormat.of().formatHex(
-                MessageDigest.getInstance("SHA-256").digest(activationSettings));
-        Map<String, Object> request = new LinkedHashMap<>(Map.ofEntries(
-                Map.entry("presetId", "saver-repricing"),
-                Map.entry("simulationRunId", "replica-safe-launch"),
-                Map.entry("executionMode", "CLOCK_DRIVEN_HYBRID"),
-                Map.entry("runPath", "CLOCK_DRIVEN_SIMULATION"),
-                Map.entry("agentDecisionMode", "STUB_LLM"),
-                Map.entry("agentDecisionCadence", "EVENT_ONLY"),
-                Map.entry("opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2"),
-                Map.entry("simulationHorizonDays", 1),
-                Map.entry("prePolicyDays", 0),
-                Map.entry("postPolicyDays", 1),
-                Map.entry("candidateRate", 0.08),
-                Map.entry("activationSettingsDigest", activationSettingsDigest),
-                Map.entry("activationSettingsSnapshot", Map.of(
-                        "schemaVersion", "scenario_lab_pinned_activation_settings_snapshot.v1",
-                        "contentType", "application/json",
-                        "encoding", "base64url",
-                        "sha256", activationSettingsDigest,
-                        "content", Base64.getUrlEncoder().withoutPadding()
-                                .encodeToString(activationSettings)))));
+        long now = System.currentTimeMillis();
+        PolicyWindTunnelRunCreateRequest request = new PolicyWindTunnelRunCreateRequest(
+                "replica-safe-launch", "banking-scenario-lab", "banking-policy-compare",
+                "CANDIDATE", "SEEDED_DETERMINISTIC", "saver-repricing", "QUEUED", now,
+                null, null, Map.of("phase", "QUEUED",
+                        "opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2"));
+        String digest = "sha256:" + "a".repeat(64);
+        var accepted = firstContext.admitLaunch(request, digest, "first-owner", now);
+        var replay = secondContext.admitLaunch(request, digest, "second-owner", now + 1L);
 
-        PolicyWindTunnelRunRecord accepted = firstProvider.startRun(
-                firstContext, request, "PLATFORM_ADMIN");
-        secondProvider.startRun(secondContext, request, "PLATFORM_ADMIN");
+        assertEquals("PLATFORM_OWNED_V2",
+                accepted.run().metadata().get("opportunityGenerationFinalizationMode"));
+        assertTrue(accepted.startsFreshExecution());
+        assertTrue(!replay.startsFreshExecution());
+        assertEquals(BankingRemotePolicyWindTunnelExecutionContext.LaunchAdmissionOutcome.REPLAY,
+                replay.outcome());
+        var conflict = secondContext.admitLaunch(
+                request, "sha256:" + "b".repeat(64), "conflicting-owner", now + 2L);
+        assertEquals(BankingRemotePolicyWindTunnelExecutionContext.LaunchAdmissionOutcome.CONFLICT,
+                conflict.outcome());
+        assertEquals(null, conflict.executionClaim());
+        assertEquals("first-owner", firstContext.findRun("replica-safe-launch").orElseThrow()
+                .metadata().get(BankingRemotePolicyWindTunnelExecutionContext.EXECUTION_CLAIM_OWNER_METADATA_KEY));
 
-        assertEquals(
-                "PLATFORM_OWNED_V2",
-                accepted.parameters().get("opportunityGenerationFinalizationMode"));
-        assertEquals(1, scheduled.get());
-        Map<String, Object> contradictory = new LinkedHashMap<>(request);
-        contradictory.put("candidateRate", 0.09);
-        RemoteDomainProtocolException conflict = assertThrows(
-                RemoteDomainProtocolException.class,
-                () -> secondProvider.startRun(secondContext, contradictory, "PLATFORM_ADMIN"));
-        assertEquals(409, conflict.status().value());
-        assertEquals(1, scheduled.get());
-
-        firstContext.updateRun("replica-safe-launch", new PolicyWindTunnelRunUpdate(
-                "COMPLETED", null, null, System.currentTimeMillis(),
-                firstContext.findRun("replica-safe-launch").orElseThrow().metadata()));
-        secondProvider.startRun(secondContext, request, "PLATFORM_ADMIN");
-        assertEquals(1, scheduled.get());
+        firstContext.executeWithClaim(accepted.executionClaim(), () -> firstContext.updateRun(
+                "replica-safe-launch", new PolicyWindTunnelRunUpdate(
+                        "COMPLETED", null, null, System.currentTimeMillis(),
+                        firstContext.findRun("replica-safe-launch").orElseThrow().metadata())));
+        var terminalReplay = secondContext.admitLaunch(request, digest, "terminal-owner", now + 3L);
+        assertEquals(BankingRemotePolicyWindTunnelExecutionContext.LaunchExecutionDirective.NONE,
+                terminalReplay.executionDirective());
+        assertEquals(null, terminalReplay.executionClaim());
+        assertEquals("COMPLETED", secondContext.findRun("replica-safe-launch").orElseThrow().status());
     }
 
     @Test
@@ -164,8 +128,8 @@ class BankingRemotePolicyWindTunnelExecutionContextTest {
                 Runnable::run);
         PolicyWindTunnelExecutionContext nonDurable = mock(PolicyWindTunnelExecutionContext.class);
 
-        IllegalStateException rejected = assertThrows(
-                IllegalStateException.class,
+        RemoteDomainProtocolException rejected = assertThrows(
+                RemoteDomainProtocolException.class,
                 () -> provider.startRun(nonDurable, Map.ofEntries(
                         Map.entry("presetId", "saver-repricing"),
                         Map.entry("simulationRunId", "non-durable-v2"),
@@ -179,7 +143,15 @@ class BankingRemotePolicyWindTunnelExecutionContextTest {
                         Map.entry("postPolicyDays", 1)),
                         "PLATFORM_ADMIN"));
 
-        assertTrue(rejected.getMessage().contains("verified shared durable provider storage"));
+        assertEquals(400, rejected.status().value());
+        assertEquals("scenario_lab_native_execution_unavailable", rejected.code());
+        org.mockito.Mockito.verifyNoInteractions(nonDurable);
+        BankingRemotePolicyWindTunnelExecutionContext unavailableStorage =
+                new BankingRemotePolicyWindTunnelExecutionContext(
+                        new ObjectMapper().rebuild().findAndAddModules().build(), workspaceRoot,
+                        "http://agent-runtime.test", "http://simulator.test", "http://banking.test");
+        assertTrue(!unavailableStorage.configurePlatformOwnedV2Storage(false));
+        assertTrue(!unavailableStorage.platformOwnedV2StorageReady());
     }
 
     @Test
@@ -342,7 +314,7 @@ class BankingRemotePolicyWindTunnelExecutionContextTest {
     }
 
     @Test
-    void independentJvmLaunchesProduceOneActivationAndPreserveTerminalState() throws Exception {
+    void independentJvmAdmissionsProduceOneExecutionClaimAndPreserveTerminalState() throws Exception {
         Path gate = workspaceRoot.resolve("launch.gate");
         Path activationLog = workspaceRoot.resolve("activation.log");
         String runId = "cross-process-launch";
@@ -407,7 +379,6 @@ class BankingRemotePolicyWindTunnelExecutionContextTest {
     @Test
     void independentJvmRecoversQueuedAdmissionExactlyOnceAfterAdmitterExits() throws Exception {
         String runId = "cross-process-queued-recovery";
-        writeGeneratedCohortFixture(runId + "-cohort");
         Path executionLog = workspaceRoot.resolve("queued-recovery.log");
         Path unusedGate = workspaceRoot.resolve("unused-queued-admitter.gate");
         Process admitter = claimProcess(
@@ -459,31 +430,6 @@ class BankingRemotePolicyWindTunnelExecutionContextTest {
                         .findRun(runId)
                         .orElseThrow()
                         .status());
-    }
-
-    private void writeGeneratedCohortFixture(String cohortId) throws Exception {
-        Path cohortDir = workspaceRoot.resolve("output/cohorts").resolve(cohortId);
-        Files.createDirectories(cohortDir);
-        Files.writeString(cohortDir.resolve("customers.json"), """
-                [
-                  {
-                    "personaName": "Crash Recovery Customer",
-                    "domainId": "banking",
-                    "model": "stub",
-                    "interactionMode": "SIMULATION",
-                    "autonomousDecisionEnabled": false,
-                    "goals": [],
-                    "initialAccounts": [
-                      {
-                        "name": "recovery-account",
-                        "productCode": "TS001",
-                        "balance": 120
-                      }
-                    ],
-                    "scheduledWork": []
-                  }
-                ]
-                """);
     }
 
     private Process launchProcess(
@@ -558,51 +504,7 @@ class BankingRemotePolicyWindTunnelExecutionContextTest {
     }
 
     private RestTemplate stubbedRuntimeRestTemplate() {
-        RestTemplate restTemplate = mock(RestTemplate.class);
-        when(restTemplate.exchange(
-                eq("http://banking.test/api/products"),
-                eq(HttpMethod.GET),
-                any(HttpEntity.class),
-                eq(String.class)))
-                .thenReturn(ResponseEntity.notFound().build());
-        when(restTemplate.exchange(
-                eq("http://agent-runtime.test/api/agents"),
-                eq(HttpMethod.GET),
-                any(HttpEntity.class),
-                eq(String.class)))
-                .thenReturn(ResponseEntity.ok("[]"));
-        when(restTemplate.exchange(
-                eq("http://agent-runtime.test/api/agents"),
-                eq(HttpMethod.DELETE),
-                any(HttpEntity.class),
-                eq(String.class)))
-                .thenReturn(ResponseEntity.ok("{}"));
-        when(restTemplate.exchange(
-                eq("http://agent-runtime.test/api/agents/init"),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(String.class)))
-                .thenReturn(ResponseEntity.ok("{}"));
-        when(restTemplate.exchange(
-                eq("http://agent-runtime.test/api/agents/runtime-state"),
-                eq(HttpMethod.GET),
-                any(HttpEntity.class),
-                eq(String.class)))
-                .thenReturn(ResponseEntity.ok("{\"idle\":true}"));
-        when(restTemplate.exchange(
-                eq("http://simulator.test/api/clock/replay"),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(String.class)))
-                .thenReturn(ResponseEntity.ok("{}"));
-        when(restTemplate.exchange(
-                org.mockito.ArgumentMatchers.<String>argThat(url -> url != null
-                        && url.startsWith("http://simulator.test/api/clock/advance?seconds=")),
-                eq(HttpMethod.POST),
-                any(HttpEntity.class),
-                eq(String.class)))
-                .thenReturn(ResponseEntity.ok("{}"));
-        return restTemplate;
+        return mock(RestTemplate.class);
     }
 
 }

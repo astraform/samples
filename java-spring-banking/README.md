@@ -2,8 +2,8 @@
 
 Standalone Java/Spring reference provider for `remote-domain.v1`.
 
-The provider uses published [Java SDK 0.4.2](https://central.sonatype.com/artifact/ai.astraform/remote-domain-author-kit-java/0.4.2)
-and [contract bundle 1.2.0](https://github.com/astraform/remote-domain-contracts/releases/tag/v1.2.0).
+The provider uses published [Java SDK 0.4.3](https://central.sonatype.com/artifact/ai.astraform/remote-domain-author-kit-java/0.4.3)
+and [contract bundle 1.2.1](https://github.com/astraform/remote-domain-contracts/releases/tag/v1.2.1).
 Its existing SDK controller delegates banking operations to
 `BankingRemoteDomainService`; the SDK supplies the protocol models, manifest
 builder and conformance validation. The banking database, statement calculations
@@ -38,7 +38,7 @@ It does not own:
 - Astraform host orchestration
 - dashboard rendering
 - generic agent activation
-- simulation clock infrastructure
+- platform scheduling authority (the global clock is retired)
 - platform evidence ledger storage
 
 ## Partner-owned account database and customer MCP access
@@ -148,7 +148,7 @@ schemas. The provider advertises and validates the MCP output schema.
 
 ### Native monthly events against the bank database
 
-The `remote-domain.native-reference-state.v1` profile in contract bundle 1.2.0
+The `remote-domain.native-reference-state.v1` profile in contract bundle 1.2.1
 connects monthly statement events to these authoritative records. Enable it
 explicitly after building the service with `mvn -B -ntp package -DskipTests`:
 
@@ -163,7 +163,7 @@ java -jar target/java-spring-banking.jar --server.port=8098
 The profile property defaults to `remote-domain.native-state-transform.v1`, preserving
 the earlier checkpoint-only deployment. These are distinct manifest profiles.
 Prepare and `domain-system-work-window` retain their existing SDK endpoints. The
-[released reference profile](https://github.com/astraform/remote-domain-contracts/blob/v1.2.0/remote-domain/v1/profiles/native-reference-state/README.md)
+[released reference profile](https://github.com/astraform/remote-domain-contracts/blob/v1.2.1/remote-domain/v1/profiles/native-reference-state/README.md)
 defines the contract, declared through the SDK's `nativeReferenceState(...)`
 manifest builder. Customer account reads use the bank's `/mcp` endpoint; this
 profile does not advertise the checkpoint-only account tool described below.
@@ -251,9 +251,10 @@ and non-boolean enablement fail preparation. This is domain-owned policy;
 Astraform core validates and persists emitted opportunities but does not own
 banking thresholds.
 
-Scenario Lab exposes `EVENT_ONLY` as the explicit event-driven activation
-mode. Activated personas receive a zero calendar interval; only durable
-decision triggers can wake them. In the current v1 contract this provider can
+Scenario Lab retains `EVENT_ONLY` as an event-driven activation setting: its
+persona configuration uses a zero calendar interval and decision triggers rather
+than calendar polling. This retained configuration does not establish a supported
+Scenario Lab cohort activation path; see the [migration boundary](#scenario-lab-clock-migration-boundary). In the current v1 contract this provider can
 publish policy triggers from `domain-system-work-window`. Persona
 `execute-work` responses cannot yet carry triggers, and the optional monthly
 review mapping does not itself schedule a review. A native customer scenario
@@ -266,8 +267,8 @@ this policy alone does not make the customer act.
 - Maven 3.9+
 - Spring Boot `4.1.0`
 - Native Jackson 3
-- `ai.astraform:remote-domain-author-kit-java:0.4.2`
-- `ai.astraform:remote-domain-conformance-java:0.4.2` (test dependency)
+- `ai.astraform:remote-domain-author-kit-java:0.4.3`
+- `ai.astraform:remote-domain-conformance-java:0.4.3` (test dependency)
 
 Both SDK dependencies share `remote-domain.sdk.version` in `pom.xml` and resolve
 from Maven Central. Building the SDK from a sibling checkout is unnecessary.
@@ -430,8 +431,8 @@ is not a provider-hosted receipt service or an exactly-once promise for remote
 banking actions. Native calls pin `X-Astraform-Expected-Provider-Revision` and
 verify the echoed `X-Astraform-Provider-Revision` as well as manifest identity.
 
-The [released checkpoint profile](https://github.com/astraform/remote-domain-contracts/blob/v1.2.0/remote-domain/v1/profiles/native-state-transform/README.md)
-and its tool schema are included in Java SDK 0.4.2. The sample uses the SDK's
+The [released checkpoint profile](https://github.com/astraform/remote-domain-contracts/blob/v1.2.1/remote-domain/v1/profiles/native-state-transform/README.md)
+and its tool schema are included in Java SDK 0.4.3. The sample uses the SDK's
 `nativeStateTransform(...)` and `readOnlyCustomerTool(...)` builders through the
 SDK controller.
 The existing conformance test covers the default legacy configuration. Validate
@@ -439,11 +440,34 @@ each native profile separately with the SDK's packaged schemas and the provider'
 behavior checks. This remains a development sample; SDK adoption alone does not
 certify complete platform simulation behavior.
 
-### Legacy compatibility boundary
+### Scenario Lab clock migration boundary
 
-The current customer-simulation path uses the SDK manifest, prepare and
-work-window operations, with Astraform owning customer execution and evidence.
-Older provider-managed Scenario Lab callbacks are retained in the source but
-are not a supported onboarding path for platform v0.2.0. Their presence does
-not establish that the retired activation, clock or inspection endpoints work.
-Use the native banking scenarios linked above for new simulations.
+Astraform's native platform has no global clock runtime. The current local
+source removes the retired clock and dependent Runtime request implementations;
+partners must use supported native SDK operations. New `CLOCK_DRIVEN_HYBRID`
+requests reject before creating local/Experiment run state, admitting work or
+starting workers. Clock-dependent mutating lifecycle controls reject before
+changing run state, and unsupported Scenario Lab execution rejects before
+creating output directories, resetting or activating agents. Native restoration
+of those execution capabilities remains under #470. An SDK method's presence
+does not make execution supported.
+
+Pack/preset metadata and valid stored historical run/artifact reads and exports
+remain available. Terminal status/artifact reads retain stored results;
+nonterminal historical refresh can serve an existing stored artifact, otherwise
+it reports unavailability instead of querying a live clock or inventing a
+snapshot. Same-operation SDK reconciliation of already recorded completion also
+remains supported. Removing the retired requests preserves captured results
+without rerunning them. Pack metadata, stored evidence and supported SDK
+operations retain their existing behavior. Useful cadence, horizon, cohort,
+domain intervention and
+pause/resume/cancel/finalization semantics remain required native restoration
+work under #470 and the platform's existing run/evidence owners.
+
+The ordinary customer-simulation path continues to use generated SDK methods,
+the bank's manifest/prepare/work-window operations and Astraform-owned durable
+execution. Its issued/monthly capability requirements are described in the
+[shared banking guide](../banking-advice-agent/README.md). The removal does not
+change those flows or their SDK dependency pins. Published images and starter
+archives retain the source from their release; these local edits have not been
+published.

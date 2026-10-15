@@ -40,6 +40,8 @@ final class BankingPolicyWindTunnelV2ProbeDriver implements ScenarioLabFinalizat
     private final Path store;
     private final List<ChildProvider> processes = new CopyOnWriteArrayList<>();
     private volatile ChildProvider currentProvider;
+    private final java.util.concurrent.atomic.AtomicInteger cleanupSnapshots = new java.util.concurrent.atomic.AtomicInteger();
+    private final java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean();
 
     BankingPolicyWindTunnelV2ProbeDriver() {
         try {
@@ -250,6 +252,10 @@ final class BankingPolicyWindTunnelV2ProbeDriver implements ScenarioLabFinalizat
     void verifyPendingNotificationRecoveryAfterRestart() throws Exception {
         PendingNotificationRun pending = prepareCrashedPendingNotification();
         String runId = pending.runId();
+        if (!pending.capable()) {
+            verifyPublishedSdkPendingAfterIndependentRestart(pending);
+            return; // Actual selected SDK cannot preserve the frozen completion payload; no PATCH is permitted.
+        }
         int finalizeCount = pending.finalizeRequestCount();
 
         ChildProvider replacementA = startProvider("NOTIFICATION_RESTART");
@@ -313,11 +319,16 @@ final class BankingPolicyWindTunnelV2ProbeDriver implements ScenarioLabFinalizat
         if (!replacementA.process().isAlive() || !replacementB.process().isAlive()) {
             throw new AssertionError("replacement providers did not remain available after recovery");
         }
+    
     }
 
     void verifyNotificationRecoveryCallbackIsReplicaExclusive() throws Exception {
         PendingNotificationRun pending = prepareCrashedPendingNotification();
         String runId = pending.runId();
+        if (!pending.capable()) {
+            verifyPublishedSdkPendingAfterIndependentRestart(pending);
+            return; // Actual selected SDK cannot preserve the frozen completion payload; no PATCH is permitted.
+        }
         Path runDirectory = runDirectory(runId);
         Files.writeString(
                 runDirectory.resolve("notification-available"),
@@ -389,6 +400,7 @@ final class BankingPolicyWindTunnelV2ProbeDriver implements ScenarioLabFinalizat
         if (finalizeRequestCount(runId) != pending.finalizeRequestCount()) {
             throw new AssertionError("replica notification recovery crossed FINALIZE again");
         }
+    
     }
 
     void verifyConcurrentNotificationRecordingIsAppendOnly() throws Exception {
@@ -431,183 +443,42 @@ final class BankingPolicyWindTunnelV2ProbeDriver implements ScenarioLabFinalizat
     void verifyClockDrivenRateChangeComponentRestart() throws Exception {
         ChildProvider initial = (ChildProvider) startInitialProvider();
         String runId = "rate-change-component-" + UUID.randomUUID().toString().replace("-", "");
-        requireStatus(
-                request(
-                        initial,
-                        BASE_PATH + "/runs",
-                        "POST",
-                        objectMapper.writeValueAsBytes(rateChangeStartRequest(runId))),
-                200,
-                "rate-change component launch");
-
-        Path runDirectory = runDirectory(runId);
-        try {
-            awaitFile(
-                    runDirectory.resolve("clock-driven-rate-change-installation.json"),
-                    Duration.ofSeconds(10),
-                    "rate-change installation manifest");
-        } catch (AssertionError timeout) {
-            throw new AssertionError(
-                    timeout.getMessage() + "; providerLog=" + Files.readString(initial.log()),
-                    timeout);
-        }
-        awaitFile(
-                runDirectory.resolve("rate-change-fanout.json"),
-                Duration.ofSeconds(10),
-                "rate-change fanout evidence");
-        Map<String, Object> fanout = objectMapper.readValue(
-                runDirectory.resolve("rate-change-fanout.json").toFile(),
-                MAP_TYPE);
-        if (!runId.equals(fanout.get("simulationRunId"))
-                || ((Number) fanout.get("matchedAgents")).intValue() != 2
-                || list(fanout.get("results")).size() != 2
-                || list(fanout.get("decisionTriggers")).size() != 1
-                || Integer.parseInt(Files.readString(
-                        runDirectory.resolve("rate-change-fanout-count.txt")).trim()) != 1) {
-            throw new AssertionError("rate-change launch did not execute one two-agent fanout");
-        }
-        assertRateChangeFinalStates(fanout);
-
+        byte[] originalRequest = objectMapper.writeValueAsBytes(rateChangeStartRequest(runId));
+        assertClockLaunchRejectedWithoutEffects(initial, originalRequest, runId);
         initial.terminate();
-        ChildProvider restarted = startProvider("RATE_CHANGE_RESTART");
-        currentProvider = restarted;
-        requireStatus(
-                request(
-                        restarted,
-                        BASE_PATH + "/conformance-v2/runs/" + runId + "/ready",
-                        "POST",
-                        new byte[0]),
-                200,
-                "rate-change restart readiness");
-
-        String capability = "private-rate-change-audit:" + UUID.randomUUID();
-        Files.writeString(
-                runDirectory.resolve("expected-correlation-capability.txt"),
-                capability,
-                StandardCharsets.US_ASCII);
-        String operationId = "scenario-lab-finalize:"
-                + sha256((runId + BankingRemotePolicyWindTunnelService.PROVIDER_REVISION)
-                        .getBytes(StandardCharsets.UTF_8));
-        requireStatus(
-                request(
-                        restarted,
-                        BASE_PATH + "/runs/" + runId + "/lifecycle",
-                        "POST",
-                        objectMapper.writeValueAsBytes(Map.of(
-                                "action", "FINALIZE",
-                                "operationId", operationId)),
-                        Map.of("X-Astraform-Opportunity-Correlation-Capability", capability)),
-                200,
-                "rate-change restart finalization");
-        awaitFile(
-                runDirectory.resolve("correlation-audit-authenticated"),
-                Duration.ofSeconds(5),
-                "authenticated correlation audit");
-        if (!capability.equals(Files.readString(
-                        runDirectory.resolve("correlation-audit-authenticated"),
-                        StandardCharsets.US_ASCII))
-                || Integer.parseInt(Files.readString(
-                        runDirectory.resolve("rate-change-fanout-count.txt")).trim()) != 1) {
-            throw new AssertionError(
-                    "restart changed fanout ownership or bypassed private audit authentication");
-        }
-
-        HttpResponse<byte[]> summaryResponse = request(
-                restarted,
-                BASE_PATH + "/runs/" + runId + "/artifacts/summary",
-                "GET",
-                new byte[0]);
-        requireStatus(summaryResponse, 200, "rate-change provider summary");
-        Map<String, Object> summary = objectMapper.readValue(summaryResponse.body(), MAP_TYPE);
-        Map<String, Object> proof = map(summary.get("clockDrivenInterventionProof"));
-        Map<String, Object> runConfig = map(summary.get("runConfig"));
-        Map<String, Object> decisionReadiness = map(summary.get("decisionReadiness"));
-        if (!"TECHNICAL_VALIDATION_ONLY".equals(proof.get("status"))
-                || !Boolean.TRUE.equals(proof.get("chainIntegrityVerified"))
-                || !Boolean.FALSE.equals(proof.get("realizedReactionVerified"))
-                || ((Number) proof.get("installedCustomers")).intValue() != 2
-                || ((Number) proof.get("eligibleCustomers")).intValue() != 1
-                || ((Number) proof.get("generatedOpportunities")).intValue() != 1
-                || ((Number) proof.get("correlatedDecisions")).intValue() != 1
-                || ((Number) proof.get("realizedCustomerReactions")).intValue() != 0
-                || ((Number) proof.get("technicalValidationDecisions")).intValue() != 1
-                || !Boolean.TRUE.equals(runConfig.get(
-                        "clockDrivenInterventionChainIntegrityVerified"))
-                || !Boolean.FALSE.equals(runConfig.get(
-                        "clockDrivenInterventionRealizedReactionVerified"))
-                || !Boolean.FALSE.equals(runConfig.get(
-                        "clockDrivenInterventionProofVerified"))
-                || !Boolean.FALSE.equals(runConfig.get("opportunityAgentAuditVerified"))
-                || !"PARTIAL_EVIDENCE".equals(decisionReadiness.get("status"))
-                || !"WATCH".equals(decisionReadiness.get("recommendation"))
-                || runConfig.keySet().stream().anyMatch(key -> key.toLowerCase().contains("correlation"))) {
-            throw new AssertionError(
-                    "restarted provider report did not preserve technical-only no-token truth: proof="
-                            + proof
-                            + ", runConfig="
-                            + runConfig
-                            + ", decisionReadiness="
-                            + decisionReadiness
-                            + ", providerLog="
-                            + Files.readString(restarted.log()));
-        }
+        ChildProvider restarted = startProvider("RATE_CHANGE_RESTART"); currentProvider = restarted;
+        assertClockLaunchRejectedWithoutEffects(restarted, originalRequest, runId);
     }
 
     private PendingNotificationRun prepareCrashedPendingNotification() throws Exception {
         ChildProvider initial = (ChildProvider) startInitialProvider();
         String runId = "notification-restart-" + UUID.randomUUID().toString().replace("-", "");
-        String providerRevision = BankingRemotePolicyWindTunnelService.PROVIDER_REVISION;
-        requireStatus(
-                request(
-                        initial,
-                        BASE_PATH + "/runs",
-                        "POST",
-                        objectMapper.writeValueAsBytes(v2StartRequest(runId))),
-                200,
-                "notification recovery run start");
-        requireStatus(
-                request(
-                        initial,
-                        BASE_PATH + "/conformance-v2/runs/" + runId + "/ready",
-                        "POST",
-                        new byte[0]),
-                200,
-                "notification recovery run readiness");
-
-        String operationId = "scenario-lab-finalize:"
-                + sha256((runId + providerRevision).getBytes(StandardCharsets.UTF_8));
-        Files.writeString(
-                runDirectory(runId).resolve("crash-after-notification-failure"),
-                "CRASH",
-                StandardCharsets.US_ASCII);
-        try {
-            request(
-                    initial,
-                    BASE_PATH + "/runs/" + runId + "/lifecycle",
-                    "POST",
-                    objectMapper.writeValueAsBytes(Map.of(
-                            "action", "FINALIZE",
-                            "operationId", operationId)));
-        } catch (IOException expectedCrash) {
-            // The child is deliberately halted after recording the first failed delivery.
+        requireStatus(request(initial, BASE_PATH + "/conformance-v2/runs/" + runId + "/historical-published", "POST", new byte[0]), 200, "seed saved historical receipt");
+        Map<String, Object> receipt = readReceipt(runId);
+        validateAllHistoricalArtifacts(runId, receipt);
+        boolean capable = selectedSdkPreservesPayload(map(receipt.get("completionNotificationPayload")));
+        String operationId = String.valueOf(receipt.get("operationId"));
+        Files.writeString(runDirectory(runId).resolve("crash-after-notification-failure"), "CRASH", StandardCharsets.US_ASCII);
+        try { request(initial, BASE_PATH + "/runs/" + runId + "/lifecycle", "POST",
+                objectMapper.writeValueAsBytes(Map.of("action", "FINALIZE", "operationId", operationId))); }
+        catch (IOException expectedOwnedProcessHalt) { if (!capable) throw expectedOwnedProcessHalt; }
+        if (capable) {
+            if (!initial.process().waitFor(5L, TimeUnit.SECONDS)) throw new AssertionError("native SDK fixture did not halt after first recorded failure");
+            List<NotificationAttempt> attempts = notificationAttempts(runId);
+            if (attempts.size() != 1 || attempts.getFirst().outcome() != NotificationDeliveryOutcome.FAILED)
+                throw new AssertionError("native SDK did not preserve its one actual failed delivery");
+        } else {
+            if (nativeRequestCount(initial) != 0 || !notificationAttempts(runId).isEmpty())
+                throw new AssertionError("published SDK lost full identity yet made a completion write");
+            initial.terminate();
         }
-        if (!initial.process().waitFor(5L, TimeUnit.SECONDS)) {
-            throw new AssertionError("initial provider did not crash after failed notification");
-        }
-
-        List<NotificationAttempt> failedAttempts = notificationAttempts(runId);
-        if (failedAttempts.size() != 1
-                || failedAttempts.getFirst().outcome() != NotificationDeliveryOutcome.FAILED) {
-            throw new AssertionError("initial provider did not persist exactly one failed notification");
-        }
-        Map<String, Object> pendingReceipt = objectMapper.readValue(
-                runDirectory(runId).resolve("finalization-receipt.json").toFile(),
-                MAP_TYPE);
-        if (!"PUBLISHED".equals(pendingReceipt.get("state"))
-                || !"PENDING".equals(pendingReceipt.get("completionNotificationState"))) {
-            throw new AssertionError("crashed provider did not leave durable pending notification debt");
-        }
-        return new PendingNotificationRun(runId, finalizeRequestCount(runId));
+        Map<String, Object> pending = readReceipt(runId);
+        if (!"PUBLISHED".equals(pending.get("state")) || !"PENDING".equals(pending.get("completionNotificationState")))
+            throw new AssertionError("historical receipt did not preserve pending notification debt");
+        if (!receipt.get("artifactManifest").equals(pending.get("artifactManifest")))
+            throw new AssertionError("native completion changed immutable artifact manifest");
+        validateAllHistoricalArtifacts(runId, pending);
+        return new PendingNotificationRun(runId, finalizeRequestCount(runId), capable);
     }
 
     private void assertRateChangeFinalStates(Map<String, Object> fanout) {
@@ -804,16 +675,38 @@ final class BankingPolicyWindTunnelV2ProbeDriver implements ScenarioLabFinalizat
 
     @Override
     public void close() throws Exception {
-        for (ChildProvider provider : processes) {
-            provider.terminate();
+        if (!closed.compareAndSet(false, true)) {
+            if (processes.stream().anyMatch(provider -> provider.process().isAlive()))
+                throw new AssertionError("owned provider process survived an earlier close");
+            return;
+        }
+        for (ChildProvider provider : processes) provider.terminate();
+        if (processes.stream().anyMatch(provider -> provider.process().isAlive()))
+            throw new AssertionError("owned independent provider process remained running after cleanup");
+        String evidenceRoot = System.getenv("ASTRAFORM_JAVA_CONFORMANCE_EVIDENCE_ROOT");
+        if (evidenceRoot != null && !evidenceRoot.isBlank()) {
+            Path destination = Path.of(evidenceRoot).resolve(root.getFileName().toString() + "-cleanup-" + cleanupSnapshots.incrementAndGet());
+            Files.createDirectories(destination);
+            if (Files.exists(root)) try (var paths = Files.walk(root)) {
+                for (Path source : paths.toList()) {
+                    Path target = destination.resolve(root.relativize(source));
+                    if (Files.isDirectory(source)) Files.createDirectories(target);
+                    else Files.copy(source, target);
+                }
+            }
+            Map<String, Object> receipt = Map.of("temporaryRoot", root.toString(), "replicas", processes.stream()
+                    .map(provider -> Map.of("pid", provider.process().pid(), "alive", provider.process().isAlive(),
+                            "baseUri", provider.baseUri().toString())).toList(),
+                    "ownedNativeRecorderLifecycle", "process shutdown stops its owned HTTP server and executor; halted child resources die with process",
+                    "logsAndActualTransportEvidenceRetained", true);
+            Files.write(destination.resolve("cleanup-receipt.json"), objectMapper.writeValueAsBytes(receipt));
         }
         if (Files.exists(root)) {
             try (var paths = Files.walk(root)) {
-                for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) {
-                    Files.deleteIfExists(path);
-                }
+                for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
             }
         }
+        if (Files.exists(root)) throw new AssertionError("owned conformance temporary root survived cleanup");
     }
 
     private synchronized ChildProvider startProvider(String role) throws Exception {
@@ -950,6 +843,99 @@ final class BankingPolicyWindTunnelV2ProbeDriver implements ScenarioLabFinalizat
         Files.writeString(marker, action);
     }
 
+
+    private Map<String, Object> readReceipt(String runId) throws Exception {
+        return objectMapper.readValue(runDirectory(runId).resolve("finalization-receipt.json").toFile(), MAP_TYPE);
+    }
+
+    private boolean selectedSdkPreservesPayload(Map<String, Object> payload) throws Exception {
+        var mapper = ai.astraform.platform.client.ApiClient.createDefaultObjectMapper();
+        var original = mapper.readTree(mapper.writeValueAsBytes(payload));
+        var typed = mapper.treeToValue(original, ai.astraform.platform.client.model.SimulationRunUpdateRequest.class);
+        return original.equals(mapper.readTree(mapper.writeValueAsBytes(typed)));
+    }
+
+    private int nativeRequestCount(ChildProvider process) throws Exception {
+        HttpResponse<byte[]> response = request(process, BASE_PATH + "/conformance-v2/native-sdk-status", "GET", new byte[0]);
+        requireStatus(response, 200, "owned native SDK recorder status");
+        return ((Number) objectMapper.readValue(response.body(), MAP_TYPE).get("requests")).intValue();
+    }
+
+    private void validateAllHistoricalArtifacts(String runId, Map<String, Object> receipt) throws Exception {
+        Map<String, Object> manifest = map(receipt.get("artifactManifest"));
+        if (manifest.size() != 14 || !runId.equals(receipt.get("runId"))) throw new AssertionError("invalid stored historical receipt identity or manifest");
+        for (Object raw : manifest.values()) {
+            Map<String, Object> entry = map(raw);
+            byte[] actual = Files.readAllBytes(checkedArtifact(String.valueOf(entry.get("artifactRef"))));
+            if (((Number) entry.get("byteLength")).longValue() != actual.length || !sha256(actual).equals(entry.get("sha256")))
+                throw new AssertionError("stored historical artifact checksum changed");
+        }
+    }
+
+    private void verifyPublishedSdkPendingAfterIndependentRestart(PendingNotificationRun pending) throws Exception {
+        byte[] receiptBytes = Files.readAllBytes(runDirectory(pending.runId()).resolve("finalization-receipt.json"));
+        Map<String, Object> before = readReceipt(pending.runId());
+        ChildProvider first = startProvider("NOTIFICATION_RESTART"), second = startProvider("NOTIFICATION_PEER");
+        currentProvider = first;
+        Thread.sleep(600L);
+        for (ChildProvider replica : List.of(first, second)) {
+            if (nativeRequestCount(replica) != 0 || !replica.process().isAlive()) throw new AssertionError("incapable selected SDK made an outbound write or replica exited");
+        }
+        if (!notificationAttempts(pending.runId()).isEmpty() || !Arrays.equals(receiptBytes, Files.readAllBytes(runDirectory(pending.runId()).resolve("finalization-receipt.json"))))
+            throw new AssertionError("published SDK changed frozen receipt or wrote completion without field parity");
+        if (finalizeRequestCount(pending.runId()) != pending.finalizeRequestCount()) throw new AssertionError("restart attempted a new FINALIZE");
+        validateAllHistoricalArtifacts(pending.runId(), before);
+        if (!"PENDING".equals(readReceipt(pending.runId()).get("completionNotificationState"))) throw new AssertionError("unsupported typed SDK falsely confirmed completion");
+    }
+
+    private Map<String, String> storeDigests() throws Exception {
+        Map<String, String> result = new java.util.TreeMap<>();
+        try (var paths = Files.walk(store)) {
+            for (Path path : paths.filter(Files::isRegularFile).toList()) result.put(store.relativize(path).toString(), sha256(Files.readAllBytes(path)));
+        }
+        return result;
+    }
+
+    private void assertClockLaunchRejectedWithoutEffects(ChildProvider process, byte[] payload, String runId) throws Exception {
+        Map<String, String> before = storeDigests();
+        int nativeBefore = nativeRequestCount(process);
+        HttpResponse<byte[]> response = request(process, BASE_PATH + "/runs", "POST", payload);
+        requireStatus(response, 400, "retired clock execution gate");
+        Map<String, Object> failure = objectMapper.readValue(response.body(), MAP_TYPE);
+        if (!"scenario_lab_native_execution_unavailable".equals(failure.get("error")) || !String.valueOf(failure.get("message")).contains("retired global clock"))
+            throw new AssertionError("clock launch failed for an unrelated reason: " + failure);
+        if (!before.equals(storeDigests()) || nativeBefore != nativeRequestCount(process) || Files.exists(runDirectory(runId)))
+            throw new AssertionError("unsupported clock launch mutated stored state or called native SDK");
+    }
+
+    void recordUnavailableConformanceFailure(String actualFailure) throws Exception {
+        byte[] receipt = objectMapper.writeValueAsBytes(Map.of("status", "FAILED", "nativeExecutionCertified", false,
+                "actualHarnessFailure", actualFailure, "reason", "Retired clock execution is rejected; native Scenario Lab restoration remains required"));
+        String evidenceRoot = System.getenv("ASTRAFORM_JAVA_CONFORMANCE_EVIDENCE_ROOT");
+        if (evidenceRoot != null && !evidenceRoot.isBlank()) {
+            Path retained = Path.of(evidenceRoot);
+            Files.createDirectories(retained);
+            Files.write(retained.resolve(root.getFileName().toString() + "-new-clock-conformance-unavailable.json"), receipt);
+        } else {
+            System.out.println("Actual unavailable native Scenario Lab conformance: " + new String(receipt, StandardCharsets.UTF_8));
+        }
+        if (Files.exists(root)) throw new AssertionError("selected SDK conformance harness did not dispose its owned workspace");
+    }
+
+    void verifyNewClockConformanceUnavailableAfterFailure() throws Exception {
+        // The selected SDK harness already terminated its providers and disposed its workspace.
+        // A new ordinary fixture rechecks the execution gate, without reconstructing old state.
+        if (processes.stream().anyMatch(provider -> provider.process().isAlive()))
+            throw new AssertionError("generated conformance harness left an owned provider process alive");
+        try (BankingPolicyWindTunnelV2ProbeDriver replacement = new BankingPolicyWindTunnelV2ProbeDriver()) {
+            ChildProvider process = (ChildProvider) replacement.startInitialProvider();
+            String runId = "conformance-unavailable-" + UUID.randomUUID().toString().replace("-", "");
+            replacement.assertClockLaunchRejectedWithoutEffects(process,
+                    objectMapper.writeValueAsBytes(replacement.v2StartRequest(runId)), runId);
+            if (replacement.nativeRequestCount(process) != 0) throw new AssertionError("new unsupported clock launch made a native SDK write");
+        }
+    }
+
     private Map<String, Object> v2StartRequest(String runId) throws Exception {
         String personaName = "Notification Recovery Customer";
         byte[] cohort = objectMapper.writeValueAsBytes(List.of(Map.ofEntries(
@@ -1056,7 +1042,7 @@ final class BankingPolicyWindTunnelV2ProbeDriver implements ScenarioLabFinalizat
         }
     }
 
-    private record PendingNotificationRun(String runId, int finalizeRequestCount) { }
+    private record PendingNotificationRun(String runId, int finalizeRequestCount, boolean capable) { }
 
     private record CallbackEvent(
             int sequence,

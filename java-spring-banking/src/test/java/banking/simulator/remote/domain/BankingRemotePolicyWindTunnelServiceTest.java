@@ -1,6 +1,18 @@
 package banking.simulator.remote.domain;
 
 import ai.astraform.remote.domain.sdk.RemoteDomainProtocolException;
+import ai.astraform.remote.domain.sdk.spring.PolicyWindTunnelControllerAdapter;
+import ai.astraform.remote.domain.sdk.spring.RemoteDomainExceptionHandler;
+import com.sun.net.httpserver.HttpServer;
+import java.net.InetSocketAddress;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Base64;
+import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -96,8 +108,8 @@ class BankingRemotePolicyWindTunnelServiceTest {
                                 "executionMode", "CLOCK_DRIVEN_HYBRID",
                                 "opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2"),
                         "PLATFORM_ADMIN"))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("verified shared durable provider storage");
+                .isInstanceOf(RemoteDomainProtocolException.class)
+                .hasMessageContaining("Native Scenario Lab execution is not available yet");
     }
 
     @Test
@@ -123,8 +135,8 @@ class BankingRemotePolicyWindTunnelServiceTest {
                                 "executionMode", "CLOCK_DRIVEN_HYBRID",
                                 "opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2"),
                         "PLATFORM_ADMIN"))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("verified shared durable provider storage");
+                .isInstanceOf(RemoteDomainProtocolException.class)
+                .hasMessageContaining("Native Scenario Lab execution is not available yet");
         assertThatThrownBy(() -> service(true).startRun(
                         Map.of(
                                 "executionMode", "CLOCK_DRIVEN_HYBRID",
@@ -198,6 +210,89 @@ class BankingRemotePolicyWindTunnelServiceTest {
         }
         assertThat(BankingRemotePolicyWindTunnelService.privateOpportunityCorrelationCapability())
                 .isEmpty();
+    }
+
+    @Test
+    void ordinaryAndV2LaunchesExposeNativeUnavailableThroughThePublishedSdkWithoutEffects() throws Exception {
+        AtomicInteger outboundRequests = new AtomicInteger();
+        HttpServer outbound = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        outbound.createContext("/", exchange -> {
+            outboundRequests.incrementAndGet();
+            exchange.sendResponseHeaders(500, -1);
+            exchange.close();
+        });
+        outbound.start();
+        try {
+            String outboundUrl = "http://127.0.0.1:" + outbound.getAddress().getPort();
+            ObjectMapper mapper = new ObjectMapper().rebuild().findAndAddModules().build();
+            for (boolean sharedStorageReady : List.of(false, true)) {
+                BankingRemotePolicyWindTunnelService service = new BankingRemotePolicyWindTunnelService(
+                        mapper, workspaceRoot.resolve("http-" + sharedStorageReady).toString(),
+                        outboundUrl, outboundUrl, outboundUrl, sharedStorageReady);
+                var mvc = MockMvcBuilders.standaloneSetup(new PolicyWindTunnelControllerAdapter(service))
+                        .setControllerAdvice(new RemoteDomainExceptionHandler())
+                        .build();
+                for (Map<String, Object> payload : List.<Map<String, Object>>of(
+                        Map.of("executionMode", "CLOCK_DRIVEN_HYBRID", "presetId", "saver-repricing",
+                                "simulationRunId", "ordinary-unavailable"),
+                        Map.of("executionMode", "CLOCK_DRIVEN_HYBRID", "presetId", "saver-repricing",
+                                "simulationRunId", "v2-unavailable",
+                                "opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2"))) {
+                    Map<String, String> before = workspaceSnapshot();
+                    var response = mvc.perform(post("/policy-wind-tunnel/runs")
+                                    .contentType(MediaType.APPLICATION_JSON)
+                                    .header("X-Astraform-Execution-Role", "PLATFORM_ADMIN")
+                                    .content(mapper.writeValueAsString(payload)))
+                            .andReturn().getResponse();
+                    String body = response.getContentAsString();
+                    assertThat(response.getStatus()).as("SDK launch response: %s", body).isEqualTo(400);
+                    Map<?, ?> envelope = mapper.readValue(body, Map.class);
+                    assertThat(envelope.get("operation")).isEqualTo("scenario-lab-launch");
+                    assertThat(envelope.get("requestId")).isNotNull();
+                    Map<?, ?> error = (Map<?, ?>) envelope.get("error");
+                    assertThat(error.get("code")).isEqualTo("scenario_lab_native_execution_unavailable");
+                    assertThat(error.get("category")).isEqualTo("invalid_request");
+                    assertThat(error.get("retryable")).isEqualTo(false);
+                    assertThat(error.get("message").toString()).contains("Native Scenario Lab execution is not available yet");
+                    assertThat(error.get("details")).isEqualTo(Map.of("requiredCapability", "nativeScenarioLabExecution"));
+                    assertThat(workspaceSnapshot()).isEqualTo(before);
+                    assertThat(outboundRequests).hasValue(0);
+                }
+            }
+        } finally {
+            outbound.stop(0);
+        }
+    }
+
+    @Test
+    void ordinaryAndV2LaunchesRejectBeforeDurableRunAdmissionForEitherStorageMode() throws Exception {
+        for (boolean sharedStorageReady : List.of(false, true)) {
+            BankingRemotePolicyWindTunnelService service = service(sharedStorageReady);
+            for (Map<String, Object> payload : List.<Map<String, Object>>of(
+                    Map.of("executionMode", "CLOCK_DRIVEN_HYBRID", "simulationRunId", "ordinary-unavailable"),
+                    Map.of("executionMode", "CLOCK_DRIVEN_HYBRID", "simulationRunId", "v2-unavailable",
+                            "opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2"))) {
+                Map<String, String> before = workspaceSnapshot();
+                RemoteDomainProtocolException error = org.junit.jupiter.api.Assertions.assertThrows(
+                        RemoteDomainProtocolException.class, () -> service.startRun(payload, "PLATFORM_ADMIN"));
+                assertThat(error.status().value()).isEqualTo(400);
+                assertThat(error.code()).isEqualTo("scenario_lab_native_execution_unavailable");
+                assertThat(error.retryable()).isFalse();
+                assertThat(error.details()).containsEntry("requiredCapability", "nativeScenarioLabExecution");
+                assertThat(workspaceSnapshot()).isEqualTo(before);
+            }
+        }
+    }
+
+    private Map<String, String> workspaceSnapshot() throws java.io.IOException {
+        Map<String, String> snapshot = new TreeMap<>();
+        try (var paths = Files.walk(workspaceRoot)) {
+            for (Path path : paths.sorted().toList()) {
+                snapshot.put(workspaceRoot.relativize(path).toString(), Files.isDirectory(path)
+                        ? "directory" : Base64.getEncoder().encodeToString(Files.readAllBytes(path)));
+            }
+        }
+        return snapshot;
     }
 
     private BankingRemotePolicyWindTunnelService service(boolean sharedStorageEnabled) {

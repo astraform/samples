@@ -128,12 +128,6 @@ public class BankingRemotePolicyWindTunnelService implements PolicyWindTunnelSer
     @Override
     public Map<String, Object> startRun(Map<String, Object> payload, String executionRole) {
         Map<String, Object> launchPayload = payload == null ? Map.of() : payload;
-        BankingPolicyWindTunnelExecutionProvider.requireCanonicalLaunchExecutionMode(launchPayload);
-        if ("PLATFORM_OWNED_V2".equals(launchPayload.get("opportunityGenerationFinalizationMode"))
-                && !platformOwnedV2StorageReady) {
-            throw new IllegalStateException(
-                    "PLATFORM_OWNED_V2 launch requires verified shared durable provider storage");
-        }
         return toMap(provider.startRun(
                 executionContext,
                 launchPayload,
