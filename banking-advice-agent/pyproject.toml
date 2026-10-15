@@ -7,7 +7,7 @@ description = "Read-only, LLM-backed statement advice over the official A2A SDK"
 requires-python = ">=3.12,<3.15"
 dependencies = [
     "a2a-sdk[http-server]==1.1.4",
-    "astraform-remote-domain-author-kit==0.3.2",
+    "astraform-remote-domain-author-kit==0.3.3",
     "httpx==0.28.1",
     "uvicorn>=0.35,<1",
 ]

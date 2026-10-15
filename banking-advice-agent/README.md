@@ -2,13 +2,14 @@
 
 The image-only Python banking starter is prepared under
 [`deploy/banking-starter`](../deploy/banking-starter/README.md). It reuses this agent
-and the Python bank. The published SDK supports launch, inspection and evidence
-export when `completionPolicy.requireCustomerFinish` is omitted. The strict
-issued-statement scenario supplies that field and requires the locally updated,
-unreleased platform and a native typed customer SDK that preserves it.
-The starter images have been published to private registry packages; a public
-starter archive is not yet available. The monthly source workflow below uses the
-public platform bundle and published SDKs; it omits that completion field.
+and the Python bank. Published Python SDK 0.3.3 supports launch, inspection and
+evidence export, including native `completionPolicy.requireCustomerFinish`.
+The strict issued-statement scenario also requires the locally updated platform;
+the published platform v0.2.0 does not provide that stopping behavior.
+The published samples v0.1.0 Python banking starter retains its original scenario,
+SDK versions and completion behavior. The monthly source workflow below omits
+that field and remains compatible with the public platform bundle. Current source
+locks install Python SDK 0.3.3; rebuild images to consume those source changes.
 
 The partner owns the banking database and populates customer records before
 creating Astraform customers. Astraform receives each customer's persona, goals,
@@ -99,10 +100,10 @@ database. It starts before the first statement exists. This is a bounded monthly
 not evidence of years of simulation or 1,000-customer capacity. The older
 snapshot-based provider profile remains separate.
 
-The Java bank provider uses published [Java SDK 0.4.2 from Maven Central](https://central.sonatype.com/artifact/ai.astraform/remote-domain-author-kit-java/0.4.2).
+The Java bank provider uses published [Java SDK 0.4.3 from Maven Central](https://central.sonatype.com/artifact/ai.astraform/remote-domain-author-kit-java/0.4.3).
 The Python bank provider and this monthly scenario's launch helper use published
-[Python author kit 0.3.2](https://pypi.org/project/astraform-remote-domain-author-kit/0.3.2/).
-Both SDKs use [shared contract 1.2.0](https://github.com/astraform/remote-domain-contracts/releases/tag/v1.2.0)
+[Python author kit 0.3.3](https://pypi.org/project/astraform-remote-domain-author-kit/0.3.3/).
+Both SDKs use [shared contract 1.2.1](https://github.com/astraform/remote-domain-contracts/releases/tag/v1.2.1)
 and include domain helpers plus the platform client. Customer account reads use
 the bank's MCP endpoint; this separately running partner agent uses A2A plus
 the banking HTTP API.
@@ -431,7 +432,7 @@ provides domain authoring; the bank seed still uses the partner's own HTTP API.
 Install the published author kit in the launcher's Python 3.12+ virtual environment:
 
 ```bash
-python3 -m pip install 'astraform-remote-domain-author-kit==0.3.2'
+python3 -m pip install 'astraform-remote-domain-author-kit==0.3.3'
 ```
 
 For this monthly scenario, which omits `requireCustomerFinish`, no SDK source
@@ -458,12 +459,13 @@ BANKING_BACKEND_URL=http://localhost:8098 \
 
 1. Populate a fresh partner bank context from `bankCustomerSeed` using
    `PUT /api/banking/v1/contexts/{contextRef}/customers/customer-a`.
-2. Discover the current tool pins with
-   `GET /api/simulation-events/mcp-capabilities?bindingKey=banking`.
-3. Create and publish the persona with `/api/agent-definitions` and
-   `/api/agent-definitions/{catalogAgentId}/publish`.
-4. Print the exact launch request, then launch that immutable revision once with
-   `POST /api/agent-journeys` and print its IDs and accepted response. The script sends
+2. Discover current tool pins with the generated
+   `SimulationEventsApi.inspect_public_customer_mcp_capabilities` method.
+3. Create and publish the persona with generated `AgentCatalogApi` methods
+   `create_agent_definition` and `publish_agent_definition`.
+4. Print the exact launch request, then call generated
+   `AgentJourneysApi.launch_agent_journey` once for that immutable revision and
+   print its IDs and accepted response. The script sends
    no subsequent customer turns or domain operations. Keep stdout and errors as
    the attempt's record; failures are not retried or repaired by the helper.
 
@@ -532,13 +534,14 @@ Omitted or false values preserve the earlier receipt-only stopping behavior.
 
 This optional field requires the locally updated Experiment service and a native
 customer SDK whose generated completion-policy model preserves the supplied
-Boolean. Published platform v0.2.0 and Python SDK 0.3.2 do not support the field.
+Boolean. Published Python SDK 0.3.3 supplies this native client support;
+published platform v0.2.0 still lacks the required stopping behavior.
 The launcher checks raw type and typed round-trip fidelity before bank seeding or
 create/publish/launch writes, then uses the normal generated Agent Journey API.
 It never manually inserts a JSON extension, drops the value, retries a failed
 launch or chooses customer behavior. Both explicit true and explicit false fail
-with SDK 0.3.2; omission remains compatible. A supporting locally generated
-customer SDK is unreleased and does not change the bank/advice provider pins.
+with older SDK 0.3.2; omission remains compatible. Current source pins select
+0.3.3, while existing published images and archives retain their recorded versions.
 
 The receipt conditions still verify statement records, not understanding. They
 match schema, payment status, customer, account, bill, statement end, minimum,
@@ -708,10 +711,20 @@ Advice does not execute or schedule a payment.
 
 ## Inspect the outcome
 
-Use GET `/api/simulation-runs/{runId}`, `/api/simulation-runs/{runId}/ledger`,
-and the terminal `/api/simulation-runs/{runId}/export` under the service origin
-selected by `ASTRAFORM_API_BASE`. Verify
-the accepted domain preparation, future statement work and customer notification,
+Inspect the accepted run with the existing SDK helper. From the samples
+repository root, use its saved run ID and the same API deployment:
+
+```bash
+ASTRAFORM_API_BASE=http://localhost:8084 \
+  python3 banking-advice-agent/run-customer.py \
+  --inspect RUN_ID --output /tmp/banking-first --wait
+```
+
+Use the original output directory when one was saved, or a fresh directory for
+this run. `--inspect` performs only generated `SimulationRunsApi` reads; it never
+seeds a bank, creates or publishes a customer, or launches a replacement. Review
+`run.json`, `ledger.json` and terminal `evidence.zip`. Verify the accepted domain
+preparation, future statement work and customer notification,
 model-selected MCP calls and returned account values, outgoing A2A messages,
 matching bank version/time provenance and the customer's final decision.
 
