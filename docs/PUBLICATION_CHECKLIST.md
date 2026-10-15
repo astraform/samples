@@ -6,10 +6,12 @@ remain independent. Do not create per-language or per-starter tags.
 
 ## Prepare v0.2.0
 
-The next release targets **platform v0.3.0**, **Java SDK 0.4.3**, **Python SDK
-0.3.3** and **contracts 1.2.1**. It is not published yet. The current public
-baseline remains samples v0.1.0/platform v0.2.0 with its original bytes and
-compatibility. Do not overwrite that tag, its images or its assets.
+The next samples release targets the published
+[platform v0.3.0](https://github.com/astraform/releases/releases/tag/v0.3.0),
+**Java SDK 0.4.3**, **Python SDK 0.3.3** and **contracts 1.2.1**. Samples v0.2.0
+is not published yet. The historical samples v0.1.0/platform v0.2.0 pairing
+retains its original bytes and compatibility. Do not overwrite that samples tag,
+its images or its assets.
 
 `release.json` selects four archives and stays **`publicationReady:false`**.
 Null revision, image and checksum fields are intentionally unknown until actual

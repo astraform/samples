@@ -3,8 +3,9 @@
 Build and adapt partner services that Astraform customer agents can exercise.
 Platform operations use the published Java/Python SDKs directly; partner
 services expose A2A, MCP and domain APIs. The next samples release, **v0.2.0**,
-is prepared locally for **platform v0.3.0**, Java **0.4.3**, Python **0.3.3** and
-contracts **1.2.1**. Those new platform/sample artifacts are not yet published.
+is being prepared for the published **platform v0.3.0**, Java **0.4.3**, Python
+**0.3.3** and contracts **1.2.1**. The new sample images and starter archives are
+not yet published.
 Strict issued banking and marketing require that supporting platform as well
 as the native typed SDK. The immutable public baseline remains samples v0.1.0
 with platform v0.2.0 and its original dependency versions.
@@ -27,9 +28,8 @@ cd samples
 For the historical starter v0.1.0 and compatible non-strict source scenarios,
 the public baseline is [Astraform Platform v0.2.0](https://github.com/astraform/releases/releases/tag/v0.2.0).
 Current strict templates and the next starter release target platform **v0.3.0**;
-obtain its archive/checksum from the [public release list](https://github.com/astraform/releases/releases)
-only after publication. Follow the selected bundle's README to verify, extract
-and initialize it, select
+obtain its archive/checksum from the [published v0.3.0 release](https://github.com/astraform/releases/releases/tag/v0.3.0).
+Follow the selected bundle's README to verify, extract and initialize it, select
 Gemini or Ollama for customer agents, and start the platform. The platform bundle
 and editable sample source are separate: the samples do not build or import
 Astraform runtime modules.

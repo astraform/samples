@@ -2,11 +2,10 @@
 
 
 Connect the marketing domain provider and its LLM creative agency to the
-supporting **Astraform v0.3.0 deployment bundle**, currently in release
-preparation. Obtain it from the [public platform release list](https://github.com/astraform/releases/releases)
-after publication; the immutable v0.2.0 bundle does not support these strict
-templates. A delivered matching bundle supplies Runtime and the coordinator as
-released images.
+published [Astraform v0.3.0 deployment bundle](https://github.com/astraform/releases/releases/tag/v0.3.0).
+Download and verify its archive and checksum; the immutable v0.2.0 bundle does
+not support these strict templates. The matching bundle supplies Runtime and the
+coordinator as released images.
 Build the sample services below and use the published SDK to launch a customer;
 no platform source checkout is required. The creative agency exposes A2A 1.0
 JSON-RPC through the A2A Java SDK.

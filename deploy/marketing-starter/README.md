@@ -9,7 +9,8 @@ The platform is a separate image bundle. Customer and partner models are
 configured independently.
 
 Samples **v0.2.0** prepares a scheduled-marketing public archive targeting
-**platform v0.3.0**. Neither new release is published yet. Public-mode preparation
+the published [platform v0.3.0](https://github.com/astraform/releases/releases/tag/v0.3.0).
+The new sample images and archive are not published yet. Public-mode preparation
 requires `--platform-release v0.3.0`, anonymous digest-pinned images and verified
 source/architecture metadata; release selection remains `publicationReady:false`
 until real artifacts are reviewed. The separate `--local-verification` mode

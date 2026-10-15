@@ -4,7 +4,7 @@ This starter connects a real LLM customer in Astraform to a real LLM banking age
 
 The immutable published baseline uses **Astraform Platform v0.2.0** and **Python SDK 0.3.2** in the bank/advice images. Current source targets **Java SDK 0.4.3 / Python SDK 0.3.3** for newly built local candidates; a source version target does not upgrade an existing image. You need the platform and starter archives, Docker and your model configuration; no private source checkout or host SDK installation is required. A package marked `localVerificationOnly` requires the recorded locally installed images and is an engineering rehearsal, not a public starter release.
 
-The current issued-statement scenario opts into `completionPolicy.requireCustomerFinish: true`. It requires the supporting platform v0.3.0 implementation and a customer SDK whose generated completion-policy model preserves this field. Platform v0.3.0 and samples v0.2.0 are currently release-preparation targets; use them only after matching artifacts are published and verified. Published platform v0.2.0 and Python SDK 0.3.2 do not support it. A customer launcher using SDK 0.3.2 rejects any explicit Boolean value before bank seeding or create/publish/launch writes; it does not add the field through a transport bridge. Inspection of an existing run still uses the published SDK. Existing published images and archives retain their recorded dependency versions. Older `starter-config.json` manifests retain their recorded `requiresUnreleasedCustomerSdk` and `requiredCustomerSdkCapabilities` markers. Published Python SDK 0.3.3 now supplies the native client capability; using it requires a new verified customer installation/image and the supporting platform. Existing archive bytes and recorded image versions are unchanged.
+The current issued-statement scenario opts into `completionPolicy.requireCustomerFinish: true`. It requires the supporting platform v0.3.0 implementation and a customer SDK whose generated completion-policy model preserves this field. Platform v0.3.0 is published; samples v0.2.0 remains in preparation. Use the new sample images and starter archives only after they are published and verified. Published platform v0.2.0 and Python SDK 0.3.2 do not support it. A customer launcher using SDK 0.3.2 rejects any explicit Boolean value before bank seeding or create/publish/launch writes; it does not add the field through a transport bridge. Inspection of an existing run still uses the published SDK. Existing published images and archives retain their recorded dependency versions. Older `starter-config.json` manifests retain their recorded `requiresUnreleasedCustomerSdk` and `requiredCustomerSdkCapabilities` markers. Published Python SDK 0.3.3 now supplies the native client capability; using it requires a new verified customer installation/image and the supporting platform. Existing archive bytes and recorded image versions are unchanged.
 
 The banking image owns `run-customer.py` and the shared `customer-run-evidence.py` beside it in `/app`. The updated Docker build includes both. This archive does not supply replacement launcher scripts or a helper service, and an older published image is not assumed to contain the updated code.
 
@@ -38,7 +38,7 @@ cd "${archive%.tar.gz}"
 
 Set `archive` to the exact downloaded filename, including its version. The historical Python archive uses `v0.1.0`. On Linux, use `sha256sum -c` instead of `shasum -a 256 -c`. Keep `bundle-manifest.json`, `image-lock.json` and `release.env` with the extracted files: they identify the package contents and exact container images. The starter and platform are separate downloads and can have different version numbers.
 
-For the immutable starter v0.1.0, use the [public platform v0.2.0 release](https://github.com/astraform/releases/releases/tag/v0.2.0). The prepared starter v0.2.0 requires platform **v0.3.0**; obtain it from the [platform release list](https://github.com/astraform/releases/releases) only after publication and checksum verification. Follow the selected bundle's guide and configure its customer model before continuing.
+For the immutable starter v0.1.0, use the [public platform v0.2.0 release](https://github.com/astraform/releases/releases/tag/v0.2.0). The prepared starter v0.2.0 requires the published [platform v0.3.0 bundle](https://github.com/astraform/releases/releases/tag/v0.3.0); download its archive and checksum and verify them before initialization. Follow the selected bundle's guide and configure its customer model before continuing.
 
 ## Prerequisites
 
@@ -205,8 +205,8 @@ the same separate bank database, banking advice service and Python customer
 launcher. The monthly scenario omits `requireCustomerFinish` and can use published
 Python SDK 0.3.2 for launch/inspect/export. The strict issued scenario requires a
 native typed customer SDK that preserves its explicit completion field; its
-client capability is now published in Python SDK 0.3.3, while the supporting
-platform and coordinated image/archive delivery remain pending. Earlier candidate
+client capability is published in Python SDK 0.3.3 and the supporting platform
+v0.3.0 is published. Coordinated sample image/archive delivery remains pending. Earlier candidate
 images retain their recorded Java 0.4.2 / Python 0.3.2 dependencies. A fresh local
 candidate must verify its assembled Java 0.4.3 / Python 0.3.3 image contents;
 manifest source targets alone do not prove installed versions. The default

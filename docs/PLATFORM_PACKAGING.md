@@ -10,9 +10,10 @@ build a domain provider or run a customer simulation.
 The immutable baseline is the public
 [Astraform Platform v0.2.0 release](https://github.com/astraform/releases/releases/tag/v0.2.0),
 paired with the original Python starter v0.1.0. Current strict issued-banking
-and marketing templates target **platform v0.3.0**, currently release preparation.
-Obtain that matching archive and checksum from the [public release list](https://github.com/astraform/releases/releases)
-only after publication; do not follow the strict walkthrough against v0.2.0.
+and marketing templates use the published
+[Astraform Platform v0.3.0 release](https://github.com/astraform/releases/releases/tag/v0.3.0),
+published on 16 October 2026 (Australia/Sydney). Download and verify its archive
+and checksum; do not follow the strict walkthrough against v0.2.0.
 A delivered bundle contains image-only Compose deployment, locked image references,
 initialization tools and operating instructions. Follow its included README to
 verify the archive, initialize a Gemini or Ollama profile, configure your model
@@ -180,8 +181,8 @@ cannot be relabelled as a public package. Historical published bytes are unchang
 selection and published Java 0.4.3/Python 0.3.3/contracts 1.2.1. The existing
 packagers preserve required completion/native-domain capabilities and verify
 anonymous digest/architecture/source metadata. Public platform v0.2.0 does not
-supply strict stopping. Platform v0.3.0 and samples v0.2.0 are preparation targets,
-not currently available downloads; the release remains unready until actual
+supply strict stopping. Platform v0.3.0 is publicly available; samples v0.2.0
+remains in preparation. Its release selection stays unready until actual sample
 images, revisions and archive checksums are reviewed.
 See the [banking guide](../deploy/banking-starter/README.md#local-java-and-scheduled-statement-candidates)
 and [marketing guide](../deploy/marketing-starter/README.md). Provider callbacks
