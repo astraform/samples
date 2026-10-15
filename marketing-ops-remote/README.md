@@ -18,9 +18,9 @@ policies, population catalogs and Scenario Lab evidence. The companion owns
 its A2A endpoint and collaboration behavior; its optional LLM writes advice,
 while its existing scenario policy chooses the disposition.
 
-It uses public Java author-kit and conformance artifacts **0.4.2** plus ordinary
+It uses public Java author-kit and conformance artifacts **0.4.3** plus ordinary
 Spring dependencies. Both artifacts resolve from Maven Central and use the
-published shared contract release **1.2.0**. Building a sibling SDK checkout is
+published shared contract release **1.2.1**. Building a sibling SDK checkout is
 unnecessary. The native capability uses the SDK-generated typed profile;
 the sample no longer carries a temporary JSON metadata subclass. It must keep host SPI classes out of its code.
 
