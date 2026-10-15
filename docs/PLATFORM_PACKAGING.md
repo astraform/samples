@@ -34,8 +34,8 @@ per-user authentication, high availability or a production certification.
 
 - [Image-only Python banking starter](../deploy/banking-starter/README.md): a
   prepared starter archive with a separate bank database, LLM banking partner
-  and one customer scenario. It is planned for the shared samples v0.1.0
-  release; use only assets that appear on an actual published release.
+  and one customer scenario, published in the shared samples v0.1.0 release.
+  That immutable archive retains its original scenario and completion behavior.
 - [Banking source guide](../banking-advice-agent/README.md): build the Java or
   Python bank and use the shared Banking Advice partner and SDK launcher.
 - [Marketing source guide](../integration/marketing-ops-a2a/README.md#native-customer-simulation):
@@ -45,11 +45,20 @@ per-user authentication, high availability or a production certification.
   through the SDK. Add customer MCP tools or a native domain provider only when
   your scenario needs them.
 
-Each sample service uses published dependencies. The Java providers use author
-kit **0.4.2**; the Python bank and launch clients use author kit **0.3.2**; both
-use public contracts **1.2.0**. The author kits include the platform client and
-domain authoring interfaces. No second platform-client SDK or platform checkout
-is required. Follow the module README for its build and runtime requirements.
+Current Java provider source pins published author kit **0.4.3**; Python
+bank/advice source locks select published **0.3.3**. Both consume public contracts
+**1.2.1**. Each author kit includes its generated platform client and domain
+authoring interfaces; no second platform-client package is needed. Customer
+launch/export uses that generated client. Monthly banking omits
+`completionPolicy.requireCustomerFinish`; issued banking and both current marketing
+templates explicitly require it.
+
+Java 0.4.3/Python 0.3.3 preserve the native Boolean, including `false`; launchers
+reject older unsupported SDKs before writes. Strict stopping also needs the
+supporting platform implementation. Published platform v0.2.0 and existing
+sample images/archives retain their recorded behavior and versions. Build and
+verify new images from the updated source before packaging; changing a dependency
+pin does not update a published image or archive.
 
 ## Connect endpoints
 
@@ -163,11 +172,15 @@ and marketing (scheduled or current-boundary), using the shared deterministic
 packaging owner. Each new candidate is explicitly `localVerificationOnly`,
 records installed image IDs and payload hashes, and leaves published locks,
 release metadata and archives unchanged. The issued banking candidate requires
-the unreleased customer-FINISH Experiment/API fix; it is not compatible with a
-public v0.2.0 platform download. See the [banking guide](../deploy/banking-starter/README.md#local-java-and-scheduled-statement-candidates)
-and [marketing guide](../deploy/marketing-starter/README.md). Java SDK 0.4.2
-provider callbacks and Python SDK 0.3.2 customer launch/export are distinct
-verification paths; these candidates do not certify a Java customer client.
+both the unreleased customer-FINISH Experiment/API fix and a supporting native
+typed customer SDK. Published Java 0.4.3/Python 0.3.3 supply the SDK support, but a
+public v0.2.0 platform download does not supply the strict stopping behavior.
+See the [banking guide](../deploy/banking-starter/README.md#local-java-and-scheduled-statement-candidates)
+and [marketing guide](../deploy/marketing-starter/README.md). Provider callbacks
+and Python customer launch/export are distinct verification paths. Older 0.3.2
+customer images cannot launch explicit strict templates; regenerate images and
+archives under their existing owners. The packaged Python launcher does not
+certify a Java customer client.
 
 Download published starters from the [samples release list](https://github.com/astraform/samples/releases).
 The platform and SDKs are versioned independently; platform bundles are on the

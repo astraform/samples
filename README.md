@@ -1,9 +1,12 @@
 # Astraform Samples
 
 Build and adapt partner services that Astraform customer agents can exercise.
-The samples use published Java/Python SDKs and communicate with Astraform over
-HTTP, A2A and MCP. Astraform itself runs from its released container images;
-you do not need its source repository or a locally built SDK.
+The released starter and source scenarios that omit
+`completionPolicy.requireCustomerFinish` use published Java/Python SDKs. Platform
+operations use their generated clients; partner services expose A2A, MCP and
+domain APIs. These released cases use Astraform's container bundle without a
+platform source checkout. The strict issued-statement source scenario requires
+supporting native typed customer SDK and platform changes that remain unreleased.
 
 Clone the examples to build and adapt them:
 
@@ -17,10 +20,11 @@ cd samples
 | Start here | What it runs |
 | --- | --- |
 | [Python banking starter](deploy/banking-starter/README.md) | An image-only deployment with a separate bank database, an LLM banking partner and one customer asking about an issued statement. Available as a starter archive in the published repository release v0.1.0. That archive retains its original scenario and completion behavior. |
-| [Banking from sample source](banking-advice-agent/README.md) | Build either the Java or Python bank, configure the shared LLM banking partner and run the customer through the published SDK. Includes fixed-statement and monthly-statement configurations. |
+| [Banking from sample source](banking-advice-agent/README.md) | Build either bank and configure the shared LLM partner. The default and monthly cases use the published customer SDK; strict issued-statement completion uses the published native SDK and requires the supporting local platform described in the guide. |
 | [Marketing from sample source](integration/marketing-ops-a2a/README.md#native-customer-simulation) | Build the Marketing Ops provider and LLM Creative Agency, configure their connections and launch a customer seeking campaign advice. |
 
-For all three paths, first download the archive and checksum from the public
+For the released starter and compatible source scenarios, first download the
+archive and checksum from the public
 [Astraform Platform v0.2.0 release](https://github.com/astraform/releases/releases/tag/v0.2.0).
 Follow its included README to verify, extract and initialize the bundle, select
 Gemini or Ollama for customer agents, and start the platform. The platform bundle
@@ -90,14 +94,22 @@ Each author kit includes both integration directions: domain interfaces for
 Astraform to call your provider, and a platform client for configuring customers,
 launching simulations and retrieving results. Use:
 
-- Java: [`ai.astraform:remote-domain-author-kit-java:0.4.2`](https://central.sonatype.com/artifact/ai.astraform/remote-domain-author-kit-java/0.4.2), with Java 21 and Maven 3.9+ for these samples.
-- Python: [`astraform-remote-domain-author-kit==0.3.2`](https://pypi.org/project/astraform-remote-domain-author-kit/0.3.2/), with Python 3.12+ and the module's committed `uv.lock`.
-- Public [contracts 1.2.0](https://github.com/astraform/remote-domain-contracts/releases/tag/v1.2.0), covering both platform and domain-provider APIs.
+- Java: [`ai.astraform:remote-domain-author-kit-java:0.4.3`](https://central.sonatype.com/artifact/ai.astraform/remote-domain-author-kit-java/0.4.3), with Java 21 and Maven 3.9+ for these samples.
+- Python: [`astraform-remote-domain-author-kit==0.3.3`](https://pypi.org/project/astraform-remote-domain-author-kit/0.3.3/), with Python 3.12+ and the module's committed `uv.lock`.
+- Public [contracts 1.2.1](https://github.com/astraform/remote-domain-contracts/releases/tag/v1.2.1), covering both platform and domain-provider APIs.
 
 The Java modules resolve the SDK from Maven Central; Python resolves it from
-PyPI. Conformance packages remain separate validation tools. No SDK checkout,
-private build parent, platform source path or standalone platform-client package
-is required. See each module README for its local build, database and test commands.
+PyPI. Conformance packages remain separate validation tools. Those released
+dependencies need no SDK checkout, private build parent or standalone
+platform-client package. See each module README for its build and test commands.
+
+Published Java 0.4.3 and Python 0.3.3 preserve an explicit
+`completionPolicy.requireCustomerFinish` Boolean through their native generated
+clients. The launchers retain their preflight guard for older unsupported SDKs;
+they never drop or manually insert the field. Current bank/advice source locks
+install Python 0.3.3. Strict completion also requires the supporting platform
+implementation; the published platform v0.2.0 and samples v0.1.0 images/archives
+retain their original behavior. New source pins do not upgrade existing images.
 
 The root `compose.yaml` builds sample services from this repository; it does not
 start Astraform. Select the services required by your chosen guide and supply
@@ -120,8 +132,9 @@ platform **v0.2.0**, Python SDK **0.3.2** and contracts **1.2.0**.
 Local onboarding work adds [Java/Python issued/monthly banking candidates](deploy/banking-starter/README.md#local-java-and-scheduled-statement-candidates)
 and a [marketing candidate](deploy/marketing-starter/README.md), all marked
 `localVerificationOnly`. They are not additional public release assets. The
-local issued scenario requires the unreleased customer-FINISH platform fix;
-public v0.2.0 retains the original completion behavior.
+local issued scenario requires both the unreleased customer-FINISH platform fix
+and a supporting native typed customer SDK. Public v0.2.0 and the original
+released starter retain their original completion behavior.
 
 Platform deployment bundles remain in [astraform/releases](https://github.com/astraform/releases/releases).
 Platform and SDK versions are independent of the samples version. Only download
