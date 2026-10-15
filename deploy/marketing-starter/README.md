@@ -1,4 +1,4 @@
-# Marketing starter — local verification candidate
+# Marketing starter
 
 Run the Marketing Ops domain and its LLM Creative Agency from images built for
 this candidate, then launch a real-model customer through Python SDK **0.3.3**.
@@ -8,10 +8,14 @@ candidate images retain the dependency versions in their original manifests.
 The platform is a separate image bundle. Customer and partner models are
 configured independently.
 
-This new starter is `localVerificationOnly`: it requires the installed image IDs
-recorded in `bundle-manifest.json`. No marketing starter has been published.
-Do not distribute it as a verified public download or infer partner acceptance
-from image availability. `image-lock.json`, `release.env`, `starter-config.json`
+Samples **v0.2.0** prepares a scheduled-marketing public archive targeting
+**platform v0.3.0**. Neither new release is published yet. Public-mode preparation
+requires `--platform-release v0.3.0`, anonymous digest-pinned images and verified
+source/architecture metadata; release selection remains `publicationReady:false`
+until real artifacts are reviewed. The separate `--local-verification` mode
+still records installed image IDs and `localVerificationOnly`, including the
+current-boundary option. Do not distribute a local rehearsal as a public download
+or infer independent partner acceptance from image availability. `image-lock.json`, `release.env`, `starter-config.json`
 and the manifest identify its topology, scenario, source and actual payload.
 The tools service reuses a Python SDK image, while the marketing launcher and
 the shared `customer-run-evidence.py` utility are supplied by this archive and mounted
@@ -41,7 +45,7 @@ on a trusted private network. This starter publishes no host ports.
 Verify the archive's SHA256 checksum before extraction. From its directory:
 
 ```sh
-python3 init.py --platform ../astraform-platform-v0.2.0 --model gemini
+python3 init.py --platform ../astraform-platform-v0.3.0 --model gemini
 ```
 
 Select `--model ollama` for the existing local marketing model profile. Configure
@@ -65,8 +69,9 @@ Start the platform, then recreate its Runtime to load the new connections:
 ./starter.sh run --rm customer --output /runs/first --wait
 ```
 
+For a verified public archive, run `./starter.sh pull` before starting its services.
 Local archives require installed images; do not pull their local tags from a
-registry. A new launch creates and publishes one Catalog definition and launches
+registry. Platform v0.2.0 cannot run these strict marketing templates. A new launch creates and publishes one Catalog definition and launches
 one journey. The helper saves those operation identities before its first write.
 A response timeout never causes a replacement customer or launch.
 

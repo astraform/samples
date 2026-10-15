@@ -3,6 +3,20 @@
 All examples share one samples repository version. Platform and SDK releases are
 versioned separately. Detailed notes live under [docs/releases](docs/releases).
 
+## v0.2.0 (unreleased)
+
+- Prepare Python-issued, Java-issued, Java-monthly and scheduled-marketing
+  archives under one samples release, targeting platform v0.3.0 and published
+  Java 0.4.3/Python 0.3.3/contracts 1.2.1.
+- Validate and forward explicit bank/scenario selections through the existing
+  release owner; retain native completion/domain requirements and deterministic
+  archive, anonymous-image and immutable-publication checks.
+- Preserve explicitly marked local rehearsals and historical v0.1.0 bytes.
+  The draft release selection remains unready until real revisions, image
+  digests and archive checksums are reviewed.
+
+See [v0.2.0 preparation notes](docs/releases/v0.2.0.md).
+
 ## v0.1.0
 
 - Publish the public Java, Python, banking, marketing and refund source examples

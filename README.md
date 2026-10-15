@@ -1,12 +1,13 @@
 # Astraform Samples
 
 Build and adapt partner services that Astraform customer agents can exercise.
-The released starter and source scenarios that omit
-`completionPolicy.requireCustomerFinish` use published Java/Python SDKs. Platform
-operations use their generated clients; partner services expose A2A, MCP and
-domain APIs. These released cases use Astraform's container bundle without a
-platform source checkout. The strict issued-statement source scenario requires
-supporting native typed customer SDK and platform changes that remain unreleased.
+Platform operations use the published Java/Python SDKs directly; partner
+services expose A2A, MCP and domain APIs. The next samples release, **v0.2.0**,
+is prepared locally for **platform v0.3.0**, Java **0.4.3**, Python **0.3.3** and
+contracts **1.2.1**. Those new platform/sample artifacts are not yet published.
+Strict issued banking and marketing require that supporting platform as well
+as the native typed SDK. The immutable public baseline remains samples v0.1.0
+with platform v0.2.0 and its original dependency versions.
 
 Clone the examples to build and adapt them:
 
@@ -23,10 +24,12 @@ cd samples
 | [Banking from sample source](banking-advice-agent/README.md) | Build either bank and configure the shared LLM partner. The default and monthly cases use the published customer SDK; strict issued-statement completion uses the published native SDK and requires the supporting local platform described in the guide. |
 | [Marketing from sample source](integration/marketing-ops-a2a/README.md#native-customer-simulation) | Build the Marketing Ops provider and LLM Creative Agency, configure their connections and launch a customer seeking campaign advice. |
 
-For the released starter and compatible source scenarios, first download the
-archive and checksum from the public
-[Astraform Platform v0.2.0 release](https://github.com/astraform/releases/releases/tag/v0.2.0).
-Follow its included README to verify, extract and initialize the bundle, select
+For the historical starter v0.1.0 and compatible non-strict source scenarios,
+the public baseline is [Astraform Platform v0.2.0](https://github.com/astraform/releases/releases/tag/v0.2.0).
+Current strict templates and the next starter release target platform **v0.3.0**;
+obtain its archive/checksum from the [public release list](https://github.com/astraform/releases/releases)
+only after publication. Follow the selected bundle's README to verify, extract
+and initialize it, select
 Gemini or Ollama for customer agents, and start the platform. The platform bundle
 and editable sample source are separate: the samples do not build or import
 Astraform runtime modules.
@@ -129,18 +132,21 @@ checksum. Java, marketing and the other examples are available as source; they
 do not yet have published starter archives. The released banking starter targets
 platform **v0.2.0**, Python SDK **0.3.2** and contracts **1.2.0**.
 
-Local onboarding work adds [Java/Python issued/monthly banking candidates](deploy/banking-starter/README.md#local-java-and-scheduled-statement-candidates)
-and a [marketing candidate](deploy/marketing-starter/README.md), all marked
-`localVerificationOnly`. They are not additional public release assets. The
-local issued scenario requires both the unreleased customer-FINISH platform fix
-and a supporting native typed customer SDK. Public v0.2.0 and the original
-released starter retain their original completion behavior.
+The **v0.2.0 preparation** selects Python-issued, Java-issued, Java-monthly
+[banking starters](deploy/banking-starter/README.md#local-java-and-scheduled-statement-candidates)
+and a [scheduled marketing starter](deploy/marketing-starter/README.md), requiring
+platform **v0.3.0**. The existing packagers accept an explicit supporting platform
+release for public-mode candidates and retain a separate `localVerificationOnly`
+mode for installed-image rehearsals. Neither mode publishes artifacts.
+`release.json` stays `publicationReady:false` with unset artifact identities until
+the actual images and archives pass review. Do not use the old v0.2.0 platform
+download for strict templates or treat this source plan as a published release.
 
 Platform deployment bundles remain in [astraform/releases](https://github.com/astraform/releases/releases).
 Platform and SDK versions are independent of the samples version. Only download
 assets after their release is published; passing CI is not publication.
 
-See the [changelog](CHANGELOG.md), [v0.1.0 release notes](docs/releases/v0.1.0.md)
+See the [changelog](CHANGELOG.md), [v0.2.0 preparation notes](docs/releases/v0.2.0.md), [historical v0.1.0 notes](docs/releases/v0.1.0.md)
 and [maintainer publication instructions](docs/PUBLICATION_CHECKLIST.md). One
 **Publish Samples Release** workflow prepares or publishes the repository release.
 Image publication is separate and is needed only when images change.

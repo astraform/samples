@@ -57,12 +57,12 @@ class BankingStarterPackageTest(unittest.TestCase):
 
     def test_public_archive_contains_only_starter_files_and_verifiable_metadata(self):
         with patch.object(packager.subprocess, "check_output", side_effect=self.registry):
-            bundle = packager.package("v0.1.0", self.images, self.output, source_revision=self.source_revision)
+            bundle = packager.package("v0.1.0", self.images, self.output, source_revision=self.source_revision, platform_release="v0.3.0")
         manifest = json.loads((bundle / "bundle-manifest.json").read_text())
         self.assertNotIn("localVerificationOnly", manifest)
         self.assertNotIn("sourceRevisionMeaning", manifest)
         self.assertEqual(self.source_revision, manifest["sourceRevision"])
-        self.assertEqual({"platform": "0.2.0", "pythonSdk": "0.3.2", "contracts": "1.2.0"},
+        self.assertEqual({"platform": "0.3.0", "pythonSdk": "0.3.3", "contracts": "1.2.1"},
                          manifest["compatibility"])
         self.assertEqual(self.images, json.loads((bundle / "image-lock.json").read_text()))
         self.assertEqual(self.scenario, json.loads((bundle / "scenario.json").read_text()))
@@ -96,13 +96,13 @@ class BankingStarterPackageTest(unittest.TestCase):
 
     def test_archive_is_reproducible_across_source_mtime_and_permission_changes(self):
         with patch.object(packager.subprocess, "check_output", side_effect=self.registry):
-            bundle = packager.package("v0.1.0", self.images, self.output, source_revision=self.source_revision)
+            bundle = packager.package("v0.1.0", self.images, self.output, source_revision=self.source_revision, platform_release="v0.3.0")
             for relative in self.files.values():
                 path = self.root / relative
                 os.utime(path, (1800000000, 1800000000))
                 path.chmod(0o600)
             other = self.output / "another"
-            packager.package("v0.1.0", self.images, other, source_revision=self.source_revision)
+            packager.package("v0.1.0", self.images, other, source_revision=self.source_revision, platform_release="v0.3.0")
         name = bundle.name + ".tar.gz"
         self.assertEqual((self.output / name).read_bytes(), (other / name).read_bytes())
 
@@ -115,13 +115,14 @@ class BankingStarterPackageTest(unittest.TestCase):
         with patch.object(packager.subprocess, "check_output") as docker:
             for revision in (None, "main", "123abc"):
                 with self.subTest(revision=revision), self.assertRaisesRegex(ValueError, "full Git commit"):
-                    packager.package("v0.1.0", self.images, self.output, source_revision=revision)
+                    packager.package("v0.1.0", self.images, self.output, source_revision=revision,
+                                     platform_release="v0.3.0")
             for images in cases:
                 with self.subTest(images=images), self.assertRaises(ValueError):
-                    packager.package("v0.1.0", images, self.output, source_revision=self.source_revision)
+                    packager.package("v0.1.0", images, self.output, source_revision=self.source_revision, platform_release="v0.3.0")
             (self.root / packager.FILES["scenario.json"]).unlink()
             with self.assertRaisesRegex(ValueError, "Missing or unsafe"):
-                packager.package("v0.1.0", self.images, self.output, source_revision=self.source_revision)
+                packager.package("v0.1.0", self.images, self.output, source_revision=self.source_revision, platform_release="v0.3.0")
             docker.assert_not_called()
         self.assertFalse(self.output.exists())
 
@@ -143,7 +144,7 @@ class BankingStarterPackageTest(unittest.TestCase):
                 return json.dumps(data)
             with self.subTest(fault=fault), patch.object(packager.subprocess, "check_output", side_effect=inspect):
                 with self.assertRaises((ValueError, subprocess.CalledProcessError)):
-                    packager.package("v0.1.0", self.images, self.output, source_revision=self.source_revision)
+                    packager.package("v0.1.0", self.images, self.output, source_revision=self.source_revision, platform_release="v0.3.0")
                 self.assertFalse(self.output.exists())
 
     def test_anonymous_registry_access_preserves_plugins_without_credentials(self):
@@ -164,7 +165,7 @@ class BankingStarterPackageTest(unittest.TestCase):
                              json.loads((anonymous / "config.json").read_text()))
             return self.registry(command, **kwargs)
         with patch.object(packager.subprocess, "check_output", side_effect=inspect):
-            packager.package("v0.1.0", self.images, self.output, source_revision=self.source_revision)
+            packager.package("v0.1.0", self.images, self.output, source_revision=self.source_revision, platform_release="v0.3.0")
         self.assertEqual(before, original.read_bytes())
 
     def test_all_bank_scenario_variants_preserve_implementation_and_platform_requirements(self):
@@ -183,14 +184,14 @@ class BankingStarterPackageTest(unittest.TestCase):
                 if bank == "java":
                     self.assertEqual("0.4.3", manifest["compatibility"]["javaSdk"])
 
-    def test_new_variants_and_finish_criteria_cannot_be_packaged_as_public_compatible_assets(self):
+    def test_public_variants_require_an_explicit_supporting_platform_release(self):
         with patch.object(packager.subprocess, "check_output") as docker:
             for bank, scenario in (("java", "issued"), ("python", "monthly"), ("java", "monthly")):
-                with self.subTest(bank=bank, scenario=scenario), self.assertRaisesRegex(ValueError, "local-verification"):
+                with self.subTest(bank=bank, scenario=scenario), self.assertRaisesRegex(ValueError, "platform-release"):
                     packager.package("v0.1.0", self.images, self.output, False, self.source_revision, bank, scenario)
             self.scenario["launchRequestTemplate"]["completionPolicy"]["requireCustomerFinish"] = True
             (self.root / packager.FILES["scenario.json"]).write_text(json.dumps(self.scenario))
-            with self.assertRaisesRegex(ValueError, "local-verification"):
+            with self.assertRaisesRegex(ValueError, "platform-release"):
                 packager.package("v0.1.0", self.images, self.output, False, self.source_revision)
             docker.assert_not_called()
         self.assertFalse(self.output.exists())
@@ -207,7 +208,7 @@ class BankingStarterPackageTest(unittest.TestCase):
                 self.scenario["launchRequestTemplate"]["completionPolicy"]["requireCustomerFinish"] = value
                 (self.root / packager.FILES["scenario.json"]).write_text(json.dumps(self.scenario))
                 with patch.object(packager.subprocess, "check_output") as docker:
-                    with self.assertRaisesRegex(ValueError, "local-verification"):
+                    with self.assertRaisesRegex(ValueError, "platform-release"):
                         packager.package("v0.1.0", self.images, self.output / f"public-{value}", False, self.source_revision)
                     docker.assert_not_called()
                 with patch.object(packager.subprocess, "check_output", return_value="sha256:" + "b" * 64 + "\n"):
@@ -225,6 +226,65 @@ class BankingStarterPackageTest(unittest.TestCase):
                 self.assertIn("separate installed-package verification", manifest["compatibilityMeaning"])
                 self.assertEqual(self.scenario, json.loads((bundle / "scenario.json").read_text()))
                 self.assertNotIn("customer-run-evidence.py", manifest["files"])
+
+    def test_public_bank_variants_preserve_completion_and_native_scheduling_requirements(self):
+        for bank in ("python", "java"):
+            for scenario in ("issued", "monthly"):
+                for finish in (False, True):
+                    selected = {"launchRequestTemplate": {"completionPolicy": {
+                        "mode": "GOAL", "requireCustomerFinish": finish}}}
+                    scenario_file = "issued-statement-configuration.json" if scenario == "issued" else "three-month-configuration.json"
+                    (self.root / "banking-advice-agent" / scenario_file).write_text(json.dumps(selected))
+                    with self.subTest(bank=bank, scenario=scenario, finish=finish), \
+                         patch.object(packager.subprocess, "check_output", side_effect=self.registry):
+                        bundle = packager.package("v0.1.0", self.images,
+                                                  self.output / f"{bank}-{scenario}-{finish}",
+                                                  False, self.source_revision, bank, scenario, "v0.3.0")
+                    manifest = json.loads((bundle / "bundle-manifest.json").read_text())
+                    configuration = json.loads((bundle / "starter-config.json").read_text())
+                    self.assertNotIn("localVerificationOnly", manifest)
+                    self.assertNotIn("localImageIds", manifest)
+                    self.assertFalse(configuration["requiresUnreleasedPlatform"])
+                    self.assertFalse(configuration["requiresUnreleasedCustomerSdk"])
+                    self.assertEqual("0.3.0", manifest["compatibility"]["platform"])
+                    self.assertEqual("0.3.3", manifest["compatibility"]["pythonSdk"])
+                    self.assertEqual("1.2.1", manifest["compatibility"]["contracts"])
+                    self.assertEqual("0.4.3" if bank == "java" else None,
+                                     manifest["compatibility"].get("javaSdk"))
+                    self.assertEqual("v0.3.0", manifest["requiredPlatform"]["release"])
+                    self.assertIs(finish, manifest["requiredPlatform"]["completionPolicy.requireCustomerFinish"])
+                    self.assertEqual(["completionPolicy.requireCustomerFinish"], configuration["requiredCustomerSdkCapabilities"])
+                    capabilities = (["retainedParticipationSupported"] if scenario == "monthly" else []) + ["completionPolicy.requireCustomerFinish"]
+                    self.assertEqual(capabilities, configuration["requiredPlatformCapabilities"])
+                    self.assertEqual(True if scenario == "monthly" else None,
+                                     manifest["requiredPlatform"].get("retainedParticipationSupported"))
+                    self.assertEqual(selected, json.loads((bundle / "scenario.json").read_text()))
+                    self.assertIn("not proof of platform publication", manifest["compatibilityMeaning"])
+
+    def test_public_platform_release_validation_and_local_mode_are_unambiguous(self):
+        with patch.object(packager.subprocess, "check_output") as docker:
+            for release in (None, "v0.2.0", "v0.2.99", "v1.0.0", "v0.3.0-SNAPSHOT", "0.3.0", "v00.3.0", "latest", True):
+                with self.subTest(release=release), self.assertRaises(ValueError):
+                    packager.package("v0.1.0", self.images, self.output,
+                                     source_revision=self.source_revision, platform_release=release)
+            with self.assertRaisesRegex(ValueError, "cannot be combined"):
+                packager.package("v0.1.0", self.images, self.output, True, self.source_revision,
+                                 platform_release="v0.3.0")
+            docker.assert_not_called()
+        self.assertFalse(self.output.exists())
+
+    def test_public_packaging_never_overwrites_a_prepared_archive(self):
+        with patch.object(packager.subprocess, "check_output", side_effect=self.registry):
+            bundle = packager.package("v0.1.0", self.images, self.output,
+                                      source_revision=self.source_revision, platform_release="v0.3.0")
+        archive = Path(str(bundle) + ".tar.gz")
+        original = archive.read_bytes()
+        with patch.object(packager.subprocess, "check_output") as docker:
+            with self.assertRaisesRegex(ValueError, "already exists"):
+                packager.package("v0.1.0", self.images, self.output,
+                                 source_revision=self.source_revision, platform_release="v0.3.0")
+            docker.assert_not_called()
+        self.assertEqual(original, archive.read_bytes())
 
     def test_invalid_finish_value_fails_before_images_or_archive(self):
         for value in (None, "true", 0):

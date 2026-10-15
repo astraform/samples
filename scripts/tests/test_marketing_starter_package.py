@@ -31,6 +31,78 @@ class MarketingStarterPackageTest(unittest.TestCase):
         self.directory = Path(temporary.name)
         self.images = {key: "astraform-test/" + key + ":local" for key in ("domain", "agency", "tools")}
 
+    def registry(self, command, **kwargs):
+        configuration = json.loads((Path(kwargs["env"]["DOCKER_CONFIG"]) / "config.json").read_text())
+        self.assertEqual({"cliPluginsExtraDirs"}, set(configuration))
+        if command[-1] == "{{json .Manifest}}":
+            return json.dumps({"digest": "sha256:" + "a" * 64, "manifests": [
+                {"platform": {"os": "linux", "architecture": arch}} for arch in ("amd64", "arm64")]})
+        return json.dumps({f"linux/{arch}": {"os": "linux", "architecture": arch,
+                           "config": {"Labels": {"org.opencontainers.image.revision": "a" * 40}}}
+                           for arch in ("amd64", "arm64")})
+
+    def test_public_marketing_scenarios_use_pinned_anonymous_images_and_released_dependencies(self):
+        images = {key: f"registry.example/{key}@sha256:" + "a" * 64 for key in self.images}
+        source = self.directory / "public-source"
+        for relative in {**packager.FILES,
+                         "scheduled": "integration/marketing-ops-a2a/sample-configuration.json",
+                         "current": "integration/marketing-ops-a2a/current-state-configuration.json",
+                         "notes": "docs/releases/v0.1.0.md"}.values():
+            target = source / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / relative, target)
+        for scenario, name in (("scheduled", "sample-configuration.json"),
+                               ("current", "current-state-configuration.json")):
+            for finish in (False, True):
+                selected = json.loads((ROOT / "integration/marketing-ops-a2a" / name).read_text())
+                selected["launchRequestTemplate"]["completionPolicy"]["requireCustomerFinish"] = finish
+                (source / "integration/marketing-ops-a2a" / name).write_text(json.dumps(selected))
+                with self.subTest(scenario=scenario, finish=finish), \
+                     patch.object(packager, "ROOT", source), \
+                     patch.object(packager.packaging, "ROOT", source), \
+                     patch.object(packager.packaging.subprocess, "check_output", side_effect=self.registry):
+                    bundle = packager.package("v0.1.0", images, self.directory / f"public-{scenario}-{finish}",
+                                              False, "a" * 40, scenario, "v0.3.0")
+                manifest = json.loads((bundle / "bundle-manifest.json").read_text())
+                configuration = json.loads((bundle / "starter-config.json").read_text())
+                self.assertNotIn("localVerificationOnly", manifest)
+                self.assertNotIn("localImageIds", manifest)
+                self.assertEqual({"platform": "0.3.0", "javaSdk": "0.4.3", "pythonSdk": "0.3.3", "contracts": "1.2.1"},
+                                 manifest["compatibility"])
+                self.assertFalse(configuration["requiresUnreleasedPlatform"])
+                self.assertFalse(configuration["requiresUnreleasedCustomerSdk"])
+                self.assertEqual(["completionPolicy.requireCustomerFinish"], configuration["requiredPlatformCapabilities"])
+                self.assertEqual(["completionPolicy.requireCustomerFinish"], configuration["requiredCustomerSdkCapabilities"])
+                self.assertIs(finish, manifest["requiredPlatform"]["completionPolicy.requireCustomerFinish"])
+                self.assertEqual("v0.3.0", manifest["requiredPlatform"]["release"])
+                self.assertEqual(scenario, configuration["scenario"])
+                self.assertEqual(selected, json.loads((bundle / "scenario.json").read_text()))
+                self.assertIn("not proof of platform publication", manifest["compatibilityMeaning"])
+                for relative, metadata in manifest["files"].items():
+                    self.assertEqual(packager.packaging.file_hash(bundle / relative), metadata["sha256"])
+
+    def test_public_platform_declaration_does_not_allow_tags_private_images_or_local_markers(self):
+        images = {key: f"registry.example/{key}@sha256:" + "a" * 64 for key in self.images}
+        with patch.object(packager.packaging.subprocess, "check_output") as docker:
+            for release in (None, "v0.2.0", "v1.0.0", "v0.3.0-rc.1", "0.3.0"):
+                with self.subTest(release=release), self.assertRaises(ValueError):
+                    packager.package("v0.1.0", images, self.directory / "invalid-platform", False,
+                                     "a" * 40, platform_release=release)
+            with self.assertRaisesRegex(ValueError, "cannot be combined"):
+                packager.package("v0.1.0", images, self.directory / "mixed", True,
+                                 "a" * 40, platform_release="v0.3.0")
+            with self.assertRaisesRegex(ValueError, "digest-pinned"):
+                packager.package("v0.1.0", self.images, self.directory / "tags", False,
+                                 "a" * 40, platform_release="v0.3.0")
+            docker.assert_not_called()
+        with patch.object(packager.packaging.subprocess, "check_output",
+                          side_effect=subprocess.CalledProcessError(1, ["docker"], stderr="unauthorized")):
+            with self.assertRaises(subprocess.CalledProcessError):
+                packager.package("v0.1.0", images, self.directory / "private", False,
+                                 "a" * 40, platform_release="v0.3.0")
+        for name in ("invalid-platform", "mixed", "tags", "private"):
+            self.assertFalse((self.directory / name).exists())
+
     def test_both_scenarios_share_writer_and_ship_hash_verified_scripts_not_credentials(self):
         for scenario in ("scheduled", "current"):
             with self.subTest(scenario=scenario), patch.object(packager.packaging.subprocess, "check_output", return_value="sha256:" + "a" * 64 + "\n"):
@@ -136,9 +208,9 @@ class MarketingStarterPackageTest(unittest.TestCase):
                                  cwd=bundle, capture_output=True, text=True)
         self.assertNotEqual(0, missing.returncode)
 
-    def test_public_packaging_and_extra_image_roles_are_rejected_before_docker_or_output(self):
+    def test_missing_platform_release_and_extra_image_roles_fail_before_docker_or_output(self):
         with patch.object(packager.packaging.subprocess, "check_output") as docker:
-            with self.assertRaisesRegex(ValueError, "local verification"):
+            with self.assertRaisesRegex(ValueError, "platform-release"):
                 packager.package("v0.1.0", self.images, self.directory / "public", False, "a" * 40)
             with self.assertRaisesRegex(ValueError, "exactly domain"):
                 packager.package("v0.1.0", {**self.images, "postgres": "postgres:16"}, self.directory / "extra", True, "a" * 40)

@@ -4,7 +4,7 @@ This starter connects a real LLM customer in Astraform to a real LLM banking age
 
 The immutable published baseline uses **Astraform Platform v0.2.0** and **Python SDK 0.3.2** in the bank/advice images. Current source targets **Java SDK 0.4.3 / Python SDK 0.3.3** for newly built local candidates; a source version target does not upgrade an existing image. You need the platform and starter archives, Docker and your model configuration; no private source checkout or host SDK installation is required. A package marked `localVerificationOnly` requires the recorded locally installed images and is an engineering rehearsal, not a public starter release.
 
-The updated local source scenario opts into `completionPolicy.requireCustomerFinish: true`. It requires both the locally updated Experiment service and a customer SDK whose generated completion-policy model preserves this field. Published platform v0.2.0 and Python SDK 0.3.2 do not support it. A customer launcher using SDK 0.3.2 rejects any explicit Boolean value before bank seeding or create/publish/launch writes; it does not add the field through a transport bridge. Inspection of an existing run still uses the published SDK. Existing published images and archives retain their recorded dependency versions. Older `starter-config.json` manifests retain their recorded `requiresUnreleasedCustomerSdk` and `requiredCustomerSdkCapabilities` markers. Published Python SDK 0.3.3 now supplies the native client capability; using it requires a new verified customer installation/image and the supporting platform. Existing archive bytes and recorded image versions are unchanged.
+The current issued-statement scenario opts into `completionPolicy.requireCustomerFinish: true`. It requires the supporting platform v0.3.0 implementation and a customer SDK whose generated completion-policy model preserves this field. Platform v0.3.0 and samples v0.2.0 are currently release-preparation targets; use them only after matching artifacts are published and verified. Published platform v0.2.0 and Python SDK 0.3.2 do not support it. A customer launcher using SDK 0.3.2 rejects any explicit Boolean value before bank seeding or create/publish/launch writes; it does not add the field through a transport bridge. Inspection of an existing run still uses the published SDK. Existing published images and archives retain their recorded dependency versions. Older `starter-config.json` manifests retain their recorded `requiresUnreleasedCustomerSdk` and `requiredCustomerSdkCapabilities` markers. Published Python SDK 0.3.3 now supplies the native client capability; using it requires a new verified customer installation/image and the supporting platform. Existing archive bytes and recorded image versions are unchanged.
 
 The banking image owns `run-customer.py` and the shared `customer-run-evidence.py` beside it in `/app`. The updated Docker build includes both. This archive does not supply replacement launcher scripts or a helper service, and an older published image is not assumed to contain the updated code.
 
@@ -20,15 +20,25 @@ Three prebuilt images run the bank, its PostgreSQL database and the banking agen
 
 Select a published [Astraform Samples release](https://github.com/astraform/samples/releases) and download its banking starter archive and matching checksum. Samples share one repository version; each prepared starter is a separate asset, so you do not need to install the other examples. Check before extracting:
 
+The prepared v0.2.0 release uses these distinct names; download them only after
+publication. Choose the asset matching your bank and scenario:
+
+| Variant | Archive |
+| --- | --- |
+| Python issued | `astraform-banking-starter-v0.2.0.tar.gz` |
+| Java issued | `astraform-java-banking-issued-starter-v0.2.0.tar.gz` |
+| Java monthly | `astraform-java-banking-monthly-starter-v0.2.0.tar.gz` |
+
 ```sh
-shasum -a 256 -c astraform-banking-starter-VERSION.tar.gz.sha256
-tar -xzf astraform-banking-starter-VERSION.tar.gz
-cd astraform-banking-starter-VERSION
+archive=astraform-banking-starter-v0.2.0.tar.gz
+shasum -a 256 -c "$archive.sha256"
+tar -xzf "$archive"
+cd "${archive%.tar.gz}"
 ```
 
-Replace `VERSION` with the version in the downloaded asset name (for example, `v0.1.0`). On Linux, use `sha256sum -c` instead of `shasum -a 256 -c`. Keep `bundle-manifest.json`, `image-lock.json` and `release.env` with the extracted files: they identify the package contents and exact container images. The starter and platform are separate downloads and can have different version numbers.
+Set `archive` to the exact downloaded filename, including its version. The historical Python archive uses `v0.1.0`. On Linux, use `sha256sum -c` instead of `shasum -a 256 -c`. Keep `bundle-manifest.json`, `image-lock.json` and `release.env` with the extracted files: they identify the package contents and exact container images. The starter and platform are separate downloads and can have different version numbers.
 
-Get the platform bundle from the [public v0.2.0 release](https://github.com/astraform/releases/releases/tag/v0.2.0) and follow its included guide to initialize it. Configure its customer model before continuing below.
+For the immutable starter v0.1.0, use the [public platform v0.2.0 release](https://github.com/astraform/releases/releases/tag/v0.2.0). The prepared starter v0.2.0 requires platform **v0.3.0**; obtain it from the [platform release list](https://github.com/astraform/releases/releases) only after publication and checksum verification. Follow the selected bundle's guide and configure its customer model before continuing.
 
 ## Prerequisites
 
@@ -43,7 +53,7 @@ The starter publishes no host ports. It connects to the platform's private Docke
 From the extracted starter directory, point initialization at a fresh, initialized platform bundle:
 
 ```sh
-python3 init.py --platform ../astraform-platform-v0.2.0 --model gemini
+python3 init.py --platform ../astraform-platform-v0.3.0 --model gemini
 ```
 
 Use the actual platform folder name. `--model ollama` selects the partner's local-model template instead. Initialization writes `.env` and `private/partner.env`, creates `runs/`, saves a backup of the platform Runtime connection file and appends the banking MCP/A2A bindings to it. It refuses existing banking bindings so it cannot silently replace your integration. No services or simulations start during initialization.
@@ -87,7 +97,7 @@ Edit `scenario.json` before a new launch. These existing API fields are the conf
 | Bank data available before the run | `bankCustomerSeed.accounts` and `bankCustomerSeed.statements` |
 | Personal facts supplied to the customer | `launchRequestTemplate.facts` and `initialAgentState` |
 | Partner response requirements | `launchRequestTemplate.completionPolicy.partnerResponseConditions` |
-| Wait for customer completion | `launchRequestTemplate.completionPolicy.requireCustomerFinish` (local prerelease extension) |
+| Wait for customer completion | `launchRequestTemplate.completionPolicy.requireCustomerFinish` (native SDK 0.3.3 and supporting platform v0.3.0) |
 | Stop limits | `launchRequestTemplate.maxPartnerInteractions`; `completionPolicy.maxCustomerDecisions`, `maxRepeatedExchanges`, `maxWallTimeMs` |
 
 The goal is a human purpose; the response conditions check structured bank facts such as the account, statement month, amount and due date. Keep those conditions consistent if you change the seeded bank records. The local `requireCustomerFinish: true` setting also waits for an accepted customer `FINISH` after matching evidence, so a clarification request can continue instead of being cut off by the earlier receipt. It neither forces the customer to finish nor scores whether the partner's prose explains the AU$100 budget correctly; review that in the conversation evidence. Omission retains earlier receipt-only stopping behavior. Explicit false has that same runtime meaning but still requires a typed SDK that preserves the field. The launcher validates the raw Boolean and its typed round-trip, then calls the normal generated journey API; it never drops or manually reinserts the setting.
@@ -178,11 +188,15 @@ The Astraform-authored code, configuration and documentation in this component a
 
 ## Local Java and scheduled-statement candidates
 
-The existing packager now prepares local-only variants with `--bank python|java`
-and `--scenario issued|monthly`. It keeps the published `release.json`, image
-pins and original released archive unchanged. New variants require
-`--local-verification` and record installed image IDs. They are local verification
-candidates, not additional public release assets.
+The existing packager selects `--bank python|java` and `--scenario issued|monthly`.
+Public-mode preparation requires `--platform-release v0.3.0`, digest-pinned
+anonymous images and their actual full source revision. The shared samples
+v0.2.0 release plan selects Python-issued, Java-issued and Java-monthly variants.
+Its `publicationReady:false` selection is completed only after real artifact
+review; preparing an archive does not publish it. The separate
+`--local-verification` mode retains installed-image IDs and explicit local-only
+markers, including the existing Python-monthly option. Do not mix the two modes.
+Historical v0.1.0 archives and digests remain immutable.
 
 `starter-config.json` identifies the implementation, bank port, native domain
 profile and scenario. Java uses port 8094, JDBC settings and domain`banking`;
@@ -217,7 +231,8 @@ and exhausted limits remain recorded outcomes.
 
 For all local candidates, use the packaged images already installed and follow
 the existing initialization/start/inspect instructions. Do not pull local tags.
-The issued variant explicitly requires the unreleased customer-FINISH
-Experiment/API correction and cannot be certified against a public v0.2.0
-platform download. The initializer reports this requirement without altering
-the platform images or silently removing the criterion.
+The issued variant explicitly requires the customer-FINISH behavior targeted
+by platform v0.3.0; the public v0.2.0 download cannot supply it. Public-mode
+manifests record the selected release and required capabilities without claiming
+that it is published. Local manifests retain the unreleased-platform warning.
+Initialization never upgrades platform images or silently removes the criterion.

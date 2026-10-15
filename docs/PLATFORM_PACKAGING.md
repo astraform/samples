@@ -7,9 +7,13 @@ build a domain provider or run a customer simulation.
 
 ## Platform installation
 
-Download the archive and matching checksum from the public
-[Astraform Platform v0.2.0 release](https://github.com/astraform/releases/releases/tag/v0.2.0).
-The bundle contains image-only Compose deployment, locked image references,
+The immutable baseline is the public
+[Astraform Platform v0.2.0 release](https://github.com/astraform/releases/releases/tag/v0.2.0),
+paired with the original Python starter v0.1.0. Current strict issued-banking
+and marketing templates target **platform v0.3.0**, currently release preparation.
+Obtain that matching archive and checksum from the [public release list](https://github.com/astraform/releases/releases)
+only after publication; do not follow the strict walkthrough against v0.2.0.
+A delivered bundle contains image-only Compose deployment, locked image references,
 initialization tools and operating instructions. Follow its included README to
 verify the archive, initialize a Gemini or Ollama profile, configure your model
 and start the services. The platform is distributed separately from these samples.
@@ -167,14 +171,18 @@ stream, and downloading one starter does not install the others.
 The published first samples release, **v0.1.0**, includes a Python banking starter targeting
 platform **v0.2.0**, Python SDK **0.3.2** and contracts **1.2.0**. Java and marketing
 remain source examples in that release; they do not yet have starter archives.
-Local starter preparation now covers Java/Python banking (issued or monthly)
-and marketing (scheduled or current-boundary), using the shared deterministic
-packaging owner. Each new candidate is explicitly `localVerificationOnly`,
-records installed image IDs and payload hashes, and leaves published locks,
-release metadata and archives unchanged. The issued banking candidate requires
-both the unreleased customer-FINISH Experiment/API fix and a supporting native
-typed customer SDK. Published Java 0.4.3/Python 0.3.3 supply the SDK support, but a
-public v0.2.0 platform download does not supply the strict stopping behavior.
+The v0.2.0 release plan covers Python-issued, Java-issued, Java-monthly and
+scheduled-marketing archives through the existing deterministic packagers.
+Their public mode takes `--platform-release v0.3.0`; the separate local mode
+still covers Java/Python issued/monthly and scheduled/current marketing,
+records `localVerificationOnly`, installed image IDs and payload hashes, and
+cannot be relabelled as a public package. Historical published bytes are unchanged. The next public-mode candidates require an explicit **platform v0.3.0**
+selection and published Java 0.4.3/Python 0.3.3/contracts 1.2.1. The existing
+packagers preserve required completion/native-domain capabilities and verify
+anonymous digest/architecture/source metadata. Public platform v0.2.0 does not
+supply strict stopping. Platform v0.3.0 and samples v0.2.0 are preparation targets,
+not currently available downloads; the release remains unready until actual
+images, revisions and archive checksums are reviewed.
 See the [banking guide](../deploy/banking-starter/README.md#local-java-and-scheduled-statement-candidates)
 and [marketing guide](../deploy/marketing-starter/README.md). Provider callbacks
 and Python customer launch/export are distinct verification paths. Older 0.3.2

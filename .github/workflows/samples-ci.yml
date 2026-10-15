@@ -373,6 +373,7 @@ jobs:
           provenance: mode=max
           sbom: true
           tags: ${{ steps.creative-agency-candidate.outputs.tag }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Smoke immutable Creative Agency candidate
         if: ${{ steps.image-selection.outputs.creative_agency == 'true' }}

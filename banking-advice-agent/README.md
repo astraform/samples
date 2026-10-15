@@ -4,7 +4,7 @@ The image-only Python banking starter is prepared under
 [`deploy/banking-starter`](../deploy/banking-starter/README.md). It reuses this agent
 and the Python bank. Published Python SDK 0.3.3 supports launch, inspection and
 evidence export, including native `completionPolicy.requireCustomerFinish`.
-The strict issued-statement scenario also requires the locally updated platform;
+The strict issued-statement scenario also requires the supporting platform v0.3.0 implementation (currently release preparation);
 the published platform v0.2.0 does not provide that stopping behavior.
 The published samples v0.1.0 Python banking starter retains its original scenario,
 SDK versions and completion behavior. The monthly source workflow below omits
@@ -25,9 +25,12 @@ that same banking backend with different access:
   the customer prompt.
 
 The customer uses the model selected by Astraform's deployment binding, such as
-Ollama or Gemini. Download the [platform v0.2.0 bundle](https://github.com/astraform/releases/releases/tag/v0.2.0)
-and initialize the selected profile using its included README. No platform source
-checkout or source build is required.
+Ollama or Gemini. The immutable baseline is the [platform v0.2.0 bundle](https://github.com/astraform/releases/releases/tag/v0.2.0);
+current strict templates target **platform v0.3.0**, which remains release
+preparation. Use the [published release list](https://github.com/astraform/releases/releases)
+to obtain a matching version after publication, then initialize the selected
+profile using its included README. No platform source checkout or source build
+is required for a delivered matching release.
 **Both actors use an LLM:** Astraform runs the customer model; this separately
 configured partner model answers the customer's actual question using bank records.
 The partner uses the official A2A Python SDK 1.1.4 and returns immediate A2A 1.0
@@ -93,7 +96,8 @@ not supply earlier exchanges. Astraform's customer memory remains separate.
 General multi-turn partner memory and model-selected bank tools are not implemented
 by this sample.
 
-The sample services below run alongside platform v0.2.0; they are not included
+The non-strict monthly sample below can run alongside platform v0.2.0; current
+strict issued-statement templates target platform v0.3.0. Sample services are not included
 in the platform images. The configuration uses the reference-state domain profile to attach a
 prepopulated bank customer and generate monthly statements in that same bank
 database. It starts before the first statement exists. This is a bounded monthly-statement example,
@@ -551,7 +555,7 @@ the previous receipt matched; all decision, interaction, repetition and time
 limits still apply. `FINISH` without matching evidence is not achievement.
 Omitted or false values preserve the earlier receipt-only stopping behavior.
 
-This optional field requires the locally updated Experiment service and a native
+This optional field targets the platform v0.3.0 Experiment service and a native
 customer SDK whose generated completion-policy model preserves the supplied
 Boolean. Published Python SDK 0.3.3 supplies this native client support;
 published platform v0.2.0 still lacks the required stopping behavior.

@@ -1,18 +1,62 @@
 {
-  "version": "v0.1.0",
-  "publicationReady": true,
+  "version": "v0.2.0",
+  "publicationReady": false,
+  "platformRelease": "v0.3.0",
   "starters": [
     {
       "name": "python-banking",
-      "packagingRevision": "8cfcb2cf3ddaf305124005acdc846ca1895713da",
-      "sourceRevision": "8cfcb2cf3ddaf305124005acdc846ca1895713da",
+      "packagingRevision": null,
+      "sourceRevision": null,
       "packager": "scripts/package-banking-starter.py",
+      "scenario": "issued",
       "images": {
-        "advice": "ghcr.io/astraform/banking-starter-advice@sha256:1107d42501d1e76ba66ce3b67c7fcff5dcb97595b5da25a7d8b600092c8ae7a4",
-        "banking": "ghcr.io/astraform/banking-starter-bank@sha256:a49f3d100c8d1102dbe0e5d51c8404228072f1b4e1beb36bcdbd3726a2b5a04b",
+        "banking": null,
+        "advice": null,
         "postgres": "postgres@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d"
       },
-      "archiveSha256": "70afe9cf66db3fe7485aef7b40b33d862345601a9b9804765fa286ef1d593f2d"
+      "archiveSha256": null,
+      "bank": "python"
+    },
+    {
+      "name": "java-banking",
+      "packagingRevision": null,
+      "sourceRevision": null,
+      "packager": "scripts/package-banking-starter.py",
+      "scenario": "issued",
+      "images": {
+        "banking": null,
+        "advice": null,
+        "postgres": "postgres@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d"
+      },
+      "archiveSha256": null,
+      "bank": "java"
+    },
+    {
+      "name": "java-monthly-banking",
+      "packagingRevision": null,
+      "sourceRevision": null,
+      "packager": "scripts/package-banking-starter.py",
+      "scenario": "monthly",
+      "images": {
+        "banking": null,
+        "advice": null,
+        "postgres": "postgres@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d"
+      },
+      "archiveSha256": null,
+      "bank": "java"
+    },
+    {
+      "name": "scheduled-marketing",
+      "packagingRevision": null,
+      "sourceRevision": null,
+      "packager": "scripts/package-marketing-starter.py",
+      "scenario": "scheduled",
+      "images": {
+        "domain": null,
+        "agency": null,
+        "tools": null
+      },
+      "archiveSha256": null
     }
   ]
 }

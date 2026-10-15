@@ -2,8 +2,11 @@
 
 
 Connect the marketing domain provider and its LLM creative agency to the
-[Astraform v0.2.0 deployment bundle](https://github.com/astraform/releases/releases/tag/v0.2.0).
-The bundle supplies Astraform's runtime and coordinator as released images.
+supporting **Astraform v0.3.0 deployment bundle**, currently in release
+preparation. Obtain it from the [public platform release list](https://github.com/astraform/releases/releases)
+after publication; the immutable v0.2.0 bundle does not support these strict
+templates. A delivered matching bundle supplies Runtime and the coordinator as
+released images.
 Build the sample services below and use the published SDK to launch a customer;
 no platform source checkout is required. The creative agency exposes A2A 1.0
 JSON-RPC through the A2A Java SDK.
@@ -335,9 +338,11 @@ inspection/export through the SDK. Marketing does not import the banking
 executable or start another coordinator.
 
 [The image-only marketing starter](../../deploy/marketing-starter/README.md)
-packages these scripts, scenario and private-network image topology for local
-verification. It is not published, and it does not replace this editable source
-example. Current source uses Java SDK 0.4.3 for the domain provider and Python
+packages these scripts, scenario and private-network image topology. The
+samples v0.2.0 release plan selects its scheduled variant with explicit platform
+v0.3.0 compatibility and reviewed anonymous images. It is not published yet;
+the separate local-verification mode keeps its local-only markers and does not
+replace this editable source example. Current source uses Java SDK 0.4.3 for the domain provider and Python
 SDK 0.3.3 for native customer launch/inspection/export. Existing starter candidates
 and published artifacts retain their recorded image versions; rebuild and verify
 new images before packaging these strict templates. Public platform/image/archive

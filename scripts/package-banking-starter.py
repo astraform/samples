@@ -22,7 +22,7 @@ FILES = {
     "bank-backend.input.schema.json": "banking-advice-agent/bank-backend.input.schema.json",
     "scenario.json": "banking-advice-agent/issued-statement-configuration.json",
 }
-COMPATIBILITY = {"platform": "0.2.0", "pythonSdk": "0.3.2", "contracts": "1.2.0"}
+COMPATIBILITY = {"pythonSdk": "0.3.3", "contracts": "1.2.1"}
 LOCAL_COMPATIBILITY = {"platform": "0.2.0", "pythonSdk": "0.3.3", "contracts": "1.2.1"}
 IMAGE_VARIABLES = {"banking": "BANKING_IMAGE", "advice": "ADVICE_IMAGE", "postgres": "POSTGRES_IMAGE"}
 DIGEST_IMAGE = re.compile(r"[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}")
@@ -32,6 +32,22 @@ TAGGED_IMAGE = re.compile(r"[a-z0-9][a-z0-9._:/-]*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,
 def require(condition, message):
     if not condition:
         raise ValueError(message)
+
+
+def declared_platform_release(local_verification, platform_release):
+    """Validate the selected dependency without claiming it has been published."""
+    if local_verification:
+        require(platform_release is None,
+                "--platform-release cannot be combined with --local-verification")
+        return None
+    require(isinstance(platform_release, str),
+            "Public packaging requires an explicit --platform-release such as v0.3.0")
+    version = re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", platform_release)
+    require(version is not None, "--platform-release must be a stable vMAJOR.MINOR.PATCH release")
+    numbers = tuple(map(int, version.groups()))
+    require(numbers[0] == 0 and numbers >= (0, 3, 0),
+            "Public starters require a supporting v0.x platform release, at least v0.3.0")
+    return platform_release
 
 
 def file_hash(path):
@@ -186,7 +202,7 @@ def package_bundle(version, images, output, source_revision, files, bundle_name,
 
 
 def package(version, images, output, local_verification=False, source_revision=None,
-            bank="python", scenario="issued"):
+            bank="python", scenario="issued", platform_release=None):
     require(bank in {"python", "java"}, "bank must be python or java")
     require(scenario in {"issued", "monthly"}, "scenario must be issued or monthly")
     require(isinstance(images, dict) and set(images) == set(IMAGE_VARIABLES),
@@ -202,31 +218,39 @@ def package(version, images, output, local_verification=False, source_revision=N
     finish = policy.get("requireCustomerFinish")
     require(not finish_present or type(finish) is bool,
             "completionPolicy.requireCustomerFinish must be a Boolean when present")
-    require(local_verification or (bank == "python" and scenario == "issued" and not finish_present),
-            "New starter variants and customer-FINISH criteria require --local-verification; publication is not authorized")
+    platform_release = declared_platform_release(local_verification, platform_release)
     configuration = {
         "schemaVersion": "astraform.banking-starter.configuration.v1",
         "bankImplementation": bank, "scenario": scenario,
         "bankPort": 8092 if bank == "python" else 8094,
         "domainId": "banking-python" if bank == "python" else "banking",
         "nativeDomainEnabled": scenario == "monthly",
-        "requiresUnreleasedPlatform": finish_present,
+        "requiresUnreleasedPlatform": local_verification and finish_present,
         "requiredPlatformCapabilities": (["retainedParticipationSupported"] if scenario == "monthly" else [])
             + (["completionPolicy.requireCustomerFinish"] if finish_present else []),
         "requiresUnreleasedCustomerSdk": False,
         "requiredCustomerSdkCapabilities": ["completionPolicy.requireCustomerFinish"] if finish_present else [],
     }
-    compatibility = {**(LOCAL_COMPATIBILITY if local_verification else COMPATIBILITY),
+    compatibility = {**(LOCAL_COMPATIBILITY if local_verification else {
+                         **COMPATIBILITY, "platform": platform_release.removeprefix("v")}),
                      **({"javaSdk": "0.4.3"} if bank == "java" else {})}
-    if finish_present:
+    if local_verification and finish_present:
         compatibility["platform"] = "unreleased-local-customer-finish"
+    required_platform = {"completionPolicy.requireCustomerFinish": finish} if finish_present else {}
+    if scenario == "monthly":
+        required_platform["retainedParticipationSupported"] = True
+    if platform_release:
+        required_platform["release"] = platform_release
     bundle_name = (f"astraform-banking-starter-{version}" if bank == "python" and scenario == "issued"
                    else f"astraform-{bank}-banking-{scenario}-starter-{version}")
     return package_bundle(version, images, output, source_revision, files, bundle_name,
                           compatibility, "astraform.banking-starter.bundle.v1", local_verification,
-                          configuration, {"completionPolicy.requireCustomerFinish": finish} if finish_present else None,
+                          configuration, required_platform or None,
                           "Local compatibility records current source dependency targets: Python SDK 0.3.3, contracts 1.2.1 and Java SDK 0.4.3 when selected. Actual image contents require separate installed-package verification against the recorded image IDs. Native customer completion is available in published Python SDK 0.3.3; a supporting local platform is still required when completionPolicy.requireCustomerFinish is present. See starter-config.json requiredCustomerSdkCapabilities."
-                          if local_verification else None)
+                          if local_verification else
+                          f"Declared compatibility requires Astraform Platform {platform_release}, Python SDK 0.3.3, contracts 1.2.1"
+                          + (" and Java SDK 0.4.3" if bank == "java" else "")
+                          + ". This dependency declaration is not proof of platform publication or availability. Verify the selected public platform release and the installed SDK packages in the pinned images before publication.")
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -239,6 +263,7 @@ def main():
                         help="Parent directory for the versioned folder, archive and checksum")
     parser.add_argument("--bank", choices=("python", "java"), default="python", help="Bank service implementation")
     parser.add_argument("--scenario", choices=("issued", "monthly"), default="issued", help="Issued statement or native three-month statement scenario")
+    parser.add_argument("--platform-release", help="Required compatible public platform release, such as v0.3.0; a declaration, not publication proof")
     parser.add_argument("--local-verification", action="store_true",
                         help="Rehearsal only: allow installed image tags and record their local IDs")
     args = parser.parse_args()
@@ -247,7 +272,7 @@ def main():
         source_revision = subprocess.check_output(
             ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True, timeout=30).strip()
     bundle = package(args.version, json.loads(args.image_lock.read_text()), args.output,
-                     args.local_verification, source_revision, args.bank, args.scenario)
+                     args.local_verification, source_revision, args.bank, args.scenario, args.platform_release)
     print(f"Prepared {bundle}; no images, release or public download were published.")
     if args.local_verification:
         print("Local verification only; this archive requires the recorded images already installed.")

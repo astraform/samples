@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare a local image-only marketing starter using the shared archive writer."""
+"""Package an image-only marketing starter using the shared archive writer."""
 import argparse
 import importlib.util
 import json
@@ -22,8 +22,8 @@ FILES = {
 }
 
 
-def package(version, images, output, local_verification=False, source_revision=None, scenario="scheduled"):
-    packaging.require(local_verification, "Marketing starter is a local verification candidate; use --local-verification")
+def package(version, images, output, local_verification=False, source_revision=None, scenario="scheduled",
+            platform_release=None):
     packaging.require(scenario in {"scheduled", "current"}, "scenario must be scheduled or current")
     packaging.require(isinstance(images, dict) and set(images) == {"domain", "agency", "tools"},
                       "image lock must contain exactly domain, agency and tools references")
@@ -39,22 +39,30 @@ def package(version, images, output, local_verification=False, source_revision=N
     finish = policy.get("requireCustomerFinish")
     packaging.require(not finish_present or type(finish) is bool,
                       "completionPolicy.requireCustomerFinish must be a Boolean when present")
+    platform_release = packaging.declared_platform_release(local_verification, platform_release)
     configuration = {"schemaVersion": "astraform.marketing-starter.configuration.v1",
                      "scenario": scenario, "domainId": "marketing-ops",
                      "domainPort": 8090, "agencyPort": 8091,
-                     "requiresUnreleasedPlatform": finish_present,
+                     "requiresUnreleasedPlatform": local_verification and finish_present,
                      "requiredPlatformCapabilities": ["completionPolicy.requireCustomerFinish"] if finish_present else [],
                      "requiresUnreleasedCustomerSdk": False,
                      "requiredCustomerSdkCapabilities": ["completionPolicy.requireCustomerFinish"] if finish_present else [],
                      "customerEvidenceHelper": "customer-run-evidence.py"}
-    compatibility = {**packaging.LOCAL_COMPATIBILITY, "javaSdk": "0.4.3"}
-    if finish_present:
+    compatibility = {**(packaging.LOCAL_COMPATIBILITY if local_verification else {
+                         **packaging.COMPATIBILITY, "platform": platform_release.removeprefix("v")}),
+                     "javaSdk": "0.4.3"}
+    if local_verification and finish_present:
         compatibility["platform"] = "unreleased-local-customer-finish"
+    required_platform = {"completionPolicy.requireCustomerFinish": finish} if finish_present else {}
+    if platform_release:
+        required_platform["release"] = platform_release
     return packaging.package_bundle(version, images, output, source_revision, files,
         f"astraform-marketing-{scenario}-starter-{version}",
-        compatibility, "astraform.marketing-starter.bundle.v1", True, configuration,
-        {"completionPolicy.requireCustomerFinish": finish} if finish_present else None,
-        "Local compatibility records current source dependency targets: Java SDK 0.4.3, Python SDK 0.3.3 and contracts 1.2.1. Actual image contents require separate installed-package verification against the recorded image IDs. Native customer completion is available in published Python SDK 0.3.3; a supporting local platform is still required when completionPolicy.requireCustomerFinish is present.")
+        compatibility, "astraform.marketing-starter.bundle.v1", local_verification, configuration,
+        required_platform or None,
+        "Local compatibility records current source dependency targets: Java SDK 0.4.3, Python SDK 0.3.3 and contracts 1.2.1. Actual image contents require separate installed-package verification against the recorded image IDs. Native customer completion is available in published Python SDK 0.3.3; a supporting local platform is still required when completionPolicy.requireCustomerFinish is present."
+        if local_verification else
+        f"Declared compatibility requires Astraform Platform {platform_release}, Java SDK 0.4.3, Python SDK 0.3.3 and contracts 1.2.1. This dependency declaration is not proof of platform publication or availability. Verify the selected public platform release and the installed SDK packages in the pinned images before publication.")
 
 
 def main():
@@ -64,14 +72,17 @@ def main():
     parser.add_argument("--image-lock", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--scenario", choices=("scheduled", "current"), default="scheduled")
+    parser.add_argument("--platform-release", help="Required compatible public platform release, such as v0.3.0; a declaration, not publication proof")
     parser.add_argument("--local-verification", action="store_true")
     arguments = parser.parse_args()
     revision = arguments.source_revision
     if revision is None and arguments.local_verification:
         revision = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True, timeout=30).strip()
     bundle = package(arguments.version, json.loads(arguments.image_lock.read_text()), arguments.output,
-                     arguments.local_verification, revision, arguments.scenario)
-    print(f"Prepared {bundle}; local verification only, no images or releases published.")
+                     arguments.local_verification, revision, arguments.scenario, arguments.platform_release)
+    print(f"Prepared {bundle}; no images or releases published.")
+    if arguments.local_verification:
+        print("Local verification only; this archive requires the recorded images already installed.")
 
 
 if __name__ == "__main__":

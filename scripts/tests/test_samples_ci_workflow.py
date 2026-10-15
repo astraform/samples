@@ -204,6 +204,22 @@ class SamplesCiWorkflowTest(unittest.TestCase):
         self.assertIn("marketing-ops-creative-agency", promote)
         self.assertIn("GITHUB_STEP_SUMMARY", promote)
 
+    def test_all_published_sample_images_record_the_exact_source_revision(self):
+        builds = [step for step in self.steps
+                  if str(step.get("uses", "")).startswith("docker/build-push-action@")
+                  and step.get("with", {}).get("push") is True]
+        self.assertEqual({step["with"]["file"] for step in builds}, {
+            "java-spring-banking/Dockerfile", "marketing-ops-remote/Dockerfile",
+            "marketing-ops-creative-agency/Dockerfile", "python-fastapi-banking/Dockerfile",
+            "banking-advice-agent/Dockerfile",
+        })
+        self.assertEqual(len(builds), 5)
+        for build in builds:
+            with self.subTest(image=build["with"]["file"]):
+                labels = dict(line.split("=", 1) for line in build["with"].get("labels", "").splitlines()
+                              if line.strip())
+                self.assertEqual(labels.get("org.opencontainers.image.revision"), "${{ github.sha }}")
+
     def test_every_workflow_action_is_commit_pinned(self):
         for job in self.workflow["jobs"].values():
             for step in job.get("steps", []):
