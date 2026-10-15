@@ -13,7 +13,8 @@ JSON-RPC through the A2A Java SDK.
 [`sample-configuration.json`](sample-configuration.json) configures one real-model
 customer, Quinn, using the existing marketing provider and Creative
 Agency. [`run-customer.py`](run-customer.py) creates a Catalog draft, publishes
-it and launches it once through `/api/agent-journeys`. It neither sends follow-up
+it and launches it once with generated `AgentJourneysApi.launch_agent_journey`.
+It neither sends follow-up
 turns nor advances simulated time. Astraform owns subsequent execution and simulated-time progression after
 that launch; the helper does not drive later customer turns.
 
@@ -32,21 +33,41 @@ those details does not give Quinn a practical next step. Quinn can ask for
 clarification, wait or decide to stop; neither model is forced to select a
 particular action or success label.
 
+The customer and agency instructions distinguish unreported information from an
+explicit negative fact and preserve the scope of observed responsibilities. Both
+roles are asked to acknowledge supplied answers, including unknown or unavailable
+answers, and ask again only for a distinct material detail or changed evidence.
+Information to obtain later belongs in proposed next steps. Agreement with advice
+does not establish a new execution commitment. These instructions guide the
+models; original unsupported or repetitive answers remain observable.
+The agency also distinguishes a completed readiness review from blocked launch
+approval; completion of the review does not mean the campaign is approved.
+Customer instructions use separate sample memory entries, `reviewCompletionStatus`
+and `launchApprovalStatus`, derived from observations or kept unknown. These are
+prompt conventions, not platform-required fields or output validation.
+
 The scheduled review's `payload.reviewFinding` defines a sample business fact:
 the external production studio has not supplied the signed usage licence for
-the hero photograph. The provider publishes that finding in the existing review
-record's summary only when the 09:00 review executes. Before then, the customer
-sees the pending-review description. The future fixture is visible in operator
-configuration, not supplied as advance knowledge in the customer prompt.
+the hero photograph and is responsible for supplying it. The finding does not
+establish who owns the photograph or has authority to grant usage rights. No
+delivery date is confirmed, and launch approval remains blocked until usage
+rights are established. The provider publishes that finding in the existing
+review record's summary only when the 09:00 review executes. Before then, the
+customer sees the pending-review description. The future fixture is visible in
+operator configuration, not supplied as advance knowledge in the customer prompt.
 
 Quinn's request includes the current `reviewSummary`, bound to that observed
 record, so the agency receives the actual finding rather than only a blocked
 status. The agency LLM still chooses its advice. Configured success requires an
 actual JSON response with scenario `launch-blocker` and disposition `ESCALATE`
-or `UNBLOCK_PLAN`; those existing conditions are unchanged. This checks receipt
-of a qualifying recommendation, not its factual quality, an executed escalation
-or a resolved campaign blocker. Invalid or unhelpful model behavior remains
-observable, and stopping before the criteria match remains a failed goal.
+or `UNBLOCK_PLAN`; those existing conditions are unchanged. Both templates also
+set `completionPolicy.requireCustomerFinish:true`: a qualifying receipt alone
+does not stop a customer-selected follow-up. Success requires the qualifying
+advice and the customer's own later FINISH decision within the existing limits.
+The customer remains free to ask for clarification, wait or stop; no fixed turn
+sequence or answer is prescribed. Receipt matching and FINISH do not establish
+advice quality, an executed escalation or a resolved campaign blocker. Invalid
+or unhelpful model behavior and unmet completion requirements remain observable.
 
 ### Start the two sample services
 
@@ -170,22 +191,25 @@ new runs; existing runs retain their accepted binding revisions and configuratio
 
 ### Launch and inspect
 
-The default marketing templates omit `completionPolicy.requireCustomerFinish`
-and use the platform client included in the published **Astraform Python author
-kit 0.3.2**. Install it in a Python 3.12+ virtual environment. From the sample
-repository root:
+Both marketing templates require `completionPolicy.requireCustomerFinish:true`
+and a native typed customer SDK that preserves this field. Published **Astraform
+Python author kit 0.3.3** supplies that support. The launcher rejects older 0.3.2
+before output, Catalog or launch writes. Use a supporting platform implementation;
+published platform v0.2.0 alone does not provide the strict stopping behavior.
+From the sample repository root, install the published whole SDK in Python 3.12+:
 
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-python3 -m pip install 'astraform-remote-domain-author-kit==0.3.2'
+python3 -m pip install 'astraform-remote-domain-author-kit==0.3.3'
 ASTRAFORM_API_BASE=http://localhost:8084 \
   python3 integration/marketing-ops-a2a/run-customer.py --output /tmp/marketing-first --wait
 ```
 
-The provider uses Java author-kit/conformance **0.4.2** from Maven Central.
-Both SDKs use shared contract **1.2.0**. No SDK checkout or local wheel build is
-needed for those default templates; see the [SDK dependencies](../../README.md#sdk-development).
+The current provider source uses Java author-kit/conformance **0.4.3** from Maven
+Central with shared contract **1.2.1**. The stricter customer completion field is
+included in the published Python 0.3.3 client; see the
+[SDK dependencies](../../README.md#sdk-development).
 
 The launcher uses the normal generated Catalog and Agent Journey APIs. It shares
 save, bounded read polling and same-run export behavior with
@@ -193,13 +217,16 @@ save, bounded read polling and same-run export behavior with
 launcher. A standalone marketing archive includes that utility beside
 `run-customer.py`; its existing read-only Compose mount keeps both available.
 
-If a custom `MARKETING_SAMPLE_FILE` supplies `completionPolicy.requireCustomerFinish`
-as either `true` or `false`, the launcher checks the raw Boolean and native typed
-SDK serialization before writing output or creating, publishing or launching a
-Catalog definition. With published Python SDK 0.3.2, this launcher rejects either explicit value;
-the selected customer SDK must preserve it. There is no transport bridge to
-insert the field. Supporting SDK/platform changes remain local and unreleased,
-while default template omission stays compatible with 0.3.2.
+For both default templates and a custom `MARKETING_SAMPLE_FILE` supplying
+`completionPolicy.requireCustomerFinish` as either `true` or `false`, the launcher
+checks the raw Boolean and native typed SDK serialization before writing output
+or creating, publishing or launching a Catalog definition. With published Python
+SDK 0.3.2, this launcher rejects either explicit value. A custom scenario that omits the field
+retains the existing receipt-only behavior; omission does not satisfy these
+strict customer-completion requirements. The selected SDK must preserve the
+configured value. There is no transport bridge, manual field insertion or
+silent flag removal. SDK support is published; supporting platform and coordinated
+image/archive delivery remain separate requirements.
 
 The helper prints a JSON document containing the actual launch request,
 Catalog identity and launch result. Defaults can be changed with
@@ -212,9 +239,10 @@ gateway accepts the generated client's canonical `/api/...` routes; older
 `ASTRAFORM_API_BASE` values ending in `/api/dashboard` or `/api` are normalized
 to the service origin before configuring that client.
 
-Read the returned run through `GET /api/simulation-runs/{runId}`;
-retrieve its evidence through
-`GET /api/simulation-runs/{runId}/export`. The evidence should show
+Use the existing launcher's [`--inspect` SDK workflow](#same-run-evidence-and-local-image-only-starter)
+with the saved run ID and API deployment. It reads status, ledger and terminal
+export through generated `SimulationRunsApi` methods without creating another
+run. Review `run.json`, `ledger.json` and `evidence.zip`. The evidence should show
 the initial review-pending observation, the provider's 09:00 escalation, the
 customer's actual decision and message, the agency receipt and the final stop
 reason. A failed or ungrounded customer decision remains a failed result; the
@@ -262,9 +290,12 @@ export `CREATIVE_AGENCY_A2A_TOKEN` before invoking the script.
 
 This checks the sample's A2A protocol handling only. It does not launch an
 Astraform customer or establish real-model simulation success. Use the SDK
-workflow above for that purpose. Internal platform restart, replay and retired
-clock-runtime proofs are maintained with the platform source and are not required
-to build or run these sample services.
+workflow above for that purpose. Internal platform restart and replay proofs
+are maintained with the platform source. Retired clock-runtime proofs are
+historical evidence; the current samples use supported native SDK operations,
+and the banking source removes retired clock and dependent Runtime requests.
+Those historical proofs are not instructions for building or running these
+sample services. Published images and archives retain their released source.
 
 
 ## Same-run evidence and local image-only starter
@@ -285,11 +316,16 @@ ASTRAFORM_API_BASE=http://localhost:8084 \
 transport errors against that same run. The observer's1,500-second default covers
 the configured1,200-second scenario limit with export time; it does not extend or
 cancel the run. Saved evidence keeps unsuccessful goals and original messages.
-This reuses the banking launcher's public SDK transport and evidence inspection
-functions, not a second coordinator or scripted customer path.
+Both customer launchers import the same
+[`customer-run-evidence.py`](../customer-run-evidence.py) utility for saved-run
+inspection/export through the SDK. Marketing does not import the banking
+executable or start another coordinator.
 
 [The image-only marketing starter](../../deploy/marketing-starter/README.md)
 packages these scripts, scenario and private-network image topology for local
 verification. It is not published, and it does not replace this editable source
-example. Java SDK 0.4.2 is exercised by the domain provider; the launch/export
-client uses Python SDK 0.3.2.
+example. Current source uses Java SDK 0.4.3 for the domain provider and Python
+SDK 0.3.3 for native customer launch/inspection/export. Existing starter candidates
+and published artifacts retain their recorded image versions; rebuild and verify
+new images before packaging these strict templates. Public platform/image/archive
+and independent onboarding delivery remain pending.

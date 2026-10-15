@@ -76,6 +76,11 @@ class MarketingCustomerLauncherTest(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.output = Path(temporary.name) / "run"
+        # Preserve receipt-only transport/recovery coverage as an explicit custom scenario.
+        receipt_only = json.loads((DIRECTORY / "sample-configuration.json").read_text())
+        receipt_only["launchRequestTemplate"]["completionPolicy"].pop("requireCustomerFinish", None)
+        self.receipt_only_sample = self.output.parent / "receipt-only.json"
+        self.receipt_only_sample.write_text(json.dumps(receipt_only))
         self.enterContext(patch.dict(os.environ, {"ASTRAFORM_API_BASE": "http://platform:8084",
             "MARKETING_SAMPLE_FILE": str(DIRECTORY / "sample-configuration.json")}))
         self.enterContext(contextlib.redirect_stdout(io.StringIO()))
@@ -89,6 +94,7 @@ class MarketingCustomerLauncherTest(unittest.TestCase):
         return client
 
     def test_uncertain_launch_keeps_exact_operation_ids_and_refuses_a_second_launch(self):
+        self.enterContext(patch.dict(os.environ, {"MARKETING_SAMPLE_FILE": str(self.receipt_only_sample)}))
         catalog = self.catalog()
         journeys = MagicMock()
         def uncertain(request, *, _request_timeout):
@@ -112,6 +118,7 @@ class MarketingCustomerLauncherTest(unittest.TestCase):
         self.assertFalse((self.output / "launch.json").exists())
 
     def test_launch_once_then_wait_inspects_the_accepted_run_and_saves_manifest(self):
+        self.enterContext(patch.dict(os.environ, {"MARKETING_SAMPLE_FILE": str(self.receipt_only_sample)}))
         catalog = self.catalog()
         journeys = MagicMock()
         journeys.launch_agent_journey.return_value = document({"runId": "run-1"})
@@ -220,7 +227,34 @@ class MarketingCustomerLauncherTest(unittest.TestCase):
                         self.assertFalse(output.exists())
                         self.assertEqual([], requests)
 
+    def test_default_templates_require_finish_with_native_sdk_or_reject_before_writes(self):
+        for name in ("sample-configuration.json", "current-state-configuration.json"):
+            with self.subTest(template=name):
+                selected = DIRECTORY / name
+                policy = json.loads(selected.read_text())["launchRequestTemplate"]["completionPolicy"]
+                self.assertIs(True, policy["requireCustomerFinish"])
+                output = self.output.parent / ("default-" + selected.stem)
+                catalog = self.catalog()
+                with patch.dict(os.environ, {"MARKETING_SAMPLE_FILE": str(selected)}), \
+                        patch.object(launcher, "AgentCatalogApi", return_value=catalog), \
+                        journey_http_fixture() as (host, requests), \
+                        launcher.ApiClient(launcher.Configuration(host=host, retries=0)) as client:
+                    if self.supports_finish_policy():
+                        result = launcher.launch(client, host, output)
+                        self.assert_native_launch_body(client, requests, output, result)
+                        self.assertIs(True, requests[0]["body"]["completionPolicy"]["requireCustomerFinish"])
+                        catalog.create_agent_definition.assert_called_once()
+                        catalog.publish_agent_definition.assert_called_once()
+                    else:
+                        with self.assertRaisesRegex(ValueError, "requireCustomerFinish"):
+                            launcher.launch(client, host, output)
+                        catalog.create_agent_definition.assert_not_called()
+                        catalog.publish_agent_definition.assert_not_called()
+                        self.assertFalse(output.exists())
+                        self.assertEqual([], requests)
+
     def test_omitted_finish_flag_uses_actual_native_sdk_http(self):
+        self.enterContext(patch.dict(os.environ, {"MARKETING_SAMPLE_FILE": str(self.receipt_only_sample)}))
         catalog = self.catalog()
         with patch.object(launcher, 'AgentCatalogApi', return_value=catalog), \
                 journey_http_fixture() as (host, requests), \

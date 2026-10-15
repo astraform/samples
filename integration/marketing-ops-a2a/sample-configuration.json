@@ -11,10 +11,10 @@
         "Obtain an actionable recommendation from the Creative Agency for the external launch dependency identified by the readiness review: understand who should take the next step, what they should do, and how that addresses the dependency."
       ],
       "constraints": [
-        "Base your understanding on reports and replies you have actually received. Treat missing information as unknown; do not invent review results, approvals, completed work or agency commitments.",
-        "Advice about a blocker does not mean the blocker has been resolved or the campaign has launched.",
+        "Base your understanding on reports and replies actually received. Missing or unreported information is unknown, not proof that something did not happen. Preserve the exact scope of explicit negative evidence: an unknown date does not establish that no communication or commitment occurred. Do not turn unreported updates into a confirmed absence, or invent review results, approvals, completed work or agency commitments.",
+        "A recommendation that a plan is sensible does not by itself establish completed work, a new execution commitment, rights clearance or campaign approval. Preserve responsibilities already established by observations; do not infer acceptance of proposed new work from advice alone. Use separate sample memory entries named reviewCompletionStatus and launchApprovalStatus. reviewCompletionStatus describes only the review's progress; launchApprovalStatus describes only campaign approval. Derive each value from actual observations and keep it unknown until established. A blocked launch approval must not be appended to the review status. Replace any combined reviewStatus entry with these separate facts; do not keep a competing combined status.",
         "A generic instruction to monitor or wait, without explaining what must happen next and who is responsible, is not enough to plan your next step. Ask for clarification when that information is missing.",
-        "Avoid repeating a question that has already been answered."
+        "Read the latest replies and conversation history before asking questions. Acknowledge information already supplied, including an explicit unknown or currently unavailable answer. Ask again only for a distinct unresolved detail, a changed answer or new evidence that materially affects the next step. If information must be obtained later, keep it as an unresolved next step instead of repeatedly asking for it now."
       ],
       "additionalInstructions": "You coordinate the Brand Refresh Social campaign. Its readiness review is scheduled for 09:00 UTC; the findings are not known beforehand. The marketing team will share updated campaign observations as its work occurs. Use the actual review findings when discussing the dependency with the Creative Agency. Decide for yourself how to pursue your goal and whether the advice is sufficient to act on. You may stop if you decide no useful progress is possible; do not invent a resolution or repeat an answered question just to keep the conversation going.",
       "execution": {
@@ -47,6 +47,7 @@
     "completionPolicy": {
       "mode": "GOAL",
       "goalIndex": 0,
+      "requireCustomerFinish": true,
       "partnerResponseConditions": [
         {
           "pointer": "/schemaVersion",
@@ -105,7 +106,7 @@
             "time": "09:00",
             "payload": {
               "actionType": "ESCALATE",
-              "reviewFinding": "Readiness review completed: the launch asset package cannot be approved because the external production studio has not supplied the signed usage licence for the hero photograph. The studio owns that missing document; no delivery date has been confirmed. Launch approval remains blocked until usage rights are established."
+              "reviewFinding": "Readiness review completed: the launch asset package cannot be approved because the external production studio has not supplied the signed usage licence for the hero photograph. The external production studio is responsible for supplying the signed usage licence. Ownership of the photograph and authority to grant usage rights are not established by this finding; no delivery date has been confirmed. Launch approval remains blocked until usage rights are established."
             }
           }
         ]
