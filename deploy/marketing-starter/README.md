@@ -1,10 +1,12 @@
 # Marketing starter — local verification candidate
 
-Run the Marketing Ops domain and its LLM Creative Agency from prebuilt images,
-then launch a real-model customer through Python SDK **0.3.2**. The domain image
-uses Java SDK **0.4.2**; this verifies its provider callbacks, not a Java customer
-launcher. Shared contracts remain **1.2.0**. The platform is a separate image
-bundle. Customer and partner models are configured independently.
+Run the Marketing Ops domain and its LLM Creative Agency from images built for
+this candidate, then launch a real-model customer through Python SDK **0.3.3**.
+Current domain source selects Java SDK **0.4.3**; its callbacks do not constitute
+a Java customer launcher. Both SDKs consume public contracts **1.2.1**. Earlier
+candidate images retain the dependency versions in their original manifests.
+The platform is a separate image bundle. Customer and partner models are
+configured independently.
 
 This new starter is `localVerificationOnly`: it requires the installed image IDs
 recorded in `bundle-manifest.json`. No marketing starter has been published.
@@ -18,14 +20,15 @@ The shared utility saves and inspects the same accepted run through SDK reads;
 the marketing launcher owns its normal generated create/publish/launch calls.
 It does not import the banking launcher or start a helper service.
 
-The default marketing templates omit `completionPolicy.requireCustomerFinish`
-and work with published Python SDK 0.3.2. A custom `MARKETING_SAMPLE_FILE` that
-supplies either `true` or `false` requires a native typed customer SDK that
-preserves that value, plus the locally updated platform. With SDK 0.3.2 the
-launcher rejects either explicit value before writing output or creating,
-publishing or launching a Catalog definition. It does not insert the field
-through a transport bridge. Supporting SDK/platform changes remain local and
-unreleased; the provider dependency pins are unchanged.
+Both updated source marketing templates supply
+`completionPolicy.requireCustomerFinish:true`. Published Python SDK 0.3.3
+preserves that value and explicit `false`; the supporting platform is also
+required. These earlier candidate images retain their recorded Python 0.3.2 /
+Java 0.4.2 dependencies until rebuilt and repackaged. A customer using 0.3.2
+rejects either explicit value before writing output or creating, publishing or
+launching a Catalog definition. It does not insert the field through a transport
+bridge. An older scenario omitting the field retains its earlier receipt-only
+behavior. SDK publication does not update existing images or archives.
 
 ## Initialize and run
 

@@ -4,7 +4,7 @@ This starter connects a real LLM customer in Astraform to a real LLM banking age
 
 The published baseline uses **Astraform Platform v0.2.0** and **Python SDK 0.3.2** in the bank/advice images. You need the platform and starter archives, Docker and your model configuration; no private source checkout or host SDK installation is required. A package marked `localVerificationOnly` requires the recorded locally installed images and is an engineering rehearsal, not a public starter release.
 
-The updated local source scenario opts into `completionPolicy.requireCustomerFinish: true`. It requires both the locally updated Experiment service and a customer SDK whose generated completion-policy model preserves this field. Published platform v0.2.0 and Python SDK 0.3.2 do not support it. A customer launcher using SDK 0.3.2 rejects any explicit Boolean value before bank seeding or create/publish/launch writes; it does not add the field through a transport bridge. Inspection of an existing run still uses the published SDK. Provider dependency pins and published artifacts remain unchanged. `starter-config.json` records `requiresUnreleasedCustomerSdk` and `requiredCustomerSdkCapabilities`; a supporting native customer client is an explicit local, unreleased requirement.
+The updated local source scenario opts into `completionPolicy.requireCustomerFinish: true`. It requires both the locally updated Experiment service and a customer SDK whose generated completion-policy model preserves this field. Published platform v0.2.0 and Python SDK 0.3.2 do not support it. A customer launcher using SDK 0.3.2 rejects any explicit Boolean value before bank seeding or create/publish/launch writes; it does not add the field through a transport bridge. Inspection of an existing run still uses the published SDK. Existing published images and archives retain their recorded dependency versions. Older `starter-config.json` manifests retain their recorded `requiresUnreleasedCustomerSdk` and `requiredCustomerSdkCapabilities` markers. Published Python SDK 0.3.3 now supplies the native client capability; using it requires a new verified customer installation/image and the supporting platform. Existing archive bytes and recorded image versions are unchanged.
 
 The banking image owns `run-customer.py` and the shared `customer-run-evidence.py` beside it in `/app`. The updated Docker build includes both. This archive does not supply replacement launcher scripts or a helper service, and an older published image is not assumed to contain the updated code.
 
@@ -162,8 +162,10 @@ the same separate bank database, banking advice service and Python customer
 launcher. The monthly scenario omits `requireCustomerFinish` and can use published
 Python SDK 0.3.2 for launch/inspect/export. The strict issued scenario requires a
 native typed customer SDK that preserves its explicit completion field; its
-supporting SDK/platform changes remain local and unreleased. The Java provider
-uses Java SDK 0.4.2; the customer launcher remains Python, so this candidate does
+client capability is now published in Python SDK 0.3.3, while the supporting
+platform and coordinated image/archive delivery remain pending. These earlier
+candidate images retain Java SDK 0.4.2; current source selects 0.4.3. The customer
+launcher remains Python, so this candidate does
 not prove a Java launch/export client path.
 
 The `monthly` variant copies the existing three-month scenario to`scenario.json`,
