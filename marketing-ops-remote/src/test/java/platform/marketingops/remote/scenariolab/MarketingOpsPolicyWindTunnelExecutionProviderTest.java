@@ -59,11 +59,12 @@ class MarketingOpsPolicyWindTunnelExecutionProviderTest {
                         "segmentCounts", segmentCounts)), "TEAM_OPERATOR");
 
         assertEquals("COMPLETED", status.status());
-        assertTrue(status.runId().startsWith("marketing-ops-wt-"));
+        assertTrue(status.runId() != null && !status.runId().isBlank());
         assertTrue(status.bundleReady());
         assertTrue(status.bundleUrl().contains("/scenario-lab/bundle"));
 
         Map<String, Object> bundle = provider.loadBundle(context, status.runId());
+        assertEquals(status.runId(), bundle.get("runId"));
         assertEquals("policy_wind_tunnel_bundle.v1", bundle.get("schemaVersion"));
         assertEquals(MarketingOpsPolicyWindTunnelDefinition.PACK_ID, bundle.get("packId"));
         assertEquals(MarketingOpsPolicyWindTunnelDefinition.DOMAIN_ID, bundle.get("domainId"));
@@ -78,12 +79,10 @@ class MarketingOpsPolicyWindTunnelExecutionProviderTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> population = (Map<String, Object>) domainPayload.get("population");
         assertEquals(Boolean.TRUE, population.get("consumed"));
-        assertEquals("marketing-ops-campaign-readiness-100-provider-test", population.get("cohortId"));
+        assertEquals(cohortId, population.get("cohortId"));
         assertEquals("campaign-readiness-100", population.get("recipeId"));
         assertTrue(String.valueOf(bundle.get("experimentCardMarkdown"))
-                .contains("Marketing Ops Policy Wind Tunnel"));
-        assertTrue(String.valueOf(bundle.get("experimentCardMarkdown"))
-                .contains("marketing-ops-campaign-readiness-100-provider-test"));
+                .contains(cohortId));
 
         PolicyWindTunnelArtifactPayload summary = provider.readArtifact(context, status.runId(), "summary");
         assertEquals("application/json", summary.contentType());

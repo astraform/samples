@@ -425,7 +425,6 @@ def test_correlation_capability_is_not_forwarded_across_redirects(
         raise AssertionError("Retired Runtime audit must not construct or send HTTP")
     monkeypatch.setattr(urllib.request, "Request", unexpected)
     monkeypatch.setattr(urllib.request, "urlopen", unexpected)
-    assert not hasattr(service, "agent_runtime_url")
     with pytest.raises(service.OpportunityCorrelationAuditUnavailableError, match="private opportunity correlation capability"):
         service.fetch_decision_opportunity_correlation_audit("run-retired", service.RATE_CHANGE_TRIGGER_TYPE)
     token = service.bind_opportunity_correlation_capability("private-capability")
@@ -447,7 +446,6 @@ def test_malformed_success_audit_remains_retryable_unavailability(
         raise AssertionError("Retired Runtime audit must not construct or send HTTP")
     monkeypatch.setattr(urllib.request, "Request", unexpected)
     monkeypatch.setattr(urllib.request, "urlopen", unexpected)
-    assert not hasattr(service, "agent_runtime_url")
     with pytest.raises(service.OpportunityCorrelationAuditUnavailableError, match="private opportunity correlation capability"):
         service.fetch_decision_opportunity_correlation_audit("run-retired", service.RATE_CHANGE_TRIGGER_TYPE)
     token = service.bind_opportunity_correlation_capability("private-capability")

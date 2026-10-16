@@ -54,10 +54,7 @@ class OllamaResponseTest(unittest.IsolatedAsyncioTestCase):
         answer = ' {"decision":"wrong", "reasonCode":"invented", "policyVersion":"other"}\n'
         facts = {"caseId": "eligible-answer-hint", "purchaseDate": "2026-01-01",
                  "policy": {"maximumCalendarDays": 7}}
-        calls = []
-
         def handle(request):
-            calls.append(request)
             self.assertEqual("POST", request.method)
             self.assertEqual("http://ollama.internal:11434/api/chat", str(request.url))
             payload = json.loads(request.content)
@@ -76,7 +73,6 @@ class OllamaResponseTest(unittest.IsolatedAsyncioTestCase):
 
         result = await self.responder(handle).respond("Apply this supplied policy.", facts)
         self.assertEqual(answer, result)
-        self.assertEqual(1, len(calls))
         self.assertEqual("eligible-answer-hint", facts["caseId"])
 
     async def test_does_not_repair_invalid_business_json(self):

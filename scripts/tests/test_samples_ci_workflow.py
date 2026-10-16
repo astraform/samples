@@ -112,9 +112,9 @@ class SamplesCiWorkflowTest(unittest.TestCase):
             [
                 "bash",
                 str(PROMOTION_SCRIPT),
-                "marketing-ops-creative-agency",
+                "samples-marketing-ops-creative-agency",
                 "latest",
-                "ghcr.io/astraform/marketing-ops-creative-agency@sha256:"
+                "ghcr.io/astraform/samples-marketing-ops-creative-agency@sha256:"
                 + ("0" * 64),
             ],
             check=False,
@@ -128,21 +128,21 @@ class SamplesCiWorkflowTest(unittest.TestCase):
             [
                 "bash",
                 str(PROMOTION_SCRIPT),
-                "marketing-ops-creative-agency",
+                "samples-marketing-ops-creative-agency",
                 "v0.2.0",
-                "ghcr.io/astraform/marketing-ops-remote@sha256:" + ("0" * 64),
+                "ghcr.io/astraform/samples-marketing-ops-remote@sha256:" + ("0" * 64),
             ],
             check=False,
             capture_output=True,
             text=True,
         )
         self.assertNotEqual(wrong_repository.returncode, 0)
-        self.assertIn("digest for marketing-ops-creative-agency", wrong_repository.stderr)
+        self.assertIn("digest for samples-marketing-ops-creative-agency", wrong_repository.stderr)
 
     def test_promotion_is_idempotent_and_fails_closed(self):
         source_digest = "c" * 64
         source_reference = (
-            "ghcr.io/astraform/marketing-ops-creative-agency@sha256:"
+            "ghcr.io/astraform/samples-marketing-ops-creative-agency@sha256:"
             + source_digest
         )
         scenarios = {
@@ -201,7 +201,7 @@ else:
                         [
                             "bash",
                             str(PROMOTION_SCRIPT),
-                            "marketing-ops-creative-agency",
+                            "samples-marketing-ops-creative-agency",
                             "v0.2.0",
                             source_reference,
                         ],
@@ -220,8 +220,8 @@ else:
                         self.assertEqual(create_count, 0)
 
             for sample, image in (
-                ("Python", "banking-starter-bank"),
-                ("Banking Advice", "banking-starter-advice"),
+                ("Python", "samples-banking-starter-bank"),
+                ("Banking Advice", "samples-banking-starter-advice"),
             ):
                 with self.subTest(sample=sample):
                     coordinates, output = self.run_step(

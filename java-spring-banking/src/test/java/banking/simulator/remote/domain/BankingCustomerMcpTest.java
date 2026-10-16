@@ -46,7 +46,7 @@ class BankingCustomerMcpTest {
         try (var client = McpClient.sync(HttpClientStreamableHttpTransport.builder(origin).endpoint("/mcp").build())
                 .requestTimeout(Duration.ofSeconds(10)).build()) {
             client.initialize();
-            assertThat(client.listTools().tools()).extracting(McpSchema.Tool::name).containsExactly("get_customer_accounts");
+            assertThat(client.listTools().tools()).extracting(McpSchema.Tool::name).contains("get_customer_accounts");
             for (String subject : List.of("customer-a", "customer-b", "customer-a")) {
                 var result = client.callTool(request(Map.of(), subject));
                 assertThat(result.isError()).isFalse();

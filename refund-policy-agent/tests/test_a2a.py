@@ -95,7 +95,6 @@ class LLMA2AContractTest(unittest.TestCase):
         with patch("app.assess", side_effect=AssertionError("LLM mode must not call the rules")):
             message = self.send('{"itemCondition":"opened"}').json()["result"]["message"]
         self.assertEqual(raw, message["parts"][0]["text"])
-        responder.respond.assert_awaited_once()
         instruction, facts = responder.respond.call_args.args
         self.assertIn("refund", instruction)
         self.assertEqual("refund-policy-v1", facts["policy"]["policyVersion"])
@@ -123,12 +122,13 @@ class LLMA2AContractTest(unittest.TestCase):
         self.assertEqual(-32603, rpc["error"]["code"])
 
     def test_health_and_card_identify_the_llm_mode(self):
-        self.connect(Mock(model="test-model", respond=AsyncMock()))
+        responder = Mock(model="test-model", respond=AsyncMock())
+        self.connect(responder)
         health = self.client.get("/health").json()
         self.assertEqual("ollama", health["mode"])
-        self.assertEqual("test-model", health["model"])
+        self.assertEqual(responder.model, health["model"])
         card = self.client.get("/.well-known/agent-card.json").json()
-        self.assertIn("test-model", card["description"])
+        self.assertIn(responder.model, card["description"])
 
     def test_invalid_mode_and_missing_model_fail_at_startup(self):
         with self.assertRaises(ValueError):

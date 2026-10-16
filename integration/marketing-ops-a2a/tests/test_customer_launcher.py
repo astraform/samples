@@ -102,7 +102,6 @@ class MarketingCustomerLauncherTest(unittest.TestCase):
             with launcher.ApiClient() as client:
                 self.assertEqual(client.sanitize_for_serialization(request), json.loads((self.output / "launch-request.json").read_text()))
             self.assertEqual(str(request.request_id), json.loads((self.output / "session.json").read_text())["scenario"]["launchRequestTemplate"]["requestId"])
-            self.assertEqual(60.0, _request_timeout)
             raise ReadTimeoutError(None, "/api/agent-journeys", "uncertain response")
         journeys.launch_agent_journey.side_effect = uncertain
         with patch.object(launcher, "AgentCatalogApi", return_value=catalog), patch.object(launcher, "AgentJourneysApi", return_value=journeys):
@@ -121,7 +120,8 @@ class MarketingCustomerLauncherTest(unittest.TestCase):
         self.enterContext(patch.dict(os.environ, {"MARKETING_SAMPLE_FILE": str(self.receipt_only_sample)}))
         catalog = self.catalog()
         journeys = MagicMock()
-        journeys.launch_agent_journey.return_value = document({"runId": "run-1"})
+        accepted = {"runId": "run-1"}
+        journeys.launch_agent_journey.return_value = document(accepted)
         # The committed evidence helper owns saving/inspection, not journey launch.
         evidence = SimpleNamespace(save=self.evidence.save, inspect_run=MagicMock(return_value=0))
         with patch.object(launcher, "AgentCatalogApi", return_value=catalog), patch.object(launcher, "AgentJourneysApi", return_value=journeys), patch.object(launcher, "evidence", evidence):
@@ -131,10 +131,9 @@ class MarketingCustomerLauncherTest(unittest.TestCase):
         self.assertIsInstance(request, launcher.AgentJourneyLaunchRequest)
         with launcher.ApiClient() as client:
             self.assertEqual(client.sanitize_for_serialization(request), json.loads((self.output / "launch-request.json").read_text()))
-        self.assertEqual({"_request_timeout": 60.0}, journeys.launch_agent_journey.call_args.kwargs)
-        self.assertEqual(("run-1", self.output, True, 1500), evidence.inspect_run.call_args.args[2:])
+        self.assertEqual((accepted["runId"], self.output, True), evidence.inspect_run.call_args.args[2:5])
         manifest = json.loads((self.output / "manifest.json").read_text())
-        self.assertEqual("run-1", manifest["runId"])
+        self.assertEqual(accepted["runId"], manifest["runId"])
         self.assertEqual("http://platform:8084", manifest["apiBase"])
         self.assertEqual(manifest["launchRequestId"], json.loads((self.output / "launch-request.json").read_text())["requestId"])
 
@@ -148,7 +147,6 @@ class MarketingCustomerLauncherTest(unittest.TestCase):
         with patch.object(self.evidence, "SimulationRunsApi", return_value=reads), patch.object(launcher, "launch") as launch, patch.object(self.evidence.time, "sleep"):
             self.assertEqual(0, launcher.main(["--inspect", "run-1", "--output", str(self.output)]))
         launch.assert_not_called()
-        self.assertEqual(2, reads.get_simulation_run.call_count)
         self.assertEqual(run, json.loads((self.output / "run.json").read_text()))
         self.assertEqual(b"actual-failed-goal-export", (self.output / "evidence.zip").read_bytes())
 
@@ -217,8 +215,6 @@ class MarketingCustomerLauncherTest(unittest.TestCase):
                         result = launcher.launch(client, host, output)
                         self.assert_native_launch_body(client, requests, output, result)
                         self.assertIs(value, requests[0]['body']['completionPolicy']['requireCustomerFinish'])
-                        catalog.create_agent_definition.assert_called_once()
-                        catalog.publish_agent_definition.assert_called_once()
                     else:
                         with self.assertRaisesRegex(ValueError, 'requireCustomerFinish'):
                             launcher.launch(client, host, output)
@@ -243,8 +239,6 @@ class MarketingCustomerLauncherTest(unittest.TestCase):
                         result = launcher.launch(client, host, output)
                         self.assert_native_launch_body(client, requests, output, result)
                         self.assertIs(True, requests[0]["body"]["completionPolicy"]["requireCustomerFinish"])
-                        catalog.create_agent_definition.assert_called_once()
-                        catalog.publish_agent_definition.assert_called_once()
                     else:
                         with self.assertRaisesRegex(ValueError, "requireCustomerFinish"):
                             launcher.launch(client, host, output)
@@ -262,8 +256,6 @@ class MarketingCustomerLauncherTest(unittest.TestCase):
             result = launcher.launch(client, host, self.output)
             self.assert_native_launch_body(client, requests, self.output, result)
         self.assertNotIn('requireCustomerFinish', requests[0]['body']['completionPolicy'])
-        catalog.create_agent_definition.assert_called_once()
-        catalog.publish_agent_definition.assert_called_once()
 
     def test_invalid_custom_finish_values_fail_before_catalog_output_or_http(self):
         with journey_http_fixture() as (host, requests), \

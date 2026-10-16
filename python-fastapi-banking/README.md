@@ -243,7 +243,7 @@ DIGEST='sha256:<exact platform manifest digest>'
 docker run \
   -e "ASTRAFORM_PROVIDER_ARTIFACT_DIGEST=oci-${DIGEST}" \
   -e ASTRAFORM_REQUIRE_OCI_PROVIDER_DIGEST=true \
-  "ghcr.io/astraform/banking-starter-bank@${DIGEST}"
+  "ghcr.io/astraform/samples-banking-starter-bank@${DIGEST}"
 ```
 
 These are settings on the bank container, separate from the platform's URL

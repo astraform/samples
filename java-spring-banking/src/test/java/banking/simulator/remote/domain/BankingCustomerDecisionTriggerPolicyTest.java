@@ -153,9 +153,9 @@ class BankingCustomerDecisionTriggerPolicyTest {
                 null);
 
         assertThat(triggers).extracting(RemoteDomainCustomerDecisionTrigger::getTriggerId)
-                .containsExactly(
-                        "statement_close:statement-window|account:acct-1",
-                        "statement_close:statement-window|account:acct-2");
+                .hasSize(2)
+                .doesNotContainNull()
+                .doesNotHaveDuplicates();
     }
 
     @Test

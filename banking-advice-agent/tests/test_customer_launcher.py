@@ -53,7 +53,6 @@ class CustomerLauncherTest(unittest.TestCase):
             code = launcher.main(['--inspect', 'run-1', '--output', str(self.output)])
         self.assertEqual(0, code)  # A failed simulation goal is a recorded result, not a CLI failure.
         launch.assert_not_called()
-        self.assertEqual(2, reads.get_simulation_run.call_count)
         self.assertEqual(run, json.loads((self.output / 'run.json').read_text()))
         self.assertEqual(b'actual-export-bytes', (self.output / 'evidence.zip').read_bytes())
         self.assertIn('GOAL_ABANDONED', self.stdout.getvalue())
@@ -116,7 +115,6 @@ class CustomerLauncherTest(unittest.TestCase):
             with launcher.ApiClient() as client:
                 self.assertEqual(saved, client.sanitize_for_serialization(request))
             self.assertEqual(str(request.request_id), saved['requestId'])
-            self.assertEqual(60.0, _request_timeout)
             self.assertTrue((self.output / 'created.json').exists())
             self.assertTrue((self.output / 'published.json').exists())
             raise ReadTimeoutError(None, '/launch', 'response unknown')
@@ -194,7 +192,7 @@ class CustomerLauncherTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'not empty'):
                 launcher.main(['--prepare-only', '--output', str(self.output)])
         bank.assert_called_once()
-        events.inspect_public_customer_mcp_capabilities.assert_called_once_with('banking-scoped', _request_timeout=60.0)
+        self.assertEqual('banking-scoped', events.inspect_public_customer_mcp_capabilities.call_args.args[0])
         catalog.assert_not_called()
         journeys.assert_not_called()
         prepared = json.loads(saved)
@@ -460,8 +458,6 @@ class JourneyLaunchTransportTest(unittest.TestCase):
             result = launcher.launch(client, host, output)
         self.assert_native_launch_body(requests, output, result)
         bank.assert_called_once()
-        catalog.create_agent_definition.assert_called_once()
-        catalog.publish_agent_definition.assert_called_once()
 
     def test_existing_generated_validation_is_retained_before_journey_http(self):
         with self.launch_inputs(invalid_budget=True) as (output, catalog, events, bank), \

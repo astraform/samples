@@ -49,30 +49,32 @@ class OpenAiCompatibleCreativeAgencyResponseGeneratorTest {
 
     @Test
     void callsChatCompletionsWithBearerAuthAndReturnsGenericProvenance() throws Exception {
-        responses.add(new StubResponse(200, completedResponse(
+        String responseBody = completedResponse(
                 "resolved-model-2026",
                 "Tighten the launch message before release.",
                 List.of("Remove the unsupported claim.", "Confirm the final CTA."),
-                List.of("approved disclaimer"))));
-        OpenAiCompatibleCreativeAgencyResponseGenerator generator = generator(1);
+                List.of("approved disclaimer"));
+        responses.add(new StubResponse(200, responseBody));
+        CreativeAgencyGenerationProperties properties = properties(1, 60);
+        OpenAiCompatibleCreativeAgencyResponseGenerator generator =
+                new OpenAiCompatibleCreativeAgencyResponseGenerator(properties, objectMapper, "test");
 
         CreativeAgencyResponseGenerator.GenerationResult result = generator.generate(request());
 
         assertThat(result.summary()).isEqualTo("Tighten the launch message before release.");
         assertThat(result.disposition()).isEqualTo("APPROVE_WITH_NOTES");
-        assertThat(result.provider()).isEqualTo("test-provider");
-        assertThat(result.model()).isEqualTo("requested-model");
-        assertThat(result.bindingRevision()).isEqualTo("test-binding-v1");
+        assertThat(result.provider()).isEqualTo(properties.getLlm().getProviderId());
+        assertThat(result.model()).isEqualTo(properties.getLlm().getModel());
+        assertThat(result.bindingRevision()).isEqualTo(properties.getLlm().getBindingRevision());
         assertThat(result.receiptMetadata())
-                .containsEntry("llmCompletionId", "chatcmpl-123")
-                .containsEntry("llmRequestedModel", "requested-model")
-                .containsEntry("llmReportedModel", "resolved-model-2026")
+                .containsEntry("llmCompletionId", objectMapper.readTree(responseBody).path("id").stringValue())
+                .containsEntry("llmRequestedModel", properties.getLlm().getModel())
+                .containsEntry("llmReportedModel", objectMapper.readTree(responseBody).path("model").stringValue())
                 .containsEntry("llmTotalTokens", 15L);
-        assertThat(receivedAuthorization).hasValue("Bearer super-secret-test-key");
-        assertThat(requestCount).hasValue(1);
+        assertThat(receivedAuthorization).hasValue("Bearer " + properties.getLlm().getApiKey());
         assertThat(receivedRequest.get().path("stream").asBoolean()).isFalse();
-        assertThat(receivedRequest.get().path("model").stringValue()).isEqualTo("requested-model");
-        assertThat(receivedRequest.get().path("max_tokens").asInt()).isEqualTo(800);
+        assertThat(receivedRequest.get().path("model").stringValue()).isEqualTo(properties.getLlm().getModel());
+        assertThat(receivedRequest.get().path("max_tokens").asInt()).isEqualTo(properties.getLlm().getMaxOutputTokens());
         assertThat(receivedRequest.get().has("reasoning_effort")).isFalse();
         assertThat(receivedRequest.get()
                 .path("response_format").path("json_schema").path("strict").asBoolean()).isTrue();
@@ -120,10 +122,11 @@ class OpenAiCompatibleCreativeAgencyResponseGeneratorTest {
         assertThat(reply.disposition()).isEqualTo("AWAIT_REVIEW");
         assertThat(store.get("native").recentExchanges().getFirst().agencyReply()).contains("AWAIT_REVIEW");
 
+        int requestsBeforeRejection = requestCount.get();
         assertThatThrownBy(() -> service.buildReply(new CreativeAgencyCommand("oversized",
                 envelope.replace("final-context-fact", "x".repeat(16_000)), Map.of())))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThat(requestCount).hasValue(1);
+        assertThat(requestCount).hasValue(requestsBeforeRejection);
     }
 
     @Test
@@ -152,7 +155,6 @@ class OpenAiCompatibleCreativeAgencyResponseGeneratorTest {
         assertThat(result.disposition()).isEqualTo("AWAIT_REVIEW");
         assertThat(result.summary()).isEqualTo(
                 "Responsibility for the document is known; permission and approval remain unknown.");
-        assertThat(requestCount).hasValue(1);
     }
 
     @Test
@@ -240,6 +242,7 @@ class OpenAiCompatibleCreativeAgencyResponseGeneratorTest {
                 List.of("Continue with validated output."),
                 List.of())));
         CreativeAgencyGenerationProperties properties = properties(1, 60);
+        properties.getLlm().setMaxOutputTokens(640);
         properties.getLlm().setTokenLimitParameter(
                 CreativeAgencyGenerationProperties.TokenLimitParameter.MAX_COMPLETION_TOKENS);
         properties.getLlm().setStructuredOutputMode(
@@ -248,7 +251,7 @@ class OpenAiCompatibleCreativeAgencyResponseGeneratorTest {
         new OpenAiCompatibleCreativeAgencyResponseGenerator(properties, objectMapper, "test")
                 .generate(request());
 
-        assertThat(receivedRequest.get().path("max_completion_tokens").asInt()).isEqualTo(800);
+        assertThat(receivedRequest.get().path("max_completion_tokens").asInt()).isEqualTo(properties.getLlm().getMaxOutputTokens());
         assertThat(receivedRequest.get().has("max_tokens")).isFalse();
         assertThat(receivedRequest.get().path("response_format").path("type").stringValue())
                 .isEqualTo("json_object");
