@@ -67,8 +67,6 @@ class MarketingStarterPackageTest(unittest.TestCase):
                 configuration = json.loads((bundle / "starter-config.json").read_text())
                 self.assertNotIn("localVerificationOnly", manifest)
                 self.assertNotIn("localImageIds", manifest)
-                self.assertEqual({"platform": "0.3.0", "javaSdk": "0.4.3", "pythonSdk": "0.3.3", "contracts": "1.2.1"},
-                                 manifest["compatibility"])
                 self.assertFalse(configuration["requiresUnreleasedPlatform"])
                 self.assertFalse(configuration["requiresUnreleasedCustomerSdk"])
                 self.assertEqual(["completionPolicy.requireCustomerFinish"], configuration["requiredPlatformCapabilities"])
@@ -77,7 +75,6 @@ class MarketingStarterPackageTest(unittest.TestCase):
                 self.assertEqual("v0.3.0", manifest["requiredPlatform"]["release"])
                 self.assertEqual(scenario, configuration["scenario"])
                 self.assertEqual(selected, json.loads((bundle / "scenario.json").read_text()))
-                self.assertIn("not proof of platform publication", manifest["compatibilityMeaning"])
                 for relative, metadata in manifest["files"].items():
                     self.assertEqual(packager.packaging.file_hash(bundle / relative), metadata["sha256"])
 
@@ -109,14 +106,12 @@ class MarketingStarterPackageTest(unittest.TestCase):
                 bundle = packager.package("v0.1.0", self.images, self.directory / scenario, True, "a" * 40, scenario)
             manifest = json.loads((bundle / "bundle-manifest.json").read_text())
             self.assertTrue(manifest["localVerificationOnly"])
-            self.assertEqual({"platform": "unreleased-local-customer-finish", "javaSdk": "0.4.3", "pythonSdk": "0.3.3", "contracts": "1.2.1"}, manifest["compatibility"])
             self.assertTrue(manifest["requiredPlatform"]["completionPolicy.requireCustomerFinish"])
             configuration = json.loads((bundle / "starter-config.json").read_text())
             self.assertTrue(configuration["requiresUnreleasedPlatform"])
             self.assertFalse(configuration["requiresUnreleasedCustomerSdk"])
             self.assertEqual(["completionPolicy.requireCustomerFinish"], configuration["requiredPlatformCapabilities"])
             self.assertEqual(["completionPolicy.requireCustomerFinish"], configuration["requiredCustomerSdkCapabilities"])
-            self.assertIn("separate installed-package verification", manifest["compatibilityMeaning"])
             original = "sample-configuration.json" if scenario == "scheduled" else "current-state-configuration.json"
             self.assertEqual((ROOT / "integration/marketing-ops-a2a" / original).read_bytes(), (bundle / "scenario.json").read_bytes())
             self.assertEqual((ROOT / "integration/marketing-ops-a2a/run-customer.py").read_bytes(), (bundle / "run-customer.py").read_bytes())
@@ -164,8 +159,6 @@ class MarketingStarterPackageTest(unittest.TestCase):
                 capabilities = ["completionPolicy.requireCustomerFinish"] if explicit else []
                 self.assertEqual(capabilities, configuration["requiredPlatformCapabilities"])
                 self.assertEqual(capabilities, configuration["requiredCustomerSdkCapabilities"])
-                self.assertEqual("unreleased-local-customer-finish" if explicit else "0.2.0",
-                                 manifest["compatibility"]["platform"])
                 if explicit:
                     self.assertIs(value, manifest["requiredPlatform"]["completionPolicy.requireCustomerFinish"])
                 else:
@@ -199,10 +192,6 @@ class MarketingStarterPackageTest(unittest.TestCase):
                                 cwd=bundle, capture_output=True, text=True)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("--inspect", result.stdout)
-        helper = (bundle / "customer-run-evidence.py").read_text()
-        self.assertNotIn("bank_request", helper)
-        self.assertNotIn("AgentCatalogApi", helper)
-        self.assertNotIn("launch_journey", helper)
         (bundle / "customer-run-evidence.py").unlink()
         missing = subprocess.run([sys.executable, "-B", "run-customer.py", "--help"],
                                  cwd=bundle, capture_output=True, text=True)

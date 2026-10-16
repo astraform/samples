@@ -1,4 +1,3 @@
-import re
 import os
 import subprocess
 import tempfile
@@ -11,16 +10,13 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = ROOT / ".github" / "workflows" / "samples-ci.yml"
 PROMOTION_SCRIPT = ROOT / "scripts" / "promote-immutable-image.sh"
-FULL_SHA_ACTION = re.compile(r"^[^@]+@[0-9a-f]{40}$")
 
 
 class SamplesCiWorkflowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
-        cls.workflow = yaml.safe_load(cls.workflow_text)
-        cls.publish_job = cls.workflow["jobs"]["publish-images"]
-        cls.steps = cls.publish_job["steps"]
+        workflow = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
+        cls.steps = workflow["jobs"]["publish-images"]["steps"]
 
     def step(self, name):
         return next(step for step in self.steps if step.get("name") == name)
@@ -41,33 +37,6 @@ class SamplesCiWorkflowTest(unittest.TestCase):
             return result, output.read().decode("utf-8")
 
     def test_manual_publication_uses_an_exact_source_identity(self):
-        triggers = self.workflow.get("on", self.workflow.get(True))
-        inputs = triggers["workflow_dispatch"]["inputs"]
-        selectors = (
-            "publish_java_image",
-            "publish_marketing_image",
-            "publish_creative_agency_image",
-            "publish_python_image",
-            "publish_banking_advice_image",
-        )
-        for selector in selectors:
-            self.assertIs(inputs[selector]["default"], False)
-
-        job_condition = " ".join(self.publish_job["if"].split())
-        self.assertEqual(
-            job_condition,
-            "${{ github.event_name == 'workflow_dispatch' "
-            "&& (github.ref == 'refs/heads/main' || github.ref_type == 'tag') "
-            "&& (inputs.publish_images == true "
-            "|| inputs.publish_images == 'true') }}",
-        )
-
-        tag_step = self.step("Resolve image tag")["run"]
-        self.assertIn('tag="${GITHUB_REF_NAME}"', tag_step)
-        self.assertIn('"refs/tags/${GITHUB_REF_NAME}"', tag_step)
-        self.assertNotIn("INPUT_IMAGE_TAG", tag_step)
-        self.assertIn("^v[0-9]+", tag_step)
-
         tag_result, tag_output = self.run_step(
             "Resolve image tag",
             {
@@ -130,107 +99,7 @@ class SamplesCiWorkflowTest(unittest.TestCase):
         )
         self.assertNotEqual(empty_selection.returncode, 0)
 
-        names = [step.get("name") for step in self.steps]
-        tag_index = names.index("Resolve image tag")
-        selection_index = names.index("Resolve image selection")
-        qemu_index = next(
-            index
-            for index, step in enumerate(self.steps)
-            if str(step.get("uses", "")).startswith("docker/setup-qemu-action@")
-        )
-        buildx_index = next(
-            index
-            for index, step in enumerate(self.steps)
-            if str(step.get("uses", "")).startswith("docker/setup-buildx-action@")
-        )
-        login_index = next(
-            index
-            for index, step in enumerate(self.steps)
-            if str(step.get("uses", "")).startswith("docker/login-action@")
-        )
-        self.assertLess(tag_index, selection_index)
-        self.assertLess(selection_index, qemu_index)
-        self.assertLess(selection_index, buildx_index)
-        self.assertLess(selection_index, login_index)
-
-    def test_creative_agency_candidate_is_smoked_before_promotion(self):
-        names = [step.get("name") for step in self.steps]
-        build_index = names.index("Build immutable Creative Agency candidate")
-        smoke_index = names.index("Smoke immutable Creative Agency candidate")
-        promote_index = names.index("Promote immutable Creative Agency manifest")
-        self.assertLess(build_index, smoke_index)
-        self.assertLess(smoke_index, promote_index)
-
-        build = self.steps[build_index]
-        selected = "${{ steps.image-selection.outputs.creative_agency == 'true' }}"
-        candidate_tag = "${{ steps.creative-agency-candidate.outputs.tag }}"
-        candidate_repository = (
-            "${{ steps.creative-agency-candidate.outputs.repository }}"
-        )
-        candidate_digest = "${{ steps.creative-agency-build.outputs.digest }}"
-        self.assertEqual(build["if"], selected)
-        self.assertEqual(build["with"]["file"], "marketing-ops-creative-agency/Dockerfile")
-        self.assertEqual(build["with"]["platforms"], "linux/amd64,linux/arm64")
-        self.assertIs(build["with"]["push"], True)
-        self.assertEqual(build["with"]["provenance"], "mode=max")
-        self.assertIs(build["with"]["sbom"], True)
-        self.assertEqual(build["with"]["tags"], candidate_tag)
-
-        smoke_step = self.steps[smoke_index]
-        self.assertEqual(smoke_step["if"], selected)
-        self.assertEqual(
-            smoke_step["env"],
-            {
-                "DIGEST": candidate_digest,
-                "REPOSITORY": candidate_repository,
-            },
-        )
-        smoke = smoke_step["run"]
-        self.assertIn('"${REPOSITORY}@${DIGEST}"', smoke)
-        self.assertIn("check-creative-agency-a2a-v1-live.sh", smoke)
-
-        promote_step = self.steps[promote_index]
-        self.assertEqual(promote_step["if"], selected)
-        self.assertEqual(
-            promote_step["env"],
-            {
-                "DIGEST": candidate_digest,
-                "REPOSITORY": candidate_repository,
-                "TAG": "${{ steps.image-tag.outputs.tag }}",
-            },
-        )
-        promote = promote_step["run"]
-        self.assertIn("promote-immutable-image.sh", promote)
-        self.assertIn("marketing-ops-creative-agency", promote)
-        self.assertIn("GITHUB_STEP_SUMMARY", promote)
-
-    def test_all_published_sample_images_record_the_exact_source_revision(self):
-        builds = [step for step in self.steps
-                  if str(step.get("uses", "")).startswith("docker/build-push-action@")
-                  and step.get("with", {}).get("push") is True]
-        self.assertEqual({step["with"]["file"] for step in builds}, {
-            "java-spring-banking/Dockerfile", "marketing-ops-remote/Dockerfile",
-            "marketing-ops-creative-agency/Dockerfile", "python-fastapi-banking/Dockerfile",
-            "banking-advice-agent/Dockerfile",
-        })
-        self.assertEqual(len(builds), 5)
-        for build in builds:
-            with self.subTest(image=build["with"]["file"]):
-                labels = dict(line.split("=", 1) for line in build["with"].get("labels", "").splitlines()
-                              if line.strip())
-                self.assertEqual(labels.get("org.opencontainers.image.revision"), "${{ github.sha }}")
-
-    def test_every_workflow_action_is_commit_pinned(self):
-        for job in self.workflow["jobs"].values():
-            for step in job.get("steps", []):
-                action = step.get("uses")
-                if action is not None:
-                    self.assertRegex(action, FULL_SHA_ACTION)
-
     def test_promotion_never_moves_latest_and_rejects_non_release_tags(self):
-        script = PROMOTION_SCRIPT.read_text(encoding="utf-8")
-        self.assertNotIn("latest_reference", script)
-        self.assertNotIn(":latest", script)
         syntax = subprocess.run(
             ["bash", "-n", str(PROMOTION_SCRIPT)],
             check=False,

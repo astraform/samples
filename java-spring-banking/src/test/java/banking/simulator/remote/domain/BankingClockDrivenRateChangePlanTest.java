@@ -41,21 +41,6 @@ class BankingClockDrivenRateChangePlanTest {
     }
 
     @Test
-    void publishesTheSharedFrozenControlActionDescriptor() throws Exception {
-        var descriptor = new BankingRemoteDomainService(objectMapper)
-                .manifest()
-                .getCapabilities()
-                .getControlActions()
-                .stream()
-                .filter(action -> BankingClockDrivenRateChangePlan.ACTION_ID.equals(action.getActionId()))
-                .findFirst()
-                .orElseThrow();
-
-        assertThat(objectMapper.convertValue(descriptor, new TypeReference<Map<String, Object>>() {}))
-                .isEqualTo(map(fixture().get("expectedControlActionDescriptor")));
-    }
-
-    @Test
     void doesNotCompileOtherPresetsAndRejectsExcludedOverlays() throws Exception {
         Map<String, Object> fixture = fixture();
         Map<String, Object> input = map(fixture.get("input"));

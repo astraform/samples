@@ -144,10 +144,7 @@ class OpenAiCompatibleCreativeAgencyResponseGeneratorTest {
                 "I requested the document earlier. What should happen next?", facts, true, List.of(history)));
 
         JsonNode wire = receivedRequest.get();
-        String policy = wire.path("messages").get(0).path("content").stringValue();
         JsonNode context = objectMapper.readTree(wire.path("messages").get(1).path("content").stringValue());
-        assertThat(policy).contains("ownership of an asset or copyright", "permission to use it",
-                "does not establish the others", "not evidence that work was completed");
         assertThat(context.path("observedFacts")).isEqualTo(objectMapper.valueToTree(facts));
         assertThat(context.path("recentExchanges")).isEqualTo(objectMapper.valueToTree(List.of(history)));
         assertThat(context.path("latestUserInput").stringValue()).contains("requested the document earlier");

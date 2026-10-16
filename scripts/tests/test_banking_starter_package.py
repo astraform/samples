@@ -60,10 +60,7 @@ class BankingStarterPackageTest(unittest.TestCase):
             bundle = packager.package("v0.1.0", self.images, self.output, source_revision=self.source_revision, platform_release="v0.3.0")
         manifest = json.loads((bundle / "bundle-manifest.json").read_text())
         self.assertNotIn("localVerificationOnly", manifest)
-        self.assertNotIn("sourceRevisionMeaning", manifest)
         self.assertEqual(self.source_revision, manifest["sourceRevision"])
-        self.assertEqual({"platform": "0.3.0", "pythonSdk": "0.3.3", "contracts": "1.2.1"},
-                         manifest["compatibility"])
         self.assertEqual(self.images, json.loads((bundle / "image-lock.json").read_text()))
         self.assertEqual(self.scenario, json.loads((bundle / "scenario.json").read_text()))
         self.assertEqual(set(self.files) | {"image-lock.json", "release.env", "starter-config.json"}, set(manifest["files"]))
@@ -89,8 +86,6 @@ class BankingStarterPackageTest(unittest.TestCase):
                                       source_revision=self.source_revision)
         manifest = json.loads((bundle / "bundle-manifest.json").read_text())
         self.assertTrue(manifest["localVerificationOnly"])
-        self.assertIn("Baseline checkout commit only", manifest["sourceRevisionMeaning"])
-        self.assertIn("installed image IDs", manifest["sourceRevisionMeaning"])
         self.assertEqual({key: "sha256:" + "b" * 64 for key in tags}, manifest["localImageIds"])
         self.assertEqual(tags, manifest["images"])
 
@@ -180,9 +175,6 @@ class BankingStarterPackageTest(unittest.TestCase):
                 self.assertEqual(8092 if bank == "python" else 8094, configuration["bankPort"])
                 self.assertEqual("banking-python" if bank == "python" else "banking", configuration["domainId"])
                 self.assertEqual(scenario == "monthly", configuration["nativeDomainEnabled"])
-                self.assertEqual("0.3.3", manifest["compatibility"]["pythonSdk"])
-                if bank == "java":
-                    self.assertEqual("0.4.3", manifest["compatibility"]["javaSdk"])
 
     def test_public_variants_require_an_explicit_supporting_platform_release(self):
         with patch.object(packager.subprocess, "check_output") as docker:
@@ -198,7 +190,6 @@ class BankingStarterPackageTest(unittest.TestCase):
         with patch.object(packager.subprocess, "check_output", return_value="sha256:" + "b" * 64 + "\n"):
             bundle = packager.package("v0.1.0", self.images, self.output, True, self.source_revision)
         manifest = json.loads((bundle / "bundle-manifest.json").read_text())
-        self.assertEqual("unreleased-local-customer-finish", manifest["compatibility"]["platform"])
         self.assertTrue(manifest["requiredPlatform"]["completionPolicy.requireCustomerFinish"])
         self.assertTrue(json.loads((bundle / "starter-config.json").read_text())["requiresUnreleasedPlatform"])
 
@@ -219,11 +210,6 @@ class BankingStarterPackageTest(unittest.TestCase):
                 self.assertEqual(["completionPolicy.requireCustomerFinish"], configuration["requiredCustomerSdkCapabilities"])
                 self.assertTrue(configuration["requiresUnreleasedPlatform"])
                 self.assertIs(value, manifest["requiredPlatform"]["completionPolicy.requireCustomerFinish"])
-                self.assertEqual("0.3.3", manifest["compatibility"]["pythonSdk"])
-                self.assertEqual("1.2.1", manifest["compatibility"]["contracts"])
-                self.assertIn("source dependency targets", manifest["compatibilityMeaning"])
-                self.assertIn("published Python SDK 0.3.3", manifest["compatibilityMeaning"])
-                self.assertIn("separate installed-package verification", manifest["compatibilityMeaning"])
                 self.assertEqual(self.scenario, json.loads((bundle / "scenario.json").read_text()))
                 self.assertNotIn("customer-run-evidence.py", manifest["files"])
 
@@ -246,11 +232,6 @@ class BankingStarterPackageTest(unittest.TestCase):
                     self.assertNotIn("localImageIds", manifest)
                     self.assertFalse(configuration["requiresUnreleasedPlatform"])
                     self.assertFalse(configuration["requiresUnreleasedCustomerSdk"])
-                    self.assertEqual("0.3.0", manifest["compatibility"]["platform"])
-                    self.assertEqual("0.3.3", manifest["compatibility"]["pythonSdk"])
-                    self.assertEqual("1.2.1", manifest["compatibility"]["contracts"])
-                    self.assertEqual("0.4.3" if bank == "java" else None,
-                                     manifest["compatibility"].get("javaSdk"))
                     self.assertEqual("v0.3.0", manifest["requiredPlatform"]["release"])
                     self.assertIs(finish, manifest["requiredPlatform"]["completionPolicy.requireCustomerFinish"])
                     self.assertEqual(["completionPolicy.requireCustomerFinish"], configuration["requiredCustomerSdkCapabilities"])
@@ -259,7 +240,6 @@ class BankingStarterPackageTest(unittest.TestCase):
                     self.assertEqual(True if scenario == "monthly" else None,
                                      manifest["requiredPlatform"].get("retainedParticipationSupported"))
                     self.assertEqual(selected, json.loads((bundle / "scenario.json").read_text()))
-                    self.assertIn("not proof of platform publication", manifest["compatibilityMeaning"])
 
     def test_public_platform_release_validation_and_local_mode_are_unambiguous(self):
         with patch.object(packager.subprocess, "check_output") as docker:
@@ -299,8 +279,6 @@ class BankingStarterPackageTest(unittest.TestCase):
 
     def test_image_owned_customer_imports_with_only_shared_evidence_neighbor(self):
         repository = Path(__file__).resolve().parents[2]
-        dockerfile = (repository / "banking-advice-agent/Dockerfile").read_text()
-        self.assertIn("COPY integration/customer-run-evidence.py ./", dockerfile)
         standalone = Path(self.temporary.name) / "standalone-image-files"
         standalone.mkdir()
         for source, name in (("banking-advice-agent/run-customer.py", "run-customer.py"),

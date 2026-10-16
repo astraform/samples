@@ -31,70 +31,7 @@ class BankingRemotePolicyWindTunnelServiceTest {
     java.nio.file.Path workspaceRoot;
 
     @Test
-    void exposesBankingPolicyWindTunnelMetadataFromRemoteDomainService() {
-        BankingRemotePolicyWindTunnelService service = service(true);
-        Map<String, Object> body = service.pack();
-
-        assertThat(body)
-                .containsEntry("packId", "banking-policy-pack")
-                .containsEntry("domainId", "banking")
-                .containsEntry("label", "Banking Policy Pack")
-                .containsKeys(
-                        "capabilities",
-                        "controlSchema",
-                        "uiSchema",
-                        "domainLabels",
-                        "reportLabels",
-                        "outcomeSchema",
-                        "outcomeScorecard",
-                        "outcomeScorecards",
-                        "policyExpressions",
-                        "summarySchemaVersion");
-        assertThat(scorecards(body))
-                .extracting(scorecard -> scorecard.get("scorecardId"))
-                .contains("banking.customer-impact.v1", "banking.evidence-readiness.v1");
-        assertThat(String.valueOf(((Map<?, ?>) body.get("domainLabels")).get("actorPlural")))
-                .isEqualTo("customers");
-        assertThat(String.valueOf(((Map<?, ?>) body.get("capabilities")).get("remoteScorecardMetadata")))
-                .isEqualTo("true");
-        assertThat(String.valueOf(((Map<?, ?>) body.get("capabilities")).get("remoteProviderReady")))
-                .isEqualTo("true");
-        @SuppressWarnings("unchecked")
-        Map<String, Object> capabilities = (Map<String, Object>) body.get("capabilities");
-        assertThat(capabilities)
-                .containsEntry("executionModes", List.of("CLOCK_DRIVEN_HYBRID"))
-                .containsEntry("opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2")
-                .containsEntry("platformOwnedV2StorageReady", true);
-        @SuppressWarnings("unchecked")
-        Map<String, Object> realLlmPolicy =
-                (Map<String, Object>) ((Map<?, ?>) body.get("capabilities")).get("realLlmCanaryPolicy");
-        assertThat(realLlmPolicy)
-                .containsEntry("schemaVersion", "real_llm_canary_policy.v1")
-                .containsEntry("enabled", true)
-                .containsEntry("provider", "openai")
-                .containsEntry("model", "gemini-2.5-flash-lite")
-                .containsEntry("maxCustomers", 10)
-                .containsEntry("maxDays", 30)
-                .containsEntry("maxCalls", 70)
-                .containsEntry("maxInputTokens", 150_000)
-                .containsEntry("maxOutputTokens", 25_000)
-                .containsEntry("maxPlaybackRate", 600.0d);
-        assertThat(realLlmPolicy.get("allowedCadences")).isEqualTo(List.of("EVENT_ONLY", "DAILY", "WEEKLY"));
-    }
-
-    @Test
-    void exposesBankingPolicyWindTunnelPresetCatalogFromRemoteDomainService() {
-        BankingRemotePolicyWindTunnelService service = service(true);
-        Map<String, Object> body = service.presets();
-
-        assertThat(body)
-                .containsEntry("schemaVersion", "banking_scenario_lab_presets.v1")
-                .containsKey("presets")
-                .containsEntry("summarySchemaVersion", "policy_wind_tunnel_summary.v1");
-    }
-
-    @Test
-    void doesNotAdvertiseV2WithoutVerifiedSharedStorage() {
+    void advertisesV2OnlyWithVerifiedSharedStorage() {
         BankingRemotePolicyWindTunnelService service = service(false);
         @SuppressWarnings("unchecked")
         Map<String, Object> capabilities =
@@ -103,6 +40,12 @@ class BankingRemotePolicyWindTunnelServiceTest {
         assertThat(capabilities)
                 .containsEntry("opportunityGenerationFinalizationMode", "LEGACY_V1")
                 .containsEntry("platformOwnedV2StorageReady", false);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> enabledCapabilities =
+                (Map<String, Object>) service(true).pack().get("capabilities");
+        assertThat(enabledCapabilities)
+                .containsEntry("opportunityGenerationFinalizationMode", "PLATFORM_OWNED_V2")
+                .containsEntry("platformOwnedV2StorageReady", true);
         assertThatThrownBy(() -> service.startRun(
                         Map.of(
                                 "executionMode", "CLOCK_DRIVEN_HYBRID",
@@ -305,8 +248,4 @@ class BankingRemotePolicyWindTunnelServiceTest {
                 sharedStorageEnabled);
     }
 
-    @SuppressWarnings("unchecked")
-    private static List<Map<String, Object>> scorecards(Map<String, Object> body) {
-        return (List<Map<String, Object>>) body.get("outcomeScorecards");
-    }
 }

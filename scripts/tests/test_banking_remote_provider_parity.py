@@ -731,29 +731,6 @@ class BankingRemoteProviderParityTest(TestCase):
                     self.module.compare_agentic_report_summaries(java, python)
 
     def test_deferred_reason_vocabulary_keeps_deliberate_legacy_sentinel(self):
-        self.assertEqual(
-            self.module.OPPORTUNITY_DEFERRED_REASON_CODES_V1,
-            frozenset({
-                "background_admission_limit",
-                "background_turn_capacity_timeout",
-                "background_turn_capacity_interrupted",
-                "permit_timeout",
-                "autonomous_backfill_window_limit",
-                "agent_not_active",
-                "worker_lease_expired",
-                "worker_transient_error",
-                "provider_pacing_limit",
-                "provider_unavailable",
-                "provider_rate_limited",
-                "provider_timeout",
-                "provider_transient_error",
-                "opportunity_worker_authorization_unavailable",
-            }),
-        )
-        self.assertEqual(
-            self.module.LEGACY_UNSPECIFIED_DEFERRED_REASON_CODE,
-            "unspecified",
-        )
         self.assertTrue(self.module.strict_opportunity_deferred_reason_code("provider_unavailable"))
         self.assertFalse(self.module.strict_opportunity_deferred_reason_code("unspecified"))
         self.assertTrue(

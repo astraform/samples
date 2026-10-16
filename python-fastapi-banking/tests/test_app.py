@@ -2713,23 +2713,6 @@ def test_opportunity_audit_rejects_missing_and_malformed_reason_maps() -> None:
 
 
 def test_opportunity_audit_deferred_reasons_match_v1_lifecycle_contract() -> None:
-    assert service.OPPORTUNITY_DEFERRED_REASON_CODES_V1 == frozenset({
-        "background_admission_limit",
-        "background_turn_capacity_timeout",
-        "background_turn_capacity_interrupted",
-        "permit_timeout",
-        "autonomous_backfill_window_limit",
-        "agent_not_active",
-        "worker_lease_expired",
-        "worker_transient_error",
-        "provider_pacing_limit",
-        "provider_unavailable",
-        "provider_rate_limited",
-        "provider_timeout",
-        "provider_transient_error",
-        "opportunity_worker_authorization_unavailable",
-    })
-    assert service.LEGACY_UNSPECIFIED_DEFERRED_REASON_CODE == "unspecified"
     assert service.strict_opportunity_reason_counts({"unspecified": 0}) == {"unspecified": 0}
     assert service.strict_opportunity_reason_counts({"unspecified": 1}) is None
 

@@ -120,6 +120,14 @@ their model settings before startup. Use the public platform bundle alongside
 it. [Deployment and ownership](docs/PLATFORM_PACKAGING.md) explains the connection
 model and how to replace a sample with your own agent or domain service.
 
+## Test maintenance
+
+Keep tests that exercise business behavior, validation, serialization, HTTP/SDK
+integration, security boundaries and generated package integrity. Do not add tests
+that snapshot source, documentation, POM or workflow text, ban class names, or
+freeze editorial wording, version strings and catalog/default getter values.
+Exercise behavior with inputs and observable results instead.
+
 ## Releases
 
 All examples share one repository release version, such as **v0.1.0**. Each

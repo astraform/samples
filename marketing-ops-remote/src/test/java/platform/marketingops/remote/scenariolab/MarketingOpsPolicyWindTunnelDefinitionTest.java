@@ -22,26 +22,6 @@ class MarketingOpsPolicyWindTunnelDefinitionTest {
             new MarketingOpsPolicyWindTunnelDefinition();
 
     @Test
-    void exposesSchemaDrivenCatalogOwnedByMarketingOpsDomain() {
-        Map<String, Object> catalog = definition.presetCatalog();
-
-        assertEquals(MarketingOpsPolicyWindTunnelDefinition.PACK_ID,
-                definition.descriptor().packId());
-        assertEquals("scenario_lab_presets.v1", catalog.get("schemaVersion"));
-        assertEquals(MarketingOpsPolicyWindTunnelDefinition.SUMMARY_SCHEMA_VERSION,
-                catalog.get("summarySchemaVersion"));
-        assertTrue(catalog.containsKey("controls"));
-        assertTrue(catalog.containsKey("uiSchema"));
-        assertEquals("domain_outcome_schema.v1", definition.outcomeSchema().get("schemaVersion"));
-        assertTrue(definition.outcomeSchema().toString().contains("sla-risk"));
-        assertEquals("domain_outcome_scorecard.v1", definition.outcomeScorecard().get("schemaVersion"));
-        assertEquals("marketing-ops.launch-readiness.v1", definition.outcomeScorecard().get("scorecardId"));
-        assertEquals(2, definition.outcomeScorecards().size());
-        assertTrue(definition.outcomeScorecards().toString().contains("marketing-ops.evidence-readiness.v1"));
-        assertTrue(catalog.toString().contains(MarketingOpsPolicyWindTunnelDefinition.DOMAIN_ID));
-    }
-
-    @Test
     void normalizesPayloadInsideDomainDefinition() {
         Map<String, Object> normalized = definition.normalizePayload(Map.of(
                 "presetId", "",

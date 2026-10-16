@@ -69,15 +69,6 @@ class CustomerLauncherTest(unittest.TestCase):
         self.assertEqual(3, reads.get_simulation_run.call_count)
         reads.export_simulation_run_evidence.assert_not_called()
 
-    def test_observer_default_covers_thinking_window_without_launching_again(self):
-        with patch.object(launcher.evidence, 'inspect_run', return_value=0) as inspect, \
-                patch.object(launcher, 'launch') as launch:
-            code = launcher.main(['--inspect', 'run-1', '--wait', '--output', str(self.output)])
-        self.assertEqual(0, code)
-        launch.assert_not_called()
-        self.assertEqual(('run-1', self.output, True, 8220), inspect.call_args.args[2:])
-        self.assertEqual(7200 + 900 + 120, inspect.call_args.args[-1])
-
     def test_wait_deadline_keeps_run_for_read_only_resumption(self):
         reads = MagicMock()
         reads.get_simulation_run.return_value = document({'runId': 'run-1', 'status': 'RUNNING'})
@@ -144,7 +135,6 @@ class CustomerLauncherTest(unittest.TestCase):
         journeys.launch_agent_journey.assert_called_once()
         self.assertEqual(saved, (self.output / 'launch-request.json').read_bytes())
 
-
     def test_invalid_finish_policy_stops_before_seed_or_catalog_writes(self):
         for value in (None, "true", "false", 1, 0, 1.0, [], {}, [True]):
             with self.subTest(value=value):
@@ -164,7 +154,6 @@ class CustomerLauncherTest(unittest.TestCase):
                 catalog.publish_agent_definition.assert_not_called()
                 journeys.assert_not_called()
                 self.assertFalse(self.output.exists())
-
 
     def prepare_capabilities(self, binding="banking"):
         digest = 'sha256:' + 'a' * 64

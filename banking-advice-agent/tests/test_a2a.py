@@ -1,6 +1,5 @@
 import json
 import os
-from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import threading
 import time
@@ -11,7 +10,7 @@ from uuid import uuid4
 
 from starlette.testclient import TestClient
 
-from app import INPUT_SCHEMA, create_app, llm_configuration
+from app import INPUT_SCHEMA, create_app
 
 
 def send_message(client, facts, *, wrapped=False):
@@ -96,33 +95,16 @@ class BankingAdviceContractTest(unittest.TestCase):
     def send(self, facts, *, wrapped=False):
         return send_message(self.client, facts, wrapped=wrapped)
 
-    def test_advertised_input_matches_backend_or_legacy_mode(self):
-        schemas = Path(__file__).resolve().parents[1]
-        for backend_url, filename in (("", "input.schema.json"),
-                                      ("http://bank:8098", "bank-backend.input.schema.json")):
+    def test_health_reflects_backend_and_model_configuration(self):
+        for backend_url in ("", "http://bank:8098"):
             with self.subTest(backend_url=backend_url):
                 with TestClient(create_app("http://banking-advice:8096", backend_url=backend_url)) as client:
-                    card = client.get("/.well-known/agent-card.json").json()
-                    skill = card["skills"][0]
                     health = client.get("/health").json()
-                schema = json.loads((schemas / filename).read_text())
-                self.assertEqual("0.4.0", card["version"])
                 self.assertEqual("llm", health["responseMode"])
                 self.assertEqual("fixture-bank-model", health["model"])
                 self.assertEqual("fixture-v1", health["modelBindingRevision"])
                 self.assertEqual("request-only", health["conversationMemory"])
                 self.assertEqual("bank-backend" if backend_url else "legacy-supplied-statement", health["mode"])
-                self.assertIn(filename, skill["description"])
-                self.assertEqual(not bool(backend_url), "minimumAmountDue" in skill["description"])
-                if backend_url:
-                    self.assertEqual({"schemaVersion", "customerMessage", "statementPeriod", "astraformCustomerContexts"},
-                                     set(schema["properties"]))
-                    self.assertEqual({"schemaVersion", "customerMessage"}, set(schema["required"]))
-                    self.assertFalse(schema["additionalProperties"])
-                    self.assertIn("Without it, advice uses the latest issued statement", skill["description"])
-                else:
-                    self.assertIn("statement", schema["properties"])
-                    self.assertNotIn("statementPeriod", schema["properties"])
 
     def test_bank_metadata_stays_authoritative_and_model_prose_is_preserved(self):
         for minimum, expected in ((48.0, "payment_due"), ("0", "no_payment_due")):
@@ -195,22 +177,6 @@ class BankingAdviceContractTest(unittest.TestCase):
             with self.subTest(settings=settings), patch.dict(os.environ, settings):
                 with self.assertRaises(ValueError):
                     create_app("http://banking-advice:8096", backend_url="")
-        self.assertEqual([], self.model_requests)
-
-    def test_generic_defaults_remain_unchanged_and_thinking_limits_are_finite(self):
-        with patch.dict(os.environ):
-            for key in ("TIMEOUT_SECONDS", "MAX_OUTPUT_TOKENS", "TEMPERATURE", "REASONING_EFFORT"):
-                os.environ.pop("BANKING_LLM_" + key, None)
-            config = llm_configuration()
-        self.assertEqual(120, config["timeout"])
-        self.assertEqual(2048, config["max_output_tokens"])
-        self.assertEqual(0, config["temperature"])
-        self.assertEqual("", config["reasoning_effort"])
-        with patch.dict(os.environ, {"BANKING_LLM_TIMEOUT_SECONDS": "900",
-                                     "BANKING_LLM_MAX_OUTPUT_TOKENS": "32768"}):
-            config = llm_configuration()
-        self.assertEqual(900, config["timeout"])
-        self.assertEqual(32768, config["max_output_tokens"])
         self.assertEqual([], self.model_requests)
 
     def test_thinking_request_preserves_final_answer_and_keeps_reasoning_separate(self):

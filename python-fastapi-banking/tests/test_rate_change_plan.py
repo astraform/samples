@@ -41,15 +41,6 @@ def test_compiles_the_shared_canonical_day_ten_plan() -> None:
     assert require_snapshot_bytes(canonical_snapshot_bytes(snapshot)) == snapshot
 
 
-def test_publishes_the_shared_frozen_control_action_descriptor() -> None:
-    fixture = load_fixture()
-    descriptor = next(
-        action
-        for action in service.manifest()["capabilities"]["controlActions"]
-        if action["actionId"] == service.RATE_CHANGE_PLAN_ACTION_ID
-    )
-
-    assert descriptor == fixture["expectedControlActionDescriptor"]
 
 
 def test_does_not_compile_other_presets_and_rejects_excluded_overlays() -> None:

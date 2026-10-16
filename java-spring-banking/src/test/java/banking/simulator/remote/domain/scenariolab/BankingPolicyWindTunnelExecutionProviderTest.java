@@ -1245,31 +1245,6 @@ class BankingPolicyWindTunnelExecutionProviderTest {
 
     @Test
     void opportunityAuditDeferredReasonsMatchTheV1LifecycleContract() throws Exception {
-        var field = BankingPolicyWindTunnelExecutionProvider.class.getDeclaredField(
-                "OPPORTUNITY_DEFERRED_REASON_CODES_V1");
-        field.setAccessible(true);
-
-        assertEquals(Set.of(
-                "background_admission_limit",
-                "background_turn_capacity_timeout",
-                "background_turn_capacity_interrupted",
-                "permit_timeout",
-                "autonomous_backfill_window_limit",
-                "agent_not_active",
-                "worker_lease_expired",
-                "worker_transient_error",
-                "provider_pacing_limit",
-                "provider_unavailable",
-                "provider_rate_limited",
-                "provider_timeout",
-                "provider_transient_error",
-                "opportunity_worker_authorization_unavailable"), field.get(null));
-
-        var legacyField = BankingPolicyWindTunnelExecutionProvider.class.getDeclaredField(
-                "LEGACY_UNSPECIFIED_DEFERRED_REASON_CODE");
-        legacyField.setAccessible(true);
-        assertEquals("unspecified", legacyField.get(null));
-
         Method parser = BankingPolicyWindTunnelExecutionProvider.class.getDeclaredMethod(
                 "strictOpportunityReasonCounts",
                 Object.class);
