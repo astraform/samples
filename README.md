@@ -115,10 +115,31 @@ implementation; the published platform v0.2.0 and samples v0.1.0 images/archives
 retain their original behavior. New source pins do not upgrade existing images.
 
 The root `compose.yaml` builds sample services from this repository; it does not
-start Astraform. Select the services required by your chosen guide and supply
-their model settings before startup. Use the public platform bundle alongside
-it. [Deployment and ownership](docs/PLATFORM_PACKAGING.md) explains the connection
+start Astraform. New installations use the Compose project `astraform-samples`;
+Compose's standard `COMPOSE_PROJECT_NAME` environment setting overrides it.
+Select the services required by your chosen guide and supply their model settings
+before startup. Use the public platform bundle alongside it.
+[Deployment and ownership](docs/PLATFORM_PACKAGING.md) explains the connection
 model and how to replace a sample with your own agent or domain service.
+
+For an existing deployment, keep its current project name before running Compose.
+Project names determine the default network and volume names, so switching names
+would select different database volumes. Inspect the actual labels, including
+volumes whose containers have already stopped:
+
+```sh
+docker compose ls --all
+docker ps --all --format '{{.Names}}: {{.Label "com.docker.compose.project"}}'
+docker volume ls --filter label=com.docker.compose.volume=python-banking-data
+docker volume inspect <existing-volume> --format '{{index .Labels "com.docker.compose.project"}}'
+```
+
+Set `COMPOSE_PROJECT_NAME=<existing-project-name>` in this checkout's ignored
+local `.env`, or export it in the shell before every Compose command. Render
+`docker compose config` to confirm the project and volume names before startup.
+This reuses the existing volume namespace; no migration or volume removal is
+needed. Keep the separate platform bundle's project and evidence-volume settings
+unchanged as well.
 
 ## Test maintenance
 
@@ -158,6 +179,19 @@ See the [changelog](CHANGELOG.md), [v0.2.0 preparation notes](docs/releases/v0.2
 and [maintainer publication instructions](docs/PUBLICATION_CHECKLIST.md). One
 **Publish Samples Release** workflow prepares or publishes the repository release.
 Image publication is separate and is needed only when images change.
+
+Current source publishes the five sample images in this repository's package set:
+`ghcr.io/astraform/samples-java-spring-banking`,
+`ghcr.io/astraform/samples-marketing-ops-remote`,
+`ghcr.io/astraform/samples-marketing-ops-creative-agency`,
+`ghcr.io/astraform/samples-banking-starter-bank` and
+`ghcr.io/astraform/samples-banking-starter-advice`. Each image records
+`https://github.com/astraform/samples` as its OCI source and the build commit as
+its revision. Publish the complete set from one reviewed new source commit;
+select only its verified digests for the next starter release. Previously
+published packages and v0.1.0 assets retain their original identities and bytes.
+The image workflow and the starter release workflow remain separate manual
+actions; changing package names or passing CI does not publish either.
 
 ## Example data
 

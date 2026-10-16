@@ -1,4 +1,4 @@
-name: astraform-remote-domain-samples
+name: astraform-samples
 
 services:
   java-spring-banking:

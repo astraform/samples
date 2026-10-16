@@ -15,27 +15,27 @@ on:
         type: boolean
         default: false
       publish_java_image:
-        description: "Publish java-spring-banking on manual publish"
+        description: "Publish samples-java-spring-banking on manual publish"
         required: false
         type: boolean
         default: false
       publish_marketing_image:
-        description: "Publish marketing-ops-remote on manual publish"
+        description: "Publish samples-marketing-ops-remote on manual publish"
         required: false
         type: boolean
         default: false
       publish_creative_agency_image:
-        description: "Publish marketing-ops-creative-agency on manual publish"
+        description: "Publish samples-marketing-ops-creative-agency on manual publish"
         required: false
         type: boolean
         default: false
       publish_python_image:
-        description: "Publish banking-starter-bank on manual publish"
+        description: "Publish samples-banking-starter-bank on manual publish"
         required: false
         type: boolean
         default: false
       publish_banking_advice_image:
-        description: "Publish banking-starter-advice on manual publish"
+        description: "Publish samples-banking-starter-advice on manual publish"
         required: false
         type: boolean
         default: false
@@ -274,7 +274,7 @@ jobs:
         if: ${{ steps.image-selection.outputs.java == 'true' }}
         id: java-candidate
         run: |
-          repository="ghcr.io/astraform/java-spring-banking"
+          repository="ghcr.io/astraform/samples-java-spring-banking"
           tag="candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "repository=${repository}" >> "${GITHUB_OUTPUT}"
           echo "tag=${repository}:${tag}" >> "${GITHUB_OUTPUT}"
@@ -291,7 +291,9 @@ jobs:
           provenance: mode=max
           sbom: true
           tags: ${{ steps.java-candidate.outputs.tag }}
-          labels: org.opencontainers.image.revision=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/astraform/samples
+            org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Promote immutable Java manifest
         if: ${{ steps.image-selection.outputs.java == 'true' }}
@@ -305,7 +307,7 @@ jobs:
             exit 1
           fi
           bash scripts/promote-immutable-image.sh \
-            java-spring-banking \
+            samples-java-spring-banking \
             "${TAG}" \
             "${REPOSITORY}@${DIGEST}"
           printf 'Java image: `%s@%s`\n' "${REPOSITORY}" "${DIGEST}" \
@@ -315,7 +317,7 @@ jobs:
         if: ${{ steps.image-selection.outputs.marketing == 'true' }}
         id: marketing-candidate
         run: |
-          repository="ghcr.io/astraform/marketing-ops-remote"
+          repository="ghcr.io/astraform/samples-marketing-ops-remote"
           tag="candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "repository=${repository}" >> "${GITHUB_OUTPUT}"
           echo "tag=${repository}:${tag}" >> "${GITHUB_OUTPUT}"
@@ -332,7 +334,9 @@ jobs:
           provenance: mode=max
           sbom: true
           tags: ${{ steps.marketing-candidate.outputs.tag }}
-          labels: org.opencontainers.image.revision=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/astraform/samples
+            org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Promote immutable Marketing Ops manifest
         if: ${{ steps.image-selection.outputs.marketing == 'true' }}
@@ -346,7 +350,7 @@ jobs:
             exit 1
           fi
           bash scripts/promote-immutable-image.sh \
-            marketing-ops-remote \
+            samples-marketing-ops-remote \
             "${TAG}" \
             "${REPOSITORY}@${DIGEST}"
           printf 'Marketing Ops image: `%s@%s`\n' "${REPOSITORY}" "${DIGEST}" \
@@ -356,7 +360,7 @@ jobs:
         if: ${{ steps.image-selection.outputs.creative_agency == 'true' }}
         id: creative-agency-candidate
         run: |
-          repository="ghcr.io/astraform/marketing-ops-creative-agency"
+          repository="ghcr.io/astraform/samples-marketing-ops-creative-agency"
           tag="candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "repository=${repository}" >> "${GITHUB_OUTPUT}"
           echo "tag=${repository}:${tag}" >> "${GITHUB_OUTPUT}"
@@ -373,7 +377,9 @@ jobs:
           provenance: mode=max
           sbom: true
           tags: ${{ steps.creative-agency-candidate.outputs.tag }}
-          labels: org.opencontainers.image.revision=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/astraform/samples
+            org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Smoke immutable Creative Agency candidate
         if: ${{ steps.image-selection.outputs.creative_agency == 'true' }}
@@ -418,7 +424,7 @@ jobs:
             exit 1
           fi
           bash scripts/promote-immutable-image.sh \
-            marketing-ops-creative-agency \
+            samples-marketing-ops-creative-agency \
             "${TAG}" \
             "${REPOSITORY}@${DIGEST}"
           printf 'Creative Agency image: `%s@%s`\n' "${REPOSITORY}" "${DIGEST}" \
@@ -428,7 +434,7 @@ jobs:
         if: ${{ steps.image-selection.outputs.python == 'true' }}
         id: python-candidate
         run: |
-          repository="ghcr.io/astraform/banking-starter-bank"
+          repository="ghcr.io/astraform/samples-banking-starter-bank"
           tag="candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "repository=${repository}" >> "${GITHUB_OUTPUT}"
           echo "tag=${repository}:${tag}" >> "${GITHUB_OUTPUT}"
@@ -445,7 +451,9 @@ jobs:
           provenance: mode=max
           sbom: true
           tags: ${{ steps.python-candidate.outputs.tag }}
-          labels: org.opencontainers.image.revision=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/astraform/samples
+            org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Promote immutable Python manifest
         if: ${{ steps.image-selection.outputs.python == 'true' }}
@@ -459,7 +467,7 @@ jobs:
             exit 1
           fi
           bash scripts/promote-immutable-image.sh \
-            banking-starter-bank \
+            samples-banking-starter-bank \
             "${TAG}" \
             "${REPOSITORY}@${DIGEST}"
           printf 'Python image: `%s@%s`\n' "${REPOSITORY}" "${DIGEST}" \
@@ -469,7 +477,7 @@ jobs:
         if: ${{ steps.image-selection.outputs.banking_advice == 'true' }}
         id: banking-advice-candidate
         run: |
-          repository="ghcr.io/astraform/banking-starter-advice"
+          repository="ghcr.io/astraform/samples-banking-starter-advice"
           tag="candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "repository=${repository}" >> "${GITHUB_OUTPUT}"
           echo "tag=${repository}:${tag}" >> "${GITHUB_OUTPUT}"
@@ -486,7 +494,9 @@ jobs:
           provenance: mode=max
           sbom: true
           tags: ${{ steps.banking-advice-candidate.outputs.tag }}
-          labels: org.opencontainers.image.revision=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/astraform/samples
+            org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Smoke immutable Banking Advice candidate without model calls
         if: ${{ steps.image-selection.outputs.banking_advice == 'true' }}
@@ -532,7 +542,7 @@ jobs:
             exit 1
           fi
           bash scripts/promote-immutable-image.sh \
-            banking-starter-advice \
+            samples-banking-starter-advice \
             "${TAG}" \
             "${REPOSITORY}@${DIGEST}"
           printf 'Banking Advice image: `%s@%s`\n' "${REPOSITORY}" "${DIGEST}" \
