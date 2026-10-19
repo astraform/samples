@@ -44,9 +44,9 @@ def initialize(platform, model):
     partner = profile_path.read_text()
     profile = env(profile_path)
     agent_timeout = int(profile.get("CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS", "140"))
-    if not 1 <= agent_timeout <= 300:
-        raise ValueError("CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS must be between 1 and 300")
-    # Preserve the 150s Ollama budget; cover a longer configured agency deadline.
+    if not 5 <= agent_timeout <= 900:
+        raise ValueError("CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS must be between 5 and 900")
+    # Cover the selected agency deadline while preserving the existing 150s floor.
     timeout = f"{max(150, agent_timeout)}s"
     name = "astraform-marketing-" + secrets.token_hex(5)
     token = secrets.token_hex(32)
