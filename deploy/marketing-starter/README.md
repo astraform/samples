@@ -1,59 +1,41 @@
 # Marketing starter
 
-Run the Marketing Ops domain and its LLM Creative Agency from images built for
-this candidate, then launch a real-model customer through a generated Python SDK
-supporting `completionPolicy.requestFactBindingMode`. The updated source templates
-select `RESOLVE_TRUSTED`, which published Python **0.3.4** preserves. Current domain
-source selects Java SDK **0.4.4** with public contracts **1.2.2**; its callbacks
-do not supply customer-launch behavior in the server. Rebuild the tools image
-with Python 0.3.4 and use a platform implementing trusted binding. Earlier
-candidate images retain their recorded dependencies.
-The platform is a separate image bundle. Customer and partner models are
-configured independently.
+Run the Marketing Ops domain and its LLM Creative Agency from matching images,
+then launch a customer through the native Python SDK. The platform is a separate
+image bundle; customer and partner models are configured independently.
 
-Samples **v0.2.0** prepares a scheduled-marketing public archive targeting
-the published [platform v0.3.0](https://github.com/astraform/releases/releases/tag/v0.3.0)
-for the previous validation-only configuration; the new source trusted-binding
-configuration requires a supporting platform release before that compatibility
-claim can be renewed; the native typed SDK support is now published.
-The new sample images and archive are not published yet. Public-mode preparation
-requires `--platform-release v0.3.0`, anonymous digest-pinned images and verified
-source/architecture metadata; release selection remains `publicationReady:false`
-until real artifacts are reviewed. The separate `--local-verification` mode
-still records installed image IDs and `localVerificationOnly`, including the
-current-boundary option. Do not distribute a local rehearsal as a public download
-or infer independent partner acceptance from image availability. `image-lock.json`, `release.env`, `starter-config.json`
-and the manifest identify its topology, scenario, source and actual payload.
-The tools service reuses a Python SDK image, while the marketing launcher and
-the shared `customer-run-evidence.py` utility are supplied by this archive and mounted
-read-only; they are not claimed to be embedded in that published image.
-The shared utility saves and inspects the same accepted run through SDK reads;
-the marketing launcher owns its normal generated create/publish/launch calls.
-It does not import the banking launcher or start a helper service.
+The authored templates require a platform implementing both
+`completionPolicy.requireCustomerFinish` and
+`completionPolicy.requestFactBindingMode: "RESOLVE_TRUSTED"`. Python SDK **0.3.4**
+preserves both fields. The domain image must implement
+`marketing-ops.native-events.v4`; its source uses Java SDK **0.4.4** and public
+contracts **1.2.2**. Use matching domain/tools images and a supporting platform
+release. SDK publication does not add server behavior, and platform v0.3.0's
+strict FINISH support does not establish trusted-binding support. Source updates
+do not update existing images or archives.
 
-The native provider supplies the run's marketing identity. A custom scenario
-may additionally declare `launchRequestTemplate.domainId: "marketing-ops"`; it must
-match the provider. Published Python 0.3.4 preserves it, and the selected platform
-must implement explicit domain identity. The launcher rejects unsupported typed
-serialization before output or Catalog writes. The value is classification, not
-an access grant. Omitting it retains the existing provider identity. Public
-packaging still rejects an unreleased explicit platform capability rather than
-dropping it.
+Public archives use anonymous digest-pinned images. Check `image-lock.json`,
+`release.env`, `starter-config.json` and the manifest for the selected images,
+scenario and compatibility requirements. Archives prepared with
+`--local-verification` instead require their recorded image IDs already installed;
+keep those archives local rather than distributing them as public downloads.
+The tools image provides the Python SDK. This archive supplies the marketing
+launcher and its shared SDK evidence observer through read-only mounts.
 
-Both updated source marketing templates supply
-`completionPolicy.requireCustomerFinish:true` and
-`completionPolicy.requestFactBindingMode: "RESOLVE_TRUSTED"`. Astraform fills the
-configured bound metadata from accepted observations; the customer model still
-chooses whether to contact the agency, its question and unbound facts. Agency
-advice and customer FINISH remain autonomous and both strict success conditions
-remain required. Published Python SDK 0.3.4 supports FINISH and preserves the
-new binding mode. A supporting coordinator implementation and rebuilt tools
-images/archives still require separate delivery and verification. Source SDK pins
-do not update released images. An older scenario omitting the new mode keeps
-legacy exact-match validation; omission does not enable trusted projection. There
-is no transport bridge or silent mode removal. Verify the matching platform,
-then rebuild and verify the tools image and archive before
-distributing this updated starter. Publication does not update existing archives.
+The provider supplies the run's marketing identity. A custom scenario may also
+set `launchRequestTemplate.domainId: "marketing-ops"`, which must match the
+provider and requires explicit domain-identity support in the selected platform.
+The value classifies the run; it does not grant access. Python SDK 0.3.4 preserves
+it. Invalid or unsupported typed fields are rejected before Catalog or launch
+writes rather than silently removed. Omitting domainId retains provider-derived
+identity.
+
+With trusted binding, Astraform supplies bound metadata from accepted domain
+observations. The customer chooses whether to contact the agency, its message
+and unbound facts. A qualifying agency response and a later customer FINISH are
+both required; a received response alone does not establish advice quality.
+A custom scenario omitting trusted-binding mode retains legacy exact-match
+validation. There is no transport bridge or silent mode removal.
 
 ## Initialize and run
 
@@ -109,6 +91,22 @@ well as successful ones. The observer defaults to1,500 seconds for the scenario'
 
 ## Scenario and provider configuration
 
+Choose the customer case when preparing an archive: the marketing packager's
+`--case advice` is the default, and `--case proposal-review` selects the separate
+proposal-assessment goal. Advice asks for an actionable recommendation; proposal
+review asks the customer to develop its own handoff and seek the agency's
+assessment of its coverage and remaining gaps. The models choose the messages
+and actions. Neither case scripts follow-up turns or performs an external handoff.
+Proposal-review packaging uses the scheduled boundary. The existing advice case
+also supports `--scenario current`.
+
+The selected case is stored in `starter-config.json` and its complete template is
+shipped as `scenario.json`. Compose explicitly selects that file through
+`MARKETING_SAMPLE_FILE`; it takes precedence over the source launcher's `--case`
+flag. To change a packaged case, prepare another archive or edit its complete
+scenario before launching. The source launcher can select either authored case
+directly when that environment variable is unset.
+
 The `scheduled` candidate starts at 2026-01-15 08:30 UTC; the domain's 09:00 review
 publishes its own finding, and the customer chooses its actions. The `current`
 variant starts at09:00 with the review admitted at the current boundary. Both
@@ -116,13 +114,25 @@ reuse the existing marketing scenarios and native domain provider. The scheduled
 horizon extends to 2026-01-16 10:00 UTC, while the current variant has a fixed
 boundary. These are evaluation bounds, not month/year capacity claims.
 
-Both current scenarios require a qualifying partner receipt **and a later
+All authored scenarios require a qualifying partner receipt **and a later
 accepted customer FINISH** through `completionPolicy.requireCustomerFinish:true`.
 A selected customer follow-up remains eligible for dispatch after the first
 qualifying reply. These conditions do not verify the advice's factual quality or
-prove that the external production studio supplied its missing licence. Inspect
+prove that a proposed handoff was assessed or that the external production
+studio supplied its missing licence. Inspect
 the domain observations, actual advice, customer decisions and stop reason separately.
 A model mistake remains in evidence; there is no scripted customer or fallback.
+
+Use a domain image implementing `marketing-ops.native-events.v4` with the
+updated templates and input schema. The provider publishes one `selectedReview`
+with its approval identity, campaign, queue state, summary and explicit
+`reviewFacts`. The facts separate completed review from blocked launch approval,
+known document supplier from unknown coordination owner, and unknown rights,
+licensing authority and delivery date. `KNOWN` carries a value; `UNKNOWN` and
+`UNREPORTED` do not establish absence. Facts become visible only when the review
+executes; historical missing facts remain unreported. Trusted agency bindings
+use the same selected record. Rebuild the domain image and update its Runtime
+binding revision together with the schema before using these configurations.
 
 The current agency templates select Gemini 3.6 Flash with high reasoning or
 Ollama Qwen3.5 4B with thinking enabled by default. They do not
