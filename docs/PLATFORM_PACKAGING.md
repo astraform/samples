@@ -9,11 +9,14 @@ build a domain provider or run a customer simulation.
 
 The immutable baseline is the public
 [Astraform Platform v0.2.0 release](https://github.com/astraform/releases/releases/tag/v0.2.0),
-paired with the original Python starter v0.1.0. Current strict issued-banking
-and marketing templates use the published
-[Astraform Platform v0.3.0 release](https://github.com/astraform/releases/releases/tag/v0.3.0),
-published on 16 October 2026 (Australia/Sydney). Download and verify its archive
-and checksum; do not follow the strict walkthrough against v0.2.0.
+paired with the original Python starter v0.1.0. Strict customer-FINISH behavior
+uses the published
+[Astraform Platform v0.3.0 release](https://github.com/astraform/releases/releases/tag/v0.3.0).
+The current banking domain label and marketing trusted-fact binding additionally
+require a platform implementing those capabilities. The published SDKs preserve
+the fields; do not infer server support from their publication or the v0.3.0
+version alone. Download and verify the selected platform archive and checksum;
+do not follow the strict walkthrough against v0.2.0.
 A delivered bundle contains image-only Compose deployment, locked image references,
 initialization tools and operating instructions. Follow its included README to
 verify the archive, initialize a Gemini or Ollama profile, configure your model
@@ -50,15 +53,16 @@ per-user authentication, high availability or a production certification.
   through the SDK. Add customer MCP tools or a native domain provider only when
   your scenario needs them.
 
-Current Java provider source pins published author kit **0.4.3**; Python
-bank/advice source locks select published **0.3.3**. Both consume public contracts
-**1.2.1**. Each author kit includes its generated platform client and domain
+Current Java provider source pins published author kit **0.4.4**; Python
+bank/advice source locks select published **0.3.4**. Both consume public contracts
+**1.2.2**. Each author kit includes its generated platform client and domain
 authoring interfaces; no second platform-client package is needed. Customer
 launch/export uses that generated client. Monthly banking omits
 `completionPolicy.requireCustomerFinish`; issued banking and both current marketing
 templates explicitly require it.
 
-Java 0.4.3/Python 0.3.3 preserve the native Boolean, including `false`; launchers
+Java 0.4.4/Python 0.3.4 preserve the native Boolean, including `false`, as well
+as `domainId` and `completionPolicy.requestFactBindingMode`; launchers
 reject older unsupported SDKs before writes. Strict stopping also needs the
 supporting platform implementation. Published platform v0.2.0 and existing
 sample images/archives retain their recorded behavior and versions. Build and
@@ -178,8 +182,9 @@ Their public mode takes `--platform-release v0.3.0`; the separate local mode
 still covers Java/Python issued/monthly and scheduled/current marketing,
 records `localVerificationOnly`, installed image IDs and payload hashes, and
 cannot be relabelled as a public package. Historical published bytes are unchanged. The next public-mode candidates require an explicit **platform v0.3.0**
-selection and published Java 0.4.3/Python 0.3.3/contracts 1.2.1. The existing
-packagers preserve required completion/native-domain capabilities and verify
+selection and published Java 0.4.4/Python 0.3.4/contracts 1.2.2. Current source
+also requires the domain-identity/trusted-binding server capabilities described
+in the selected guide. The existing packagers preserve required completion/native-domain capabilities and verify
 anonymous digest/architecture/source metadata. Public platform v0.2.0 does not
 supply strict stopping. Platform v0.3.0 is publicly available; samples v0.2.0
 remains in preparation. Its release selection stays unready until actual sample

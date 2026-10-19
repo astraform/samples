@@ -1,11 +1,15 @@
 # Python FastAPI Banking Remote Domain
 
 Python banking reference implementation for `remote-domain.v1`, using published
-Python author kit `0.3.3` and shared contract bundle `1.2.1`. The locked SDK comes from
+Python author kit `0.3.4` and shared contract bundle `1.2.2`. The locked SDK comes from
 PyPI; this sample does not require an editable checkout of the SDK or access
-to Astraform's platform source. Use the public
+to Astraform's platform source. Select a platform matching the scenario's
+capabilities as described in the [shared banking guide](../banking-advice-agent/README.md).
+The historical
 [platform v0.2.0 bundle](https://github.com/astraform/releases/releases/tag/v0.2.0)
-for the running platform and its included README for initialization.
+supports compatible non-strict scenarios; strict customer-FINISH requires v0.3.0,
+and an explicit `domainId` additionally requires its supporting server capability.
+Follow the selected bundle's README for initialization.
 
 The native customer-simulation path reuses the banking rules in this provider
 and the [shared banking advice scenarios](../banking-advice-agent/README.md).
@@ -88,7 +92,7 @@ the bank URL and the deployment's MCP/domain/A2A bindings. The
 [Python endpoint setup](../banking-advice-agent/README.md#python-banking-endpoint-bindings)
 provides the complete binding properties and matching partner startup command.
 The setup helper uses the platform client included in the existing Astraform author
-kit, alongside domain authoring. Both are included in the published `0.3.3` author kit used by
+kit, alongside domain authoring. Both are included in the published `0.3.4` author kit used by
 this sample's registry-resolved lock. Conformance remains separate validation
 tooling. See [SDK dependency setup](../README.md#sdk-development).
 
@@ -184,8 +188,8 @@ The ordinary customer-simulation path continues to use generated SDK methods,
 the bank's manifest/prepare/work-window operations and Astraform-owned durable
 execution. Its issued/monthly capability requirements are described in the
 [shared banking guide](../banking-advice-agent/README.md); removing obsolete
-requests does not change those flows or their SDK dependency pins. These source
-changes remain local; immutable released images and archives have not changed.
+requests does not change those flows. Immutable released images and archives
+retain their recorded dependencies; rebuild from current source to use SDK 0.3.4.
 
 ## Domain Shape
 
@@ -268,10 +272,10 @@ skipped. CI supplies its own PostgreSQL service and runs these checks.
 
 Schema-backed conformance run:
 
-The author kit and conformance SDK `0.3.3` packages are published on PyPI.
+The author kit and conformance SDK `0.3.4` packages are published on PyPI.
 The source installation below uses those versions. Prebuilt images and starter
 archives retain the SDK versions recorded in their image and release metadata;
-a new image must be built from updated source to include SDK `0.3.3`. Record the
+a new image must be built from updated source to include SDK `0.3.4`. Record the
 running provider's source revision or image digest separately from the
 conformance tool version.
 
@@ -280,7 +284,7 @@ cd python-fastapi-banking
 python3 -m venv .venv-conformance
 . .venv-conformance/bin/activate
 pip install -e '.[test]'
-pip install 'astraform-remote-domain-conformance==0.3.3'
+pip install 'astraform-remote-domain-conformance==0.3.4'
 # Start the selected provider image by its actual digest on localhost:8092.
 mkdir -p build
 remote-domain-conformance \

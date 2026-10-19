@@ -2,13 +2,13 @@
 
 This sample is a standalone Java/Spring marketing-ops remote domain provider.
 
-It exists to prove that `remote-domain.v1` is not just documentation theater.
-The service owns opaque marketing-ops state, projects status and inspection
-fragments, and acknowledges host-driven shutdown over HTTP/JSON.
+The service implements `remote-domain.v1`, owns opaque marketing-ops state,
+projects status and inspection fragments, and acknowledges host-driven shutdown
+over HTTP/JSON.
 
 It also implements `PolicyWindTunnelService` from the Java author kit, which
 exposes the Marketing Ops Policy Wind Tunnel provider over
-`/policy-wind-tunnel/...`. That matters: Marketing Ops no longer needs
+`/policy-wind-tunnel/...`. Marketing Ops does not need
 `experiment-service` to discover an in-process pack or carry a Marketing Ops
 implementation on the platform classpath.
 
@@ -18,11 +18,11 @@ policies, population catalogs and Scenario Lab evidence. The companion owns
 its A2A endpoint and collaboration behavior; its optional LLM writes advice,
 while its existing scenario policy chooses the disposition.
 
-It uses public Java author-kit and conformance artifacts **0.4.3** plus ordinary
+It uses public Java author-kit and conformance artifacts **0.4.4** plus ordinary
 Spring dependencies. Both artifacts resolve from Maven Central and use the
-published shared contract release **1.2.1**. Building a sibling SDK checkout is
-unnecessary. The native capability uses the SDK-generated typed profile;
-the sample no longer carries a temporary JSON metadata subclass. It must keep host SPI classes out of its code.
+published shared contract release **1.2.2**. Building a sibling SDK checkout is
+unnecessary. The native capability uses the SDK-generated typed profile. Host
+SPI classes are not required in the provider.
 
 ## Requirements
 
@@ -52,20 +52,10 @@ the sample no longer carries a temporary JSON metadata subclass. It must keep ho
 - production auth and ingress policy for remote domains
 - full multi-tenant operational guarantees
 
-Historical integration evidence (the older host routes are not native launch instructions):
-
-- host-side remote registration and manifest discovery exist in `agent-runtime`
-- Docker Compose wiring exists for local stack integration
-- the same host can run banking remote and `marketing-ops` remote together in lab mode
-- `experiment-service` can register Marketing Ops as a remote Scenario Lab pack
-  through `scenario.lab.remote.providers`
-- Population Builder can discover Marketing Ops population metadata across the
-  remote-domain boundary instead of relying on dashboard-owned recipe fixtures
-- the default product posture can still stay single-active-domain-first
-
-The point is no longer just “a real service can satisfy the protocol.” The
-point is that the host/runtime cutover path is now real, while mixed-domain
-coexistence remains a lab capability rather than the default product UX.
+The provider exposes registration, manifest discovery and population metadata
+through the remote-domain contract. For native customer simulations, use the
+launch instructions below. Historical Scenario Lab registration through
+`scenario.lab.remote.providers` is not a native customer launch path.
 
 
 ## Native customer simulation (local development)
@@ -131,7 +121,6 @@ copied into this sample.
 
 Use the [native launch-once instructions](../integration/marketing-ops-a2a/README.md)
 to publish a real-model customer, observe a scheduled review and receive an
-actual Creative Agency response. That helper only creates, publishes and
-launches; Astraform owns subsequent execution and stopping. Small-run evidence
-does not establish multi-customer or multi-year capacity. The sample uses the
-published SDKs; this provider-specific change does not require a new SDK release.
+actual Creative Agency response. The launcher uses the published SDK to create,
+publish and launch the customer; Astraform owns subsequent execution and stopping. The per-persona sample does
+not establish multi-customer or multi-year capacity.

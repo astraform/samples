@@ -8,7 +8,7 @@ remain independent. Do not create per-language or per-starter tags.
 
 The next samples release targets the published
 [platform v0.3.0](https://github.com/astraform/releases/releases/tag/v0.3.0),
-**Java SDK 0.4.3**, **Python SDK 0.3.3** and **contracts 1.2.1**. Samples v0.2.0
+**Java SDK 0.4.4**, **Python SDK 0.3.4** and **contracts 1.2.2**. Samples v0.2.0
 is not published yet. The historical samples v0.1.0/platform v0.2.0 pairing
 retains its original bytes and compatibility. Do not overwrite that samples tag,
 its images or its assets.
@@ -38,7 +38,10 @@ original committed manifest/packager and omits these newer arguments.
 1. Obtain and verify the new public platform v0.3.0 bundle and exact image digests.
    A version declaration does not establish publication, strict-completion
    behavior or native retained-participation support. The old platform v0.2.0
-   does not supply strict customer-FINISH behavior.
+   does not supply strict customer-FINISH behavior. Current banking domain labels
+   and marketing `RESOLVE_TRUSTED` binding also require matching server support.
+   Java 0.4.4/Python 0.3.4 preserve these fields but do not add that behavior to a
+   platform image; do not publish a starter against an unsupported platform.
 2. Review and merge sample source, packaging support and
    [versioned notes](releases/v0.2.0.md) to `main`. Record its full commit as **S**;
    require **Astraform Samples CI** on S. Keep `release.json` unready at this step.
