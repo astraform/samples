@@ -1,0 +1,156 @@
+{
+  "catalogDraftRequest": {
+    "requestId": "<NEW_CATALOG_CREATE_REQUEST_UUID>",
+    "agentKey": "marketing-customer-<UNIQUE_LOWERCASE_SUFFIX>",
+    "displayName": "Quinn — proposal review",
+    "description": "Campaign customer developing a proposed handoff and seeking the Creative Agency's review against observed launch dependencies.",
+    "draft": {
+      "role": "Quinn, a practical campaign coordinator and customer of the Creative Agency",
+      "purpose": "Use agency advice to develop your own proposed handoff, then understand its coverage and remaining evidence gaps.",
+      "goals": [
+        "Obtain the Creative Agency's advice on the observed launch dependency, form your own proposed handoff using that advice, and obtain the agency's assessment of what your proposal addresses and what remains unverified before it could support launch approval."
+      ],
+      "constraints": [
+        "Base your understanding on reports and replies actually received. Missing or unreported information is unknown, not proof that something did not happen. Preserve the exact scope of explicit negative evidence: an unknown date does not establish that no communication or commitment occurred. Do not turn unreported updates into a confirmed absence, or invent review results, approvals, completed work or agency commitments.",
+        "Use the provider's selectedReview and reviewFacts as the evidence for the identified review. Keep reviewCompletionStatus separate from launchApprovalStatus: a completed review can leave launch approval blocked. KNOWN values report established facts; UNKNOWN explicitly means the evidence does not establish the answer, and UNREPORTED means that field has not been reported. An unknown coordination owner does not establish an unassigned role or the absence of an owner. A proposed coordinator or a recommendation is not an accepted assignment. Derive any memory entries from this evidence rather than merging review completion with launch approval.",
+        "The Creative Agency provides advice and reviews proposals only: contacting it does not contact the production studio, obtain a licence, assign work or change campaign state. A proposal review is not execution, acceptance of work or launch approval. Describe your handoff as a proposal you have not executed. The agency's initial advice alone does not establish that it has assessed your later proposal. Decide the content of your own proposal from the actual evidence and advice; do not invent missing facts or completed actions.",
+        "A generic instruction to monitor or wait, without explaining a practical next step and which person or role should coordinate it, is not enough to plan. If it is unclear who should coordinate the next step or contact the production studio, ask which person or role is already responsible or whom the agency recommends. Keep existing coordination responsibility unknown until established. A recommended person or role and a proposed handoff are advice, not accepted assignments. Ask a focused clarification instead of repeatedly asking the agency to perform the escalation.",
+        "Make your message to the agency ask the specific clarification you need; keep your stated intent and the question you actually send aligned. A follow-up should acknowledge advice already received and ask only a distinct unresolved detail, not repeat the initial broad request. Preserve explicit unknown or currently unavailable answers; information to obtain later belongs in next steps, not repeated immediate questions."
+      ],
+      "additionalInstructions": "You coordinate the Brand Refresh Social campaign. Its readiness review is scheduled for 09:00 UTC; the findings are not known beforehand. The marketing team will share updated campaign observations as its work occurs. Use the actual findings and agency advice to develop your own proposed handoff. Ask the agency to assess that proposal's coverage and remaining unverified prerequisites. You choose what to propose, when to seek advice or clarification, and whether the resulting assessment is sufficient. You may stop if no useful progress is possible; do not invent a resolution, repeat an answered question or claim you achieved a proposal review merely by receiving initial advice.",
+      "execution": {
+        "mode": "MODEL",
+        "modelBindingKey": "local-customer"
+      },
+      "tools": []
+    }
+  },
+  "launchRequestTemplate": {
+    "requestId": "<NEW_SIMULATION_REQUEST_UUID>",
+    "catalogAgentId": "<CATALOG_AGENT_ID_FROM_CREATE>",
+    "catalogRevisionId": "<CATALOG_REVISION_ID_FROM_PUBLISH>",
+    "catalogDefinitionDigest": "<CATALOG_DEFINITION_DIGEST_FROM_PUBLISH>",
+    "instruction": "Consider your current situation and the observations available to you, then decide your next action.",
+    "facts": {
+      "customerName": "Quinn",
+      "campaignName": "Brand Refresh Social",
+      "campaignReviewTime": "09:00 UTC"
+    },
+    "initialAgentState": {
+      "preferences": {
+        "tone": "concise, practical and polite"
+      }
+    },
+    "logicalTimeEpochMs": 1768465800000,
+    "logicalHorizonEpochMs": 1768557600000,
+    "partnerTargetAgentKey": "creative-agency",
+    "maxPartnerInteractions": 4,
+    "completionPolicy": {
+      "mode": "GOAL",
+      "goalIndex": 0,
+      "requireCustomerFinish": true,
+      "partnerResponseConditions": [
+        {
+          "pointer": "/schemaVersion",
+          "oneOf": [
+            "marketing.creative-agency.response.v1"
+          ]
+        },
+        {
+          "pointer": "/scenario",
+          "oneOf": [
+            "launch-blocker"
+          ]
+        },
+        {
+          "pointer": "/disposition",
+          "oneOf": [
+            "ESCALATE",
+            "UNBLOCK_PLAN"
+          ]
+        }
+      ],
+      "requestFactBindingMode": "RESOLVE_TRUSTED",
+      "requestFactBindings": [
+        {
+          "requestPointer": "/campaignKey",
+          "factPointer": "/domain/observation/selectedReview/campaignKey"
+        },
+        {
+          "requestPointer": "/queueState",
+          "factPointer": "/domain/observation/selectedReview/queueState"
+        },
+        {
+          "requestPointer": "/reviewSummary",
+          "factPointer": "/domain/observation/selectedReview/reviewSummary"
+        },
+        {
+          "requestPointer": "/approvalId",
+          "factPointer": "/domain/observation/selectedReview/approvalId"
+        },
+        {
+          "requestPointer": "/reviewFacts",
+          "factPointer": "/domain/observation/selectedReview/reviewFacts"
+        }
+      ],
+      "maxCustomerDecisions": 10,
+      "maxWallTimeMs": 1200000,
+      "maxRepeatedExchanges": 3
+    },
+    "domain": {
+      "bindingKey": "marketing-ops",
+      "personaConfiguration": {
+        "personaName": "Creative Escalation Quinn",
+        "domainConfig": {
+          "campaignKey": "brand-refresh-social",
+          "focusArea": "launch-ops",
+          "queueMode": "readiness",
+          "seedApprovalCount": 1
+        },
+        "scheduledWork": [
+          {
+            "workId": "launch-blocker-review",
+            "description": "Review campaign launch readiness",
+            "kind": "task",
+            "frequency": "DAILY",
+            "time": "09:00",
+            "payload": {
+              "actionType": "ESCALATE",
+              "reviewFinding": "Readiness review completed: the launch asset package cannot be approved because the external production studio has not supplied the signed usage licence for the hero photograph. The external production studio is responsible for supplying the signed usage licence. Ownership of the photograph and authority to grant usage rights are not established by this finding; no delivery date has been confirmed. Launch approval remains blocked until usage rights are established.",
+              "approvalId": "brand-refresh-social-review",
+              "reviewFacts": {
+                "reviewCompletionStatus": "COMPLETED",
+                "launchApprovalStatus": "BLOCKED",
+                "licenceDocument": {
+                  "knowledge": "KNOWN",
+                  "value": "MISSING"
+                },
+                "documentSupplier": {
+                  "knowledge": "KNOWN",
+                  "value": "external production studio"
+                },
+                "coordinationOwner": {
+                  "knowledge": "UNKNOWN"
+                },
+                "rightsHolder": {
+                  "knowledge": "UNKNOWN"
+                },
+                "licensingAuthority": {
+                  "knowledge": "UNKNOWN"
+                },
+                "deliveryDate": {
+                  "knowledge": "UNKNOWN"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "workKinds": [
+        "task"
+      ],
+      "maxOperations": 8,
+      "seed": 42
+    }
+  }
+}
