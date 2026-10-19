@@ -51,25 +51,33 @@ def package(version, images, output, local_verification=False, source_revision=N
     finish = policy.get("requireCustomerFinish")
     packaging.require(not finish_present or type(finish) is bool,
                       "completionPolicy.requireCustomerFinish must be a Boolean when present")
-    platform_release = packaging.declared_platform_release(local_verification, platform_release)
-    packaging.require(local_verification or not domain_present,
-            "Explicit launch.domainId requires a supporting platform release; use local verification until that capability is published, or a compatible scenario omitting it")
+    binding_present = "requestFactBindingMode" in policy
+    binding_mode = policy.get("requestFactBindingMode")
+    packaging.require(not binding_present or isinstance(binding_mode, str)
+                      and binding_mode in {"VALIDATE", "RESOLVE_TRUSTED"},
+                      "completionPolicy.requestFactBindingMode must be VALIDATE or RESOLVE_TRUSTED when present")
+    capabilities = (["completionPolicy.requireCustomerFinish"] if finish_present else []) \
+        + (["domainId"] if domain_present else []) \
+        + (["completionPolicy.requestFactBindingMode"] if binding_present else [])
+    platform_release = packaging.declared_platform_release(local_verification, platform_release, capabilities)
     configuration = {"schemaVersion": "astraform.marketing-starter.configuration.v1",
                      "case": case, "scenario": scenario, "domainId": "marketing-ops",
                      "domainPort": 8090, "agencyPort": 8091,
-                     "requiresUnreleasedPlatform": domain_present or local_verification and finish_present,
-                     "requiredPlatformCapabilities": (["completionPolicy.requireCustomerFinish"] if finish_present else []) + (["domainId"] if domain_present else []),
+                     "requiresUnreleasedPlatform": local_verification and bool(capabilities),
+                     "requiredPlatformCapabilities": capabilities,
                      "requiresUnreleasedCustomerSdk": False,
-                     "requiredCustomerSdkCapabilities": (["completionPolicy.requireCustomerFinish"] if finish_present else []) + (["domainId"] if domain_present else []),
+                     "requiredCustomerSdkCapabilities": capabilities,
                      "customerEvidenceHelper": "customer-run-evidence.py"}
     compatibility = {**(packaging.LOCAL_COMPATIBILITY if local_verification else {
                          **packaging.COMPATIBILITY, "platform": platform_release.removeprefix("v")}),
                      "javaSdk": "0.4.4"}
-    if local_verification and finish_present:
-        compatibility["platform"] = "unreleased-local-customer-finish"
+    if local_verification and capabilities:
+        compatibility["platform"] = "unreleased-local-capabilities"
     required_platform = {"completionPolicy.requireCustomerFinish": finish} if finish_present else {}
     if domain_present:
         required_platform["domainId"] = configuration["domainId"]
+    if binding_present:
+        required_platform["completionPolicy.requestFactBindingMode"] = binding_mode
     if platform_release:
         required_platform["release"] = platform_release
     case_prefix = "proposal-review-" if case == "proposal-review" else ""
@@ -90,7 +98,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--scenario", choices=("scheduled", "current"), default="scheduled")
     parser.add_argument("--case", choices=("advice", "proposal-review"), default="advice")
-    parser.add_argument("--platform-release", help="Required compatible public platform release, such as v0.3.0; a declaration, not publication proof")
+    parser.add_argument("--platform-release", help="Required compatible public platform release, such as v0.4.0; a declaration, not publication proof")
     parser.add_argument("--local-verification", action="store_true")
     arguments = parser.parse_args()
     revision = arguments.source_revision

@@ -188,15 +188,16 @@ class BankingStarterPackageTest(unittest.TestCase):
             docker.assert_not_called()
         self.assertFalse((self.output / 'public').exists())
         for bank in ('python', 'java'):
-            with self.subTest(bank=bank), patch.object(packager.subprocess, 'check_output', return_value='sha256:' + 'b' * 64 + '\n'):
+            with self.subTest(bank=bank), patch.object(packager.subprocess, 'check_output', side_effect=self.registry):
                 bundle = packager.package('v0.1.0', self.images, self.output / bank,
-                                          True, self.source_revision, bank, 'monthly')
+                                          False, self.source_revision, bank, 'monthly', 'v0.4.0')
             configuration = json.loads((bundle / 'starter-config.json').read_text())
             scenario = json.loads((bundle / 'scenario.json').read_text())
             manifest = json.loads((bundle / 'bundle-manifest.json').read_text())
             self.assertEqual(configuration['domainId'], scenario['launchRequestTemplate']['domainId'])
             self.assertEqual(configuration['domainId'], manifest['requiredPlatform']['domainId'])
-            self.assertTrue(configuration['requiresUnreleasedPlatform'])
+            self.assertFalse(configuration['requiresUnreleasedPlatform'])
+            self.assertEqual('v0.4.0', manifest['requiredPlatform']['release'])
             self.assertFalse(configuration['requiresUnreleasedCustomerSdk'])
             self.assertIn('domainId', configuration['requiredPlatformCapabilities'])
             self.assertIn('domainId', configuration['requiredCustomerSdkCapabilities'])

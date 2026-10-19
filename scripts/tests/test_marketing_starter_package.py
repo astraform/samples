@@ -62,17 +62,19 @@ class MarketingStarterPackageTest(unittest.TestCase):
                      patch.object(packager.packaging, "ROOT", source), \
                      patch.object(packager.packaging.subprocess, "check_output", side_effect=self.registry):
                     bundle = packager.package("v0.1.0", images, self.directory / f"public-{scenario}-{finish}",
-                                              False, "a" * 40, scenario, "v0.3.0")
+                                              False, "a" * 40, scenario, "v0.4.0")
                 manifest = json.loads((bundle / "bundle-manifest.json").read_text())
                 configuration = json.loads((bundle / "starter-config.json").read_text())
                 self.assertNotIn("localVerificationOnly", manifest)
                 self.assertNotIn("localImageIds", manifest)
                 self.assertFalse(configuration["requiresUnreleasedPlatform"])
                 self.assertFalse(configuration["requiresUnreleasedCustomerSdk"])
-                self.assertEqual(["completionPolicy.requireCustomerFinish"], configuration["requiredPlatformCapabilities"])
-                self.assertEqual(["completionPolicy.requireCustomerFinish"], configuration["requiredCustomerSdkCapabilities"])
+                capabilities = ["completionPolicy.requireCustomerFinish", "completionPolicy.requestFactBindingMode"]
+                self.assertEqual(capabilities, configuration["requiredPlatformCapabilities"])
+                self.assertEqual(capabilities, configuration["requiredCustomerSdkCapabilities"])
                 self.assertIs(finish, manifest["requiredPlatform"]["completionPolicy.requireCustomerFinish"])
-                self.assertEqual("v0.3.0", manifest["requiredPlatform"]["release"])
+                self.assertEqual("RESOLVE_TRUSTED", manifest["requiredPlatform"]["completionPolicy.requestFactBindingMode"])
+                self.assertEqual("v0.4.0", manifest["requiredPlatform"]["release"])
                 self.assertEqual(scenario, configuration["scenario"])
                 self.assertEqual(selected, json.loads((bundle / "scenario.json").read_text()))
                 for relative, metadata in manifest["files"].items():
@@ -87,16 +89,16 @@ class MarketingStarterPackageTest(unittest.TestCase):
                                      "a" * 40, platform_release=release)
             with self.assertRaisesRegex(ValueError, "cannot be combined"):
                 packager.package("v0.1.0", images, self.directory / "mixed", True,
-                                 "a" * 40, platform_release="v0.3.0")
+                                 "a" * 40, platform_release="v0.4.0")
             with self.assertRaisesRegex(ValueError, "digest-pinned"):
                 packager.package("v0.1.0", self.images, self.directory / "tags", False,
-                                 "a" * 40, platform_release="v0.3.0")
+                                 "a" * 40, platform_release="v0.4.0")
             docker.assert_not_called()
         with patch.object(packager.packaging.subprocess, "check_output",
                           side_effect=subprocess.CalledProcessError(1, ["docker"], stderr="unauthorized")):
             with self.assertRaises(subprocess.CalledProcessError):
                 packager.package("v0.1.0", images, self.directory / "private", False,
-                                 "a" * 40, platform_release="v0.3.0")
+                                 "a" * 40, platform_release="v0.4.0")
         for name in ("invalid-platform", "mixed", "tags", "private"):
             self.assertFalse((self.directory / name).exists())
 
@@ -110,8 +112,9 @@ class MarketingStarterPackageTest(unittest.TestCase):
             configuration = json.loads((bundle / "starter-config.json").read_text())
             self.assertTrue(configuration["requiresUnreleasedPlatform"])
             self.assertFalse(configuration["requiresUnreleasedCustomerSdk"])
-            self.assertEqual(["completionPolicy.requireCustomerFinish"], configuration["requiredPlatformCapabilities"])
-            self.assertEqual(["completionPolicy.requireCustomerFinish"], configuration["requiredCustomerSdkCapabilities"])
+            capabilities = ["completionPolicy.requireCustomerFinish", "completionPolicy.requestFactBindingMode"]
+            self.assertEqual(capabilities, configuration["requiredPlatformCapabilities"])
+            self.assertEqual(capabilities, configuration["requiredCustomerSdkCapabilities"])
             original = "sample-configuration.json" if scenario == "scheduled" else "current-state-configuration.json"
             self.assertEqual((ROOT / "integration/marketing-ops-a2a" / original).read_bytes(), (bundle / "scenario.json").read_bytes())
             self.assertEqual((ROOT / "integration/marketing-ops-a2a/run-customer.py").read_bytes(), (bundle / "run-customer.py").read_bytes())
@@ -125,7 +128,7 @@ class MarketingStarterPackageTest(unittest.TestCase):
             archive = Path(str(bundle) + ".tar.gz")
             self.assertEqual(f"{packager.packaging.file_hash(archive)}  {archive.name}\n", checksum.read_text())
 
-    def test_explicit_domain_is_local_only_and_preserved_in_archive(self):
+    def test_explicit_domain_requires_supporting_platform_and_is_preserved_in_archive(self):
         source = self.directory / 'declared-source'
         for relative in {**packager.FILES,
                          'scenario': 'integration/marketing-ops-a2a/sample-configuration.json',
@@ -154,8 +157,10 @@ class MarketingStarterPackageTest(unittest.TestCase):
                                      'a' * 40, platform_release='v0.3.0')
                 docker.assert_not_called()
             self.assertFalse((self.directory / 'public').exists())
-            with patch.object(packager.packaging.subprocess, 'check_output', return_value='sha256:' + 'a' * 64 + '\n'):
-                bundle = packager.package('v0.1.0', self.images, self.directory / 'local', True, 'a' * 40)
+            images = {key: f'registry.example/{key}@sha256:' + 'a' * 64 for key in self.images}
+            with patch.object(packager.packaging.subprocess, 'check_output', side_effect=self.registry):
+                bundle = packager.package('v0.1.0', images, self.directory / 'supported', False,
+                                          'a' * 40, platform_release='v0.4.0')
         configuration = json.loads((bundle / 'starter-config.json').read_text())
         manifest = json.loads((bundle / 'bundle-manifest.json').read_text())
         self.assertEqual(selected, json.loads((bundle / 'scenario.json').read_text()))
@@ -165,13 +170,16 @@ class MarketingStarterPackageTest(unittest.TestCase):
         self.assertEqual(packager.packaging.file_hash(bundle / 'scenario.json'), manifest['files']['scenario.json']['sha256'])
 
     def test_proposal_review_archive_preserves_selected_case_and_integrity(self):
-        with patch.object(packager.packaging.subprocess, "check_output", return_value="sha256:" + "a" * 64 + "\n"):
-            bundle = packager.package("v0.1.0", self.images, self.directory / "proposal", True,
-                                      "a" * 40, case="proposal-review")
+        images = {key: f"registry.example/{key}@sha256:" + "a" * 64 for key in self.images}
+        with patch.object(packager.packaging.subprocess, "check_output", side_effect=self.registry):
+            bundle = packager.package("v0.1.0", images, self.directory / "proposal", False,
+                                      "a" * 40, platform_release="v0.4.0", case="proposal-review")
         selected = json.loads((ROOT / "integration/marketing-ops-a2a/proposal-review-configuration.json").read_text())
         self.assertEqual(selected, json.loads((bundle / "scenario.json").read_text()))
         self.assertEqual("proposal-review", json.loads((bundle / "starter-config.json").read_text())["case"])
         manifest = json.loads((bundle / "bundle-manifest.json").read_text())
+        self.assertEqual(selected["launchRequestTemplate"]["completionPolicy"]["requestFactBindingMode"],
+                         manifest["requiredPlatform"]["completionPolicy.requestFactBindingMode"])
         for relative, metadata in manifest["files"].items():
             self.assertEqual(packager.packaging.file_hash(bundle / relative), metadata["sha256"])
         with patch.object(packager.packaging.subprocess, "check_output") as docker:
@@ -181,45 +189,80 @@ class MarketingStarterPackageTest(unittest.TestCase):
             docker.assert_not_called()
         self.assertFalse((self.directory / "unsupported").exists())
 
-    def test_finish_metadata_preserves_omission_and_both_boolean_values(self):
+    def test_binding_and_finish_metadata_preserve_omission_and_explicit_values(self):
         source = self.directory / "source"
         files = {**packager.FILES,
                  "scheduled": "integration/marketing-ops-a2a/sample-configuration.json",
-                 "current": "integration/marketing-ops-a2a/current-state-configuration.json",
                  "notes": "docs/releases/v0.1.0.md"}
         for relative in files.values():
             target = source / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / relative, target)
-        for scenario, name in (("scheduled", "sample-configuration.json"),
-                               ("current", "current-state-configuration.json")):
+        images = {key: f"registry.example/{key}@sha256:" + "a" * 64 for key in self.images}
+        for binding in (None, "VALIDATE", "RESOLVE_TRUSTED"):
             for value in (None, False, True):
+                name = "sample-configuration.json"
                 selected = json.loads((ROOT / "integration/marketing-ops-a2a" / name).read_text())
                 policy = selected["launchRequestTemplate"]["completionPolicy"]
                 if value is None:
                     policy.pop("requireCustomerFinish")
                 else:
                     policy["requireCustomerFinish"] = value
+                if binding is None:
+                    policy.pop("requestFactBindingMode")
+                else:
+                    policy["requestFactBindingMode"] = binding
                 (source / "integration/marketing-ops-a2a" / name).write_text(json.dumps(selected))
-                with self.subTest(scenario=scenario, value=value), \
+                output = self.directory / f"{binding}-{value}"
+                if binding is not None:
+                    with patch.object(packager, "ROOT", source), \
+                         patch.object(packager.packaging, "ROOT", source), \
+                         patch.object(packager.packaging.subprocess, "check_output") as docker:
+                        with self.assertRaisesRegex(ValueError, "requestFactBindingMode"):
+                            packager.package("v0.1.0", images, output, False, "a" * 40,
+                                             platform_release="v0.3.0")
+                        docker.assert_not_called()
+                    self.assertFalse(output.exists())
+                with self.subTest(binding=binding, value=value), \
                      patch.object(packager, "ROOT", source), \
                      patch.object(packager.packaging, "ROOT", source), \
-                     patch.object(packager.packaging.subprocess, "check_output", return_value="sha256:" + "a" * 64 + "\n"):
-                    bundle = packager.package("v0.1.0", self.images,
-                                              self.directory / f"{scenario}-{value}", True, "a" * 40, scenario)
+                     patch.object(packager.packaging.subprocess, "check_output", side_effect=self.registry):
+                    bundle = packager.package("v0.1.0", images, output, False, "a" * 40,
+                                              platform_release="v0.3.0" if binding is None else "v0.4.0")
                 manifest = json.loads((bundle / "bundle-manifest.json").read_text())
                 configuration = json.loads((bundle / "starter-config.json").read_text())
                 explicit = value is not None
-                self.assertEqual(explicit, configuration["requiresUnreleasedPlatform"])
+                self.assertFalse(configuration["requiresUnreleasedPlatform"])
                 self.assertFalse(configuration["requiresUnreleasedCustomerSdk"])
-                capabilities = ["completionPolicy.requireCustomerFinish"] if explicit else []
+                capabilities = (["completionPolicy.requireCustomerFinish"] if explicit else []) \
+                    + (["completionPolicy.requestFactBindingMode"] if binding is not None else [])
                 self.assertEqual(capabilities, configuration["requiredPlatformCapabilities"])
                 self.assertEqual(capabilities, configuration["requiredCustomerSdkCapabilities"])
                 if explicit:
                     self.assertIs(value, manifest["requiredPlatform"]["completionPolicy.requireCustomerFinish"])
                 else:
-                    self.assertNotIn("requiredPlatform", manifest)
+                    self.assertNotIn("completionPolicy.requireCustomerFinish", manifest["requiredPlatform"])
+                if binding is None:
+                    self.assertNotIn("completionPolicy.requestFactBindingMode", manifest["requiredPlatform"])
+                else:
+                    self.assertEqual(binding, manifest["requiredPlatform"]["completionPolicy.requestFactBindingMode"])
                 self.assertEqual(selected, json.loads((bundle / "scenario.json").read_text()))
+
+    def test_invalid_binding_mode_fails_before_images_or_archive(self):
+        source = self.directory / "invalid-binding-source"
+        target = source / "integration/marketing-ops-a2a/sample-configuration.json"
+        target.parent.mkdir(parents=True)
+        for value in (None, "resolve_trusted", "UNKNOWN", True):
+            selected = json.loads((ROOT / "integration/marketing-ops-a2a/sample-configuration.json").read_text())
+            selected["launchRequestTemplate"]["completionPolicy"]["requestFactBindingMode"] = value
+            target.write_text(json.dumps(selected))
+            with self.subTest(value=value), patch.object(packager, "ROOT", source), \
+                 patch.object(packager.packaging, "ROOT", source), \
+                 patch.object(packager.packaging.subprocess, "check_output") as docker:
+                with self.assertRaisesRegex(ValueError, "requestFactBindingMode"):
+                    packager.package("v0.1.0", self.images, self.directory / "invalid", True, "a" * 40)
+                docker.assert_not_called()
+            self.assertFalse((self.directory / "invalid").exists())
 
     def test_invalid_finish_value_fails_before_images_or_archive(self):
         source = self.directory / "invalid-source"

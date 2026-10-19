@@ -34,19 +34,23 @@ def require(condition, message):
         raise ValueError(message)
 
 
-def declared_platform_release(local_verification, platform_release):
+def declared_platform_release(local_verification, platform_release, required_capabilities=()):
     """Validate the selected dependency without claiming it has been published."""
     if local_verification:
         require(platform_release is None,
                 "--platform-release cannot be combined with --local-verification")
         return None
     require(isinstance(platform_release, str),
-            "Public packaging requires an explicit --platform-release such as v0.3.0")
+            "Public packaging requires an explicit --platform-release such as v0.4.0")
     version = re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", platform_release)
     require(version is not None, "--platform-release must be a stable vMAJOR.MINOR.PATCH release")
     numbers = tuple(map(int, version.groups()))
     require(numbers[0] == 0 and numbers >= (0, 3, 0),
             "Public starters require a supporting v0.x platform release, at least v0.3.0")
+    for capability in required_capabilities:
+        minimum = (0, 4, 0) if capability in {"domainId", "completionPolicy.requestFactBindingMode"} else (0, 3, 0)
+        require(numbers >= minimum,
+                f"{capability} requires platform v{'.'.join(map(str, minimum))} or later")
     return platform_release
 
 
@@ -231,26 +235,26 @@ def package(version, images, output, local_verification=False, source_revision=N
     finish = policy.get("requireCustomerFinish")
     require(not finish_present or type(finish) is bool,
             "completionPolicy.requireCustomerFinish must be a Boolean when present")
-    platform_release = declared_platform_release(local_verification, platform_release)
-    require(local_verification or not domain_present,
-            "Explicit launch.domainId requires a supporting platform release; use local verification until that capability is published, or a compatible scenario omitting it")
+    capabilities = (["retainedParticipationSupported"] if scenario == "monthly" else []) \
+        + (["completionPolicy.requireCustomerFinish"] if finish_present else []) \
+        + (["domainId"] if domain_present else [])
+    platform_release = declared_platform_release(local_verification, platform_release, capabilities)
     configuration = {
         "schemaVersion": "astraform.banking-starter.configuration.v1",
         "bankImplementation": bank, "scenario": scenario,
         "bankPort": 8092 if bank == "python" else 8094,
         "domainId": "banking-python" if bank == "python" else "banking",
         "nativeDomainEnabled": scenario == "monthly",
-        "requiresUnreleasedPlatform": domain_present or local_verification and finish_present,
-        "requiredPlatformCapabilities": (["retainedParticipationSupported"] if scenario == "monthly" else [])
-            + (["completionPolicy.requireCustomerFinish"] if finish_present else []) + (["domainId"] if domain_present else []),
+        "requiresUnreleasedPlatform": local_verification and bool(capabilities),
+        "requiredPlatformCapabilities": capabilities,
         "requiresUnreleasedCustomerSdk": False,
         "requiredCustomerSdkCapabilities": (["completionPolicy.requireCustomerFinish"] if finish_present else []) + (["domainId"] if domain_present else []),
     }
     compatibility = {**(LOCAL_COMPATIBILITY if local_verification else {
                          **COMPATIBILITY, "platform": platform_release.removeprefix("v")}),
                      **({"javaSdk": "0.4.4"} if bank == "java" else {})}
-    if local_verification and finish_present:
-        compatibility["platform"] = "unreleased-local-customer-finish"
+    if local_verification and capabilities:
+        compatibility["platform"] = "unreleased-local-capabilities"
     required_platform = {"completionPolicy.requireCustomerFinish": finish} if finish_present else {}
     if domain_present:
         required_platform["domainId"] = configuration["domainId"]
@@ -280,7 +284,7 @@ def main():
                         help="Parent directory for the versioned folder, archive and checksum")
     parser.add_argument("--bank", choices=("python", "java"), default="python", help="Bank service implementation")
     parser.add_argument("--scenario", choices=("issued", "monthly"), default="issued", help="Issued statement or native three-month statement scenario")
-    parser.add_argument("--platform-release", help="Required compatible public platform release, such as v0.3.0; a declaration, not publication proof")
+    parser.add_argument("--platform-release", help="Required compatible public platform release, such as v0.4.0; a declaration, not publication proof")
     parser.add_argument("--local-verification", action="store_true",
                         help="Rehearsal only: allow installed image tags and record their local IDs")
     args = parser.parse_args()
