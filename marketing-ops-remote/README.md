@@ -15,8 +15,8 @@ implementation on the platform classpath.
 The optional external A2A collaborator lives separately in the sibling
 `marketing-ops-creative-agency` sample. This provider owns Marketing Ops business rules, per-persona state, tools,
 policies, population catalogs and Scenario Lab evidence. The companion owns
-its A2A endpoint and collaboration behavior; its optional LLM writes advice,
-while its existing scenario policy chooses the disposition.
+its A2A endpoint and collaboration behavior. In LLM mode, that model chooses
+both the advice and its disposition; neither performs the provider's business work.
 
 It uses public Java author-kit and conformance artifacts **0.4.4** plus ordinary
 Spring dependencies. Both artifacts resolve from Maven Central and use the
@@ -71,7 +71,7 @@ java -jar target/marketing-ops-remote.jar \
 
 The existing service/controller implements
 `remote-domain.native-state-transform.v1`, with provider revision
-`marketing-ops.native-events.v3`. Revision headers pin requests and replies.
+`marketing-ops.native-events.v4`. Revision headers pin requests and replies.
 `prepare` seeds a per-customer checkpoint at the supplied logical start and
 executes work due exactly at that start. `domain-system-work-window` reuses
 existing review/escalation/readiness rules for the next `(previous, current]`
@@ -88,22 +88,48 @@ Configure three existing surfaces:
 | Marketing work and initial business state | The launch's `domain.personaConfiguration` | Existing `domainConfig` and `scheduledWork`, including work identity, kind, daily UTC time and business action payload |
 | Provider, model and agency endpoints | Agent Runtime deployment properties | Partner-controlled endpoints and revisions; customers cannot select URLs or credentials |
 
-The optional sample-owned `scheduledWork[].payload.reviewFinding` is a nonblank
-string of at most 1,200 characters. It supplies a concrete review finding when
-that scheduled work executes. For the blocker scenario, the existing approval
-record keeps its unresolved `BLOCKED_EXTERNAL` state and its summary becomes
-the supplied finding; `lastAction` reports recording the finding, not executing
-an external escalation. Without this optional field, prior domain behavior is
-preserved. Missing field and an invalid supplied value are different: blank,
-non-string or oversized values are rejected.
+Scheduled work can supply these domain-owned payload fields:
 
-Before due work, the customer observation contains the existing pending task
-summary. The finding exists in operator-owned schedule/checkpoint data but is
-not forwarded to the customer's model before the review. The
+- `approvalId`: identifies the pending approval to review. An unknown identifier
+  is rejected when the work executes; omission preserves first-approval selection.
+- `reviewFinding`: a nonblank narrative of at most 1,200 characters, published
+  when that scheduled work executes.
+- `reviewFacts`: separate `reviewCompletionStatus` and `launchApprovalStatus`,
+  plus knowledge-bearing `licenceDocument`, `documentSupplier`,
+  `coordinationOwner`, `rightsHolder`, `licensingAuthority` and `deliveryDate`.
+
+Each knowledge-bearing fact has `knowledge: "KNOWN"`, `"UNKNOWN"` or
+`"UNREPORTED"`. Only `KNOWN` carries a nonblank `value` of at most 1,200
+characters. Known licence-document values are `MISSING`, `RECEIVED` or
+`VERIFIED`. Missing facts become `UNREPORTED`; an explicit `UNKNOWN` reports
+that the answer is not established. Neither establishes absence or an unassigned
+responsibility. Review statuses are `PENDING`, `IN_PROGRESS`, `COMPLETED`,
+`UNKNOWN` or `UNREPORTED`; launch statuses are `PENDING_REVIEW`, `BLOCKED`,
+`READY_FOR_LAUNCH`, `APPROVED`, `UNKNOWN` or `UNREPORTED`. A stated launch status
+must agree with the provider's deterministic approval transition.
+
+For the blocker scenario, the approval keeps its unresolved `BLOCKED_EXTERNAL`
+state and its summary becomes the supplied finding. `lastAction` reports
+recording that finding, not contacting an external party. The review can be
+completed while launch approval remains blocked. Omission of the optional
+payload fields preserves prior transitions; invalid supplied values are rejected.
+
+The observation, status and inspection expose `selectedReview`: the approval
+identity, campaign key, target-specific queue state, narrative `reviewSummary`,
+structured `reviewFacts` and, after execution, `reviewedAtEpochMs`. All agency
+bindings use that same selected record, rather than mixing aggregate status
+with another approval's finding. It is the latest review snapshot, not a full
+approval history.
+
+Before due work, the customer sees the existing first pending task and
+`UNREPORTED` review facts. Future findings stay in operator-owned
+schedule/checkpoint data until execution. Historical checkpoints without a
+selected review remain readable and receive unreported facts; the provider does
+not infer facts from their prose. The
 [example request schema](../integration/marketing-ops-a2a/input.schema.json)
-binds `reviewSummary` to that current summary through the platform's existing
-fact-binding mechanism. `prepare` at the exact review boundary applies the
-finding immediately; repeated identical work replays the same result.
+binds the selected record through the platform's existing fact-binding mechanism.
+`prepare` at the exact review boundary applies the finding immediately;
+repeated identical work replays the same result.
 
 The native slice supports `task` and `action` DAILY UTC schedules, with up to 32
 co-due items per work window. Unsupported recurrence, timezone, prompt-driven

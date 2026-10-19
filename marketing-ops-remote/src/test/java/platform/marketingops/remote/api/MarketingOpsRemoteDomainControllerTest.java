@@ -345,6 +345,123 @@ class MarketingOpsRemoteDomainControllerTest {
                 .andExpect(status().isPreconditionFailed());
     }
 
+    @Test
+    void nativeReviewFacts_materializeOnlyWhenDueAndKeepTheirSelectedApproval() throws Exception {
+        long start = Instant.parse("2020-01-01T08:30:00Z").toEpochMilli();
+        long review = start + 30 * 60_000;
+        JsonNode seeded = nativePost("prepare", nativePrepare(start, review + 60_000, List.of()));
+        String targetId = seeded.at("/nextState/data/pendingApprovals/1/approvalId").asText();
+        String untouchedId = seeded.at("/nextState/data/pendingApprovals/0/approvalId").asText();
+        String finding = "Readiness review completed; the signed usage licence is missing.";
+        var schedule = new LinkedHashMap<>(nativeSchedule("readiness-review", "task", "ESCALATE"));
+        schedule.put("payload", Map.of("actionType", "ESCALATE", "approvalId", targetId,
+                "reviewFinding", finding, "reviewFacts", blockedReviewFacts()));
+        JsonNode prepared = nativePost("prepare", nativePrepare(start, review + 60_000, List.of(schedule)));
+        JsonNode initial = prepared.at("/result/projection/runtimeMetadata/nativeSimulation/observation/selectedReview");
+        assertThat(initial.at("/reviewFacts/reviewCompletionStatus").asText()).isEqualTo("UNREPORTED");
+        assertThat(initial.at("/reviewFacts/documentSupplier/knowledge").asText()).isEqualTo("UNREPORTED");
+        assertThat(initial.toString()).doesNotContain(finding, "external production studio");
+
+        JsonNode reviewed = nativePost("domain-system-work-window", nativeWindow(prepared, review, List.of("task"), 1));
+        JsonNode selected = reviewed.at("/result/projection/runtimeMetadata/nativeSimulation/observation/selectedReview");
+        assertThat(selected.get("approvalId").asText()).isEqualTo(targetId);
+        assertThat(selected.get("queueState").asText()).isEqualTo("blocked");
+        assertThat(selected.get("reviewSummary").asText()).isEqualTo(finding);
+        assertThat(selected.at("/reviewFacts/reviewCompletionStatus").asText()).isEqualTo("COMPLETED");
+        assertThat(selected.at("/reviewFacts/launchApprovalStatus").asText()).isEqualTo("BLOCKED");
+        assertThat(selected.at("/reviewFacts/licenceDocument/value").asText()).isEqualTo("MISSING");
+        assertThat(selected.at("/reviewFacts/documentSupplier/value").asText()).isEqualTo("external production studio");
+        assertThat(selected.at("/reviewFacts/coordinationOwner/knowledge").asText()).isEqualTo("UNKNOWN");
+        assertThat(selected.at("/reviewFacts/coordinationOwner/value").isMissingNode()).isTrue();
+        assertThat(selected.at("/reviewFacts/rightsHolder/knowledge").asText()).isEqualTo("UNREPORTED");
+        assertThat(selected.get("reviewedAtEpochMs").longValue()).isEqualTo(review);
+        assertThat(reviewed.at("/nextState/data/pendingApprovals/0/approvalId").asText()).isEqualTo(untouchedId);
+        assertThat(reviewed.at("/nextState/data/pendingApprovals/0/state").asText())
+                .isEqualTo(prepared.at("/nextState/data/pendingApprovals/0/state").asText());
+        assertThat(reviewed.at("/nextState/data/selectedReview")).isEqualTo(selected);
+
+        JsonNode advanced = nativePost("domain-system-work-window", nativeWindow(reviewed, review + 60_000, List.of("task"), 1));
+        assertThat(advanced.at("/result/projection/runtimeMetadata/nativeSimulation/observation/selectedReview"))
+                .isEqualTo(selected);
+        var saved = objectMapper.treeToValue(advanced.get("nextState"), RemoteDomainOpaqueState.class);
+        JsonNode status = nativePost("status", statusRequest(saved, futureEpochMs(60_000)));
+        assertThat(status.at("/result/projection/statusView/selectedReview")).isEqualTo(selected);
+    }
+
+    @Test
+    void historicalStateWithoutReviewFacts_remainsUnreportedInsteadOfInferringFromProse() throws Exception {
+        long start = Instant.parse("2020-01-01T09:00:00Z").toEpochMilli();
+        JsonNode prepared = nativePost("prepare", nativePrepare(start, start + 60_000, List.of()));
+        var historical = prepared.deepCopy();
+        ((tools.jackson.databind.node.ObjectNode) historical.at("/nextState/data")).remove("selectedReview");
+        var saved = objectMapper.treeToValue(historical.get("nextState"), RemoteDomainOpaqueState.class);
+        JsonNode status = nativePost("status", statusRequest(saved, futureEpochMs(60_000)));
+        JsonNode selected = status.at("/result/projection/statusView/selectedReview");
+        assertThat(selected.get("approvalId").asText()).isEqualTo(historical.at("/nextState/data/pendingApprovals/0/approvalId").asText());
+        assertThat(selected.at("/reviewFacts/reviewCompletionStatus").asText()).isEqualTo("UNREPORTED");
+        assertThat(selected.at("/reviewFacts/launchApprovalStatus").asText()).isEqualTo("UNREPORTED");
+        assertThat(selected.at("/reviewFacts/licenceDocument/knowledge").asText()).isEqualTo("UNREPORTED");
+        assertThat(selected.at("/reviewFacts/licenceDocument/value").isMissingNode()).isTrue();
+        nativePost("domain-system-work-window", nativeWindow(historical, start + 60_000, List.of("task"), 1));
+    }
+
+    @Test
+    void nativeReviewFacts_rejectFalseKnowledgeAndConflictingOrMissingApprovalTargets() throws Exception {
+        long review = Instant.parse("2020-01-01T09:00:00Z").toEpochMilli();
+        List<Map<String, Object>> invalidFacts = List.of(
+                Map.of("coordinationOwner", Map.of("knowledge", "UNKNOWN", "value", "unassigned")),
+                Map.of("documentSupplier", Map.of("knowledge", "KNOWN")),
+                Map.of("licenceDocument", Map.of("knowledge", "KNOWN", "value", "APPROVED")),
+                Map.of("reviewCompletionStatus", "DONE"),
+                Map.of("launchApprovalStatus", "APPROVED"));
+        for (Map<String, Object> facts : invalidFacts) {
+            var schedule = new LinkedHashMap<>(nativeSchedule("readiness-review", "task", "ESCALATE"));
+            schedule.put("payload", Map.of("actionType", "ESCALATE", "reviewFacts", facts));
+            nativeRejected("prepare", nativePrepare(review, review, List.of(schedule)));
+        }
+        var schedule = new LinkedHashMap<>(nativeSchedule("readiness-review", "task", "ESCALATE"));
+        schedule.put("payload", Map.of("actionType", "ESCALATE", "approvalId", "missing-approval",
+                "reviewFacts", blockedReviewFacts()));
+        nativeRejected("prepare", nativePrepare(review, review, List.of(schedule)));
+
+        schedule.put("payload", Map.of("actionType", "ESCALATE", "reviewFacts", Map.of("launchApprovalStatus", "UNKNOWN")));
+        JsonNode uncertain = nativePost("prepare", nativePrepare(review, review, List.of(schedule)));
+        assertThat(uncertain.at("/result/projection/runtimeMetadata/nativeSimulation/observation/selectedReview/reviewFacts/launchApprovalStatus").asText())
+                .isEqualTo("UNKNOWN");
+    }
+
+    @Test
+    void persistedReviewFacts_rejectMalformedKnowledgeAndNonIntegralObservationTime() throws Exception {
+        long review = Instant.parse("2020-01-01T09:00:00Z").toEpochMilli();
+        var schedule = new LinkedHashMap<>(nativeSchedule("readiness-review", "task", "ESCALATE"));
+        schedule.put("payload", Map.of("actionType", "ESCALATE", "reviewFacts", blockedReviewFacts()));
+        JsonNode prepared = nativePost("prepare", nativePrepare(review, review + 60_000, List.of(schedule)));
+        for (Map<String, Object> invalid : List.of(
+                Map.<String, Object>of("reviewFacts", Map.of("coordinationOwner", Map.of("knowledge", "UNKNOWN", "value", "unassigned"))),
+                Map.<String, Object>of("reviewFacts", Map.of("reviewCompletionStatus", "DONE")),
+                Map.<String, Object>of("reviewedAtEpochMs", 1.5))) {
+            var saved = objectMapper.treeToValue(prepared.get("nextState"), RemoteDomainOpaqueState.class);
+            var selected = new LinkedHashMap<>((Map<String, Object>) saved.getData().get("selectedReview"));
+            selected.putAll(invalid);
+            saved.getData().put("selectedReview", selected);
+            nativeRejected("status", statusRequest(saved, futureEpochMs(60_000)));
+        }
+    }
+
+    private Map<String, Object> blockedReviewFacts() {
+        return Map.of("reviewCompletionStatus", "COMPLETED", "launchApprovalStatus", "BLOCKED",
+                "licenceDocument", Map.of("knowledge", "KNOWN", "value", "MISSING"),
+                "documentSupplier", Map.of("knowledge", "KNOWN", "value", "external production studio"),
+                "coordinationOwner", Map.of("knowledge", "UNKNOWN"));
+    }
+
+    private void nativeRejected(String operation, Object request) throws Exception {
+        mockMvc.perform(post("/api/remote-domain/v1/" + operation).contentType(REMOTE_MEDIA_TYPE)
+                        .header("X-Astraform-Expected-Provider-Revision", MarketingOpsRemoteDomainService.NATIVE_PROVIDER_REVISION)
+                        .content(objectMapper.writeValueAsBytes(request)))
+                .andExpect(status().isUnprocessableEntity());
+    }
+
     private Map<String, Object> nativeSchedule(String id, String kind, String action) {
         return Map.of("workId", id, "description", "Scheduled campaign review", "kind", kind,
                 "frequency", "DAILY", "time", "09:00", "payload", Map.of("actionType", action));

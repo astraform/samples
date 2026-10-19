@@ -69,7 +69,7 @@ import ai.astraform.remote.domain.openapi.models.RemoteDomainCustomerDecisionTri
 @Service
 public class MarketingOpsRemoteDomainService {
     public static final String NATIVE_PROFILE = "remote-domain.native-state-transform.v1";
-    public static final String NATIVE_PROVIDER_REVISION = "marketing-ops.native-events.v3";
+    public static final String NATIVE_PROVIDER_REVISION = "marketing-ops.native-events.v4";
     private static final int MAX_NATIVE_WORK = 32;
     private static final long MAX_NATIVE_TIME = 253402300799999L;
     private static final List<String> NATIVE_WORK_KINDS = List.of("task", "action");
@@ -312,13 +312,74 @@ public class MarketingOpsRemoteDomainService {
                 throw new IllegalArgumentException("Native scheduledWork payload must be an object");
             }
             Map<String, Object> payload = mapValue(item.get("payload"));
-            if (!Set.of("actionType", "applyTimeJitter", "segmentId", "priority", "reviewFinding").containsAll(payload.keySet())
+            if (!Set.of("actionType", "applyTimeJitter", "segmentId", "priority", "reviewFinding", "reviewFacts", "approvalId").containsAll(payload.keySet())
                     || payload.containsKey("applyTimeJitter") && !Boolean.FALSE.equals(payload.get("applyTimeJitter"))
                     || !Set.of("", "DETERMINISTIC_TURN", "REVIEW", "ESCALATE", "BLOCKER", "READINESS").contains(upper(trim(payload.get("actionType")), ""))) {
                 throw new IllegalArgumentException("Native marketing supports deterministic domain rules only; prompt execution and time jitter are unsupported");
             }
             reviewFinding(payload);
+            reviewFacts(payload);
+            if (payload.containsKey("approvalId") && (!(payload.get("approvalId") instanceof String id)
+                    || id.isBlank() || id.length() > 256)) {
+                throw new IllegalArgumentException("Scheduled work approvalId must be a nonblank string of at most 256 characters");
+            }
         }
+    }
+
+    private Map<String, Object> reviewFacts(Map<String, Object> payload) {
+        Object value = payload == null ? null : payload.get("reviewFacts");
+        if (payload != null && payload.containsKey("reviewFacts") && !(value instanceof Map<?, ?>)) {
+            throw new IllegalArgumentException("Scheduled work reviewFacts must be an object");
+        }
+        Map<String, Object> facts = mapValue(value);
+        if (!Set.of("reviewCompletionStatus", "launchApprovalStatus", "licenceDocument", "documentSupplier",
+                "coordinationOwner", "rightsHolder", "licensingAuthority", "deliveryDate").containsAll(facts.keySet())) {
+            throw new IllegalArgumentException("Scheduled work reviewFacts contains unsupported fields");
+        }
+        Map<String, Object> normalized = new LinkedHashMap<>();
+        normalized.put("reviewCompletionStatus", factStatus(facts, "reviewCompletionStatus",
+                Set.of("UNREPORTED", "UNKNOWN", "PENDING", "IN_PROGRESS", "COMPLETED")));
+        normalized.put("launchApprovalStatus", factStatus(facts, "launchApprovalStatus",
+                Set.of("UNREPORTED", "UNKNOWN", "PENDING_REVIEW", "BLOCKED", "APPROVED", "READY_FOR_LAUNCH")));
+        for (String field : List.of("licenceDocument", "documentSupplier", "coordinationOwner", "rightsHolder",
+                "licensingAuthority", "deliveryDate")) {
+            if (!facts.containsKey(field)) {
+                normalized.put(field, Map.of("knowledge", "UNREPORTED"));
+                continue;
+            }
+            if (!(facts.get(field) instanceof Map<?, ?>)) {
+                throw new IllegalArgumentException("Review fact " + field + " must be an object");
+            }
+            Map<String, Object> fact = mapValue(facts.get(field));
+            if (!Set.of("knowledge", "value").containsAll(fact.keySet())
+                    || !(fact.get("knowledge") instanceof String knowledge)
+                    || !Set.of("KNOWN", "UNKNOWN", "UNREPORTED").contains(knowledge)) {
+                throw new IllegalArgumentException("Review fact " + field + " requires KNOWN, UNKNOWN or UNREPORTED knowledge");
+            }
+            if ("KNOWN".equals(knowledge)) {
+                if (!(fact.get("value") instanceof String known) || known.isBlank() || known.length() > 1_200) {
+                    throw new IllegalArgumentException("KNOWN review fact " + field + " requires a nonblank value of at most 1200 characters");
+                }
+                if ("licenceDocument".equals(field) && !Set.of("MISSING", "RECEIVED", "VERIFIED").contains(known)) {
+                    throw new IllegalArgumentException("KNOWN licenceDocument must be MISSING, RECEIVED or VERIFIED");
+                }
+                normalized.put(field, Map.of("knowledge", knowledge, "value", known));
+            } else {
+                if (fact.containsKey("value")) {
+                    throw new IllegalArgumentException("Unknown or unreported review fact " + field + " cannot carry a value");
+                }
+                normalized.put(field, Map.of("knowledge", knowledge));
+            }
+        }
+        return normalized;
+    }
+
+    private String factStatus(Map<String, Object> facts, String field, Set<String> allowed) {
+        if (!facts.containsKey(field)) return "UNREPORTED";
+        if (!(facts.get(field) instanceof String status) || !allowed.contains(status)) {
+            throw new IllegalArgumentException("Review fact " + field + " has an unsupported status");
+        }
+        return (String) facts.get(field);
     }
 
     private String reviewFinding(Map<String, Object> payload) {
@@ -396,7 +457,7 @@ public class MarketingOpsRemoteDomainService {
         metadata.put(next <= horizon ? "nextDueEpochMs" : "noWorkBeforeEpochMs", Math.min(next, horizon + 1));
         MarketingOpsRemoteState result = new MarketingOpsRemoteState(state.personaName(), state.campaignKey(), state.focusArea(),
                 state.queueMode(), state.seedApprovalCount(), state.completedWorkCount(), state.lastAction(), state.lastActionAtEpochMs(),
-                state.pendingApprovals(), state.recurringActions(), state.activityLog(), metadata);
+                state.pendingApprovals(), state.recurringActions(), state.activityLog(), metadata, state.selectedReview());
         requireNativeStateSize(opaqueState(result));
         return result;
     }
@@ -731,6 +792,7 @@ public class MarketingOpsRemoteDomainService {
                 pendingApprovals,
                 recurringActions,
                 activityLog,
+                Map.of(),
                 Map.of());
     }
 
@@ -743,6 +805,7 @@ public class MarketingOpsRemoteDomainService {
         List<MarketingOpsActivity> activityLog = new ArrayList<>(current.activityLog());
         String lastAction = "awaiting_host_due_work";
         Map<String, Object> lastToolResult = Map.of();
+        Map<String, Object> selectedReview = current.selectedReview();
 
         for (RemoteDomainDueWorkItem item : dueWork == null ? List.<RemoteDomainDueWorkItem>of() : dueWork) {
             completedWorkCount += 1;
@@ -760,10 +823,13 @@ public class MarketingOpsRemoteDomainService {
 
             String actionType = upper(trim(item.getPayload() != null ? item.getPayload().get("actionType") : null), item.getWorkType());
             String reviewFinding = reviewFinding(item.getPayload());
+            Map<String, Object> facts = reviewFacts(item.getPayload());
+            String approvalId = trim(item.getPayload() == null ? null : item.getPayload().get("approvalId"));
+            int targetIndex = scheduledApprovalIndex(approvals, approvalId);
             if (!approvals.isEmpty()) {
-                MarketingOpsApproval target = approvals.getFirst();
+                MarketingOpsApproval target = approvals.get(targetIndex);
                 if (actionType.contains("ESCALATE") || actionType.contains("BLOCKER") || "escalation".equals(current.queueMode())) {
-                    approvals.set(0, target.withState(
+                    approvals.set(targetIndex, target.withState(
                             "BLOCKED_EXTERNAL",
                             "await_external_partner",
                             referenceEpochMs,
@@ -772,10 +838,10 @@ public class MarketingOpsRemoteDomainService {
                             ? "Recorded an external launch blocker for campaign %s."
                             : "Escalated launch blocker for campaign %s.").formatted(target.campaignId());
                 } else if (actionType.contains("REVIEW") || "reviewer".equals(current.queueMode())) {
-                    approvals.removeFirst();
+                    approvals.remove(targetIndex);
                     lastAction = "Approved queued review for campaign %s.".formatted(target.campaignId());
                 } else {
-                    approvals.set(0, target.withState(
+                    approvals.set(targetIndex, target.withState(
                             "READY_FOR_LAUNCH",
                             "launch_when_capacity_clears",
                             referenceEpochMs,
@@ -785,6 +851,20 @@ public class MarketingOpsRemoteDomainService {
                 if (StringUtils.hasText(reviewFinding)) {
                     lastAction += " Completed review finding: " + reviewFinding;
                 }
+                MarketingOpsApproval updated = approvals.stream()
+                        .filter(approval -> approval.approvalId().equals(target.approvalId())).findFirst().orElse(null);
+                String approvalStatus = updated == null ? "APPROVED"
+                        : "BLOCKED_EXTERNAL".equals(updated.state()) ? "BLOCKED"
+                        : "READY_FOR_LAUNCH".equals(updated.state()) ? "READY_FOR_LAUNCH" : "PENDING_REVIEW";
+                String statedApproval = (String) facts.get("launchApprovalStatus");
+                if (!Set.of("UNREPORTED", "UNKNOWN").contains(statedApproval) && !approvalStatus.equals(statedApproval)) {
+                    throw new IllegalArgumentException("Review launchApprovalStatus conflicts with the scheduled approval transition");
+                }
+                selectedReview = new LinkedHashMap<>(Map.of(
+                        "approvalId", target.approvalId(), "campaignKey", target.campaignId(),
+                        "queueState", updated == null ? "clear" : queueState(List.of(updated)),
+                        "reviewSummary", firstNonBlank(reviewFinding, target.summary()),
+                        "reviewFacts", facts, "reviewedAtEpochMs", referenceEpochMs));
             } else {
                 lastAction = "Processed host due work with no pending approvals remaining.";
             }
@@ -813,8 +893,17 @@ public class MarketingOpsRemoteDomainService {
                 approvals,
                 current.recurringActions(),
                 tail(activityLog, 8),
-                current.nativeSimulation());
+                current.nativeSimulation(),
+                selectedReview);
         return new MarketingOpsExecution(next, lastToolResult);
+    }
+
+    private int scheduledApprovalIndex(List<MarketingOpsApproval> approvals, String approvalId) {
+        if (!StringUtils.hasText(approvalId)) return 0;
+        for (int index = 0; index < approvals.size(); index++) {
+            if (approvalId.equals(approvals.get(index).approvalId())) return index;
+        }
+        throw new IllegalArgumentException("Scheduled work approvalId must identify an existing pending approval");
     }
 
     private MarketingOpsRemoteState readState(UUID requestId, String operation, RemoteDomainOpaqueState opaqueState) {
@@ -840,7 +929,16 @@ public class MarketingOpsRemoteDomainService {
                     "Unsupported opaque state schema '%s'.".formatted(trim(opaqueState.getSchemaVersion())),
                     Map.of("expectedSchemaVersion", SCHEMA_VERSION));
         }
-        MarketingOpsRemoteState state = objectMapper.convertValue(opaqueState.getData(), MarketingOpsRemoteState.class);
+        Map<String, Object> stateData = new LinkedHashMap<>(mapValue(opaqueState.getData()));
+        if (stateData.containsKey("selectedReview")) {
+            try {
+                stateData.put("selectedReview", normalizeSelectedReview(stateData.get("selectedReview")));
+            } catch (IllegalArgumentException invalid) {
+                throw protocolException(requestId, operation, HttpStatus.UNPROCESSABLE_ENTITY, "invalid_state",
+                        "domain_rejected", false, invalid.getMessage(), Map.of("field", "state.data.selectedReview"));
+            }
+        }
+        MarketingOpsRemoteState state = objectMapper.convertValue(stateData, MarketingOpsRemoteState.class);
         if (state == null || !StringUtils.hasText(state.personaName())) {
             throw protocolException(
                     requestId,
@@ -853,6 +951,37 @@ public class MarketingOpsRemoteDomainService {
                     Map.of("schemaVersion", SCHEMA_VERSION));
         }
         return state.normalized();
+    }
+
+    private Map<String, Object> normalizeSelectedReview(Object value) {
+        if (!(value instanceof Map<?, ?>)) {
+            throw new IllegalArgumentException("Persisted selectedReview must be an object");
+        }
+        Map<String, Object> selected = mapValue(value);
+        if (selected.isEmpty()) return Map.of();
+        if (!Set.of("approvalId", "campaignKey", "queueState", "reviewSummary", "reviewFacts", "reviewedAtEpochMs")
+                .containsAll(selected.keySet())) {
+            throw new IllegalArgumentException("Persisted selectedReview contains unsupported fields");
+        }
+        for (String field : List.of("approvalId", "campaignKey", "reviewSummary")) {
+            if (!(selected.get(field) instanceof String text) || text.isBlank() || text.length() > 1_200) {
+                throw new IllegalArgumentException("Persisted selectedReview " + field + " must be a nonblank bounded string");
+            }
+        }
+        if (!(selected.get("queueState") instanceof String queue)
+                || !Set.of("clear", "blocked", "review_pending", "active").contains(queue)) {
+            throw new IllegalArgumentException("Persisted selectedReview queueState is invalid");
+        }
+        long at = nativeLong(selected, "reviewedAtEpochMs");
+        if (at < 0 || at > MAX_NATIVE_TIME) {
+            throw new IllegalArgumentException("Persisted selectedReview reviewedAtEpochMs is outside the supported time range");
+        }
+        if (!selected.containsKey("reviewFacts")) {
+            throw new IllegalArgumentException("Persisted selectedReview requires reviewFacts");
+        }
+        Map<String, Object> normalized = new LinkedHashMap<>(selected);
+        normalized.put("reviewFacts", reviewFacts(selected));
+        return normalized;
     }
 
     private RemoteDomainPrepareResponse prepareResponse(
@@ -921,7 +1050,8 @@ public class MarketingOpsRemoteDomainService {
                     "domainId", DOMAIN_ID, "observedAtEpochMs", referenceEpochMs,
                     "campaignKey", state.campaignKey(), "queueState", queueState(state.pendingApprovals()),
                     "pendingApprovals", state.pendingApprovals().stream().map(MarketingOpsApproval::asMap).toList(),
-                    "completedWorkCount", state.completedWorkCount(), "lastAction", state.lastAction()));
+                    "completedWorkCount", state.completedWorkCount(), "lastAction", state.lastAction(),
+                    "selectedReview", selectedReviewProjection(state)));
             projection.getRuntimeMetadata().put("nativeSimulation", nativeResult);
         }
         projection.setLifecycleSchedule(scheduleProjection(state, referenceEpochMs, false));
@@ -949,7 +1079,18 @@ public class MarketingOpsRemoteDomainService {
                 "seedApprovalCount", state.seedApprovalCount(),
                 "queueMode", state.queueMode(),
                 "lastEvaluatedAtEpochMs", state.lastActionAtEpochMs())));
+        projection.getStatusView().put("selectedReview", selectedReviewProjection(state));
+        projection.getInspectionView().put("selectedReview", selectedReviewProjection(state));
         return projection;
+    }
+
+    private Map<String, Object> selectedReviewProjection(MarketingOpsRemoteState state) {
+        if (!state.selectedReview().isEmpty()) return state.selectedReview();
+        if (state.pendingApprovals().isEmpty()) return Map.of("reviewFacts", reviewFacts(Map.of()));
+        MarketingOpsApproval approval = state.pendingApprovals().getFirst();
+        return new LinkedHashMap<>(Map.of("approvalId", approval.approvalId(), "campaignKey", approval.campaignId(),
+                "queueState", queueState(List.of(approval)), "reviewSummary", approval.summary(),
+                "reviewFacts", reviewFacts(Map.of())));
     }
 
     private List<RemoteDomainScheduleItem> scheduleProjection(
@@ -1636,7 +1777,8 @@ public class MarketingOpsRemoteDomainService {
             List<MarketingOpsApproval> pendingApprovals,
             List<MarketingOpsRecurringAction> recurringActions,
             List<MarketingOpsActivity> activityLog,
-            Map<String, Object> nativeSimulation) {
+            Map<String, Object> nativeSimulation,
+            Map<String, Object> selectedReview) {
 
         MarketingOpsRemoteState normalized() {
             return new MarketingOpsRemoteState(
@@ -1651,7 +1793,8 @@ public class MarketingOpsRemoteDomainService {
                     pendingApprovals == null ? List.of() : List.copyOf(pendingApprovals),
                     recurringActions == null ? List.of() : List.copyOf(recurringActions),
                     activityLog == null ? List.of() : List.copyOf(activityLog),
-                    nativeSimulation == null ? Map.of() : Map.copyOf(nativeSimulation));
+                    nativeSimulation == null ? Map.of() : Map.copyOf(nativeSimulation),
+                    selectedReview == null ? Map.of() : Map.copyOf(selectedReview));
         }
     }
 
