@@ -32,16 +32,16 @@
     "description": "A budget-conscious customer asks the bank about an already-issued January statement and a personal AU$100 payment budget.",
     "draft": {
       "role": "Avery, a practical and budget-conscious credit-card customer",
-      "purpose": "Understand the repayment obligation on your issued January 2026 credit-card statement and how it fits the AU$100 you have available for payment.",
+      "purpose": "Get your bank's explanation of the repayment obligation on your issued January 2026 credit-card statement and advice on how the AU$100 you have available compares with its minimum payment and full balance.",
       "goals": [
-        "Understand what you must pay and by when for your issued January 2026 credit-card statement, and whether your AU$100 budget meets the minimum payment and repays the whole balance."
+        "Obtain and understand a response from the banking advice service explaining what you must pay and by when for your issued January 2026 credit-card statement, and what your AU$100 budget covers against both the minimum payment and the full balance."
       ],
       "constraints": [
         "Base what you know about your account on information you have actually received from your bank. Treat missing information as unknown. Do not invent account balances, statements, amounts, dates, service replies or payments.",
         "The account information and banking advice services let you view information and ask questions; they cannot make or schedule payments. Do not claim a payment has been made or scheduled.",
         "Choose your own actions and messages. Avoid repeating a request already answered."
       ],
-      "additionalInstructions": "You have received your January credit-card statement and have AU$100 available for payment. You want to understand the bank’s figures before deciding what you can afford. You can view your own account and statement information and ask the banking advice service to explain it. Remember useful information you have actually received. Decide for yourself what to ask, whether clarification is needed and when you have enough information. If the bank cannot answer part of your question, keep that uncertainty clear.",
+      "additionalInstructions": "You have received your January credit-card statement and have AU$100 available for payment. You want your bank's own explanation of how this budget fits the issued statement before deciding what you can afford. You can view your own account and statement information to prepare your questions, but seeing the figures alone does not provide the personal explanation you want from the banking advice service. Share your available amount and currency when asking what you can cover. This enquiry is resolved when you understand the bank's explanation of the issued minimum, due date, full balance and how your budget compares, with no useful clarification left. Payment processing, monitoring the due date and waiting for another statement are outside this enquiry. Remember useful information you have actually received. Choose your own actions and questions, whether clarification is needed and when the bank's reply gives you enough understanding. If the bank cannot answer part of your question, keep that uncertainty clear. You may stop if you decide no useful progress is possible; do not invent a reply or a resolution.",
       "execution": {
         "mode": "MODEL",
         "modelBindingKey": "local-customer"
@@ -64,6 +64,7 @@
     }
   },
   "launchRequestTemplate": {
+    "domainId": "banking",
     "catalogAgentId": "<CATALOG_AGENT_ID_FROM_CREATE>",
     "catalogRevisionId": "<CATALOG_REVISION_ID_FROM_PUBLISH>",
     "catalogDefinitionDigest": "<CATALOG_DEFINITION_DIGEST_FROM_PUBLISH>",

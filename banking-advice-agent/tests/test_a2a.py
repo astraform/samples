@@ -109,7 +109,7 @@ class BankingAdviceContractTest(unittest.TestCase):
     def test_bank_metadata_stays_authoritative_and_model_prose_is_preserved(self):
         for minimum, expected in ((48.0, "payment_due"), ("0", "no_payment_due")):
             with self.subTest(minimum=minimum):
-                statement = {"minimumAmountDue": minimum, "currency": "AUD",
+                statement = {"minimumAmountDue": minimum, "currency": "AUD", "closingAmount": "-1200",
                              "statementEndDate": "2026-01-31", "dueDate": "2026-02-14"}
                 rpc = self.send({"schemaVersion": INPUT_SCHEMA, "customerMessage": "Explain this statement.",
                                  "statement": statement}, wrapped=True)
@@ -119,6 +119,15 @@ class BankingAdviceContractTest(unittest.TestCase):
                 self.assertEqual(statement, answer["statement"])
                 self.assertTrue(answer["readOnly"])
                 self.assertEqual(MODEL_TEXT, answer["message"])
+                presentation = answer["presentation"]
+                self.assertEqual("astraform.result-presentation.v1", presentation["schemaVersion"])
+                fields = {field["pointer"]: field for field in presentation["fields"]}
+                minimum_field = fields["/statement/minimumAmountDue"]
+                self.assertEqual("currency", minimum_field["format"])
+                self.assertEqual("/statement/currency", minimum_field["currencyPointer"])
+                self.assertEqual("date", fields["/statement/dueDate"]["format"])
+                # Presentation is attached after generation, and cannot steer the model's answer.
+                self.assertNotIn('"presentation"', self.model_requests[-1]["body"]["messages"][1]["content"])
 
     def test_missing_statement_requests_information_without_inventing_facts(self):
         rpc = self.send({"schemaVersion": INPUT_SCHEMA, "customerMessage": "Do I have a payment due?"})
@@ -171,6 +180,9 @@ class BankingAdviceContractTest(unittest.TestCase):
             {"BANKING_LLM_TEMPERATURE": "2.1"},
             {"BANKING_LLM_TEMPERATURE": "NaN"},
             {"BANKING_LLM_TEMPERATURE": "Infinity"},
+            {"BANKING_LLM_TOP_P": "-0.1"},
+            {"BANKING_LLM_TOP_P": "1.1"},
+            {"BANKING_LLM_TOP_P": "NaN"},
         ]
         for settings in bad_settings:
             with self.subTest(settings=settings), patch.dict(os.environ, settings):
@@ -278,10 +290,14 @@ class BankingAdviceContractTest(unittest.TestCase):
 
     def test_model_timeout_is_one_failed_attempt_not_a_fallback_reply(self):
         self.model_delay = 1.25
-        rpc = self.send({"schemaVersion": INPUT_SCHEMA, "customerMessage": "Explain this statement."})
+        with patch.dict(os.environ, {"BANKING_LLM_REASONING_EFFORT": "high"}):
+            with TestClient(create_app("http://banking-advice:8096", backend_url="")) as client:
+                rpc = send_message(client, {"schemaVersion": INPUT_SCHEMA,
+                                            "customerMessage": "Explain this statement."})
         self.assertEqual(-32603, rpc["error"]["code"])
         self.assertNotIn("result", rpc)
         self.assertEqual(1, len(self.model_requests))
+        self.assertEqual("high", self.model_requests[0]["body"]["reasoning_effort"])
 
 
 R4_BAD_DATE_PROSE = (
@@ -789,18 +805,25 @@ class BankingBackendAdviceTest(unittest.TestCase):
                     self.assertEqual("need_information", answer["decision"])
                     self.assertEqual({}, self.model_evidence()["statementDateRoles"])
 
-    def test_temperature_is_optional_bounded_configuration_serialized_explicitly_on_the_wire(self):
-        for setting, expected in ((None, 0.0), ("0.25", 0.25), ("2", 2.0)):
-            with self.subTest(setting=setting), patch.dict(os.environ):
-                if setting is None:
-                    os.environ.pop("BANKING_LLM_TEMPERATURE", None)
-                else:
-                    os.environ["BANKING_LLM_TEMPERATURE"] = setting
+    def test_sampling_configuration_is_bounded_and_preserved_on_the_wire(self):
+        for temperature, top_p, expected_temperature, expected_top_p in (
+                (None, None, 0.0, None), ("0.25", "0.95", 0.25, 0.95), ("2", "0", 2.0, 0.0)):
+            with self.subTest(temperature=temperature, top_p=top_p), patch.dict(os.environ):
+                for name, value in (("TEMPERATURE", temperature), ("TOP_P", top_p)):
+                    if value is None:
+                        os.environ.pop("BANKING_LLM_" + name, None)
+                    else:
+                        os.environ["BANKING_LLM_" + name] = value
                 with TestClient(create_app("http://banking-advice:8096", backend_url=self.backend_url)) as client:
                     rpc = send_message(client, self.facts("customer-a"))
                 answer = json.loads(rpc["result"]["message"]["parts"][0]["text"])
                 self.assertEqual(MODEL_TEXT, answer["message"])
-                self.assertEqual(expected, self.model_requests[-1]["body"]["temperature"])
+                sent = self.model_requests[-1]["body"]
+                self.assertEqual(expected_temperature, sent["temperature"])
+                if expected_top_p is None:
+                    self.assertNotIn("top_p", sent)
+                else:
+                    self.assertEqual(expected_top_p, sent["top_p"])
 
     def test_missing_identity_or_failed_lookup_never_falls_back_to_supplied_facts(self):
         facts = self.facts("unknown-customer")

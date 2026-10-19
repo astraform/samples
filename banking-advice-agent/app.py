@@ -32,6 +32,20 @@ OUTPUT_SCHEMA = "banking.statement-advice.response.v1"
 REQUIRED_STATEMENT_FIELDS = ("minimumAmountDue", "currency", "statementEndDate", "dueDate")
 STATEMENT_FIELDS = {*REQUIRED_STATEMENT_FIELDS, "billId", "accountId", "closingAmount"}
 
+# Sample-owned labels describe captured values; the model never authors these hints.
+RESULT_PRESENTATION = {
+    "schemaVersion": "astraform.result-presentation.v1",
+    "fields": [
+        {"pointer": "/decision", "label": "Statement classification"},
+        {"pointer": "/readOnly", "label": "Read-only advice"},
+        {"pointer": "/statement/minimumAmountDue", "label": "Minimum payment", "format": "currency",
+         "currencyPointer": "/statement/currency"},
+        {"pointer": "/statement/closingAmount", "label": "Statement closing balance", "format": "currency",
+         "currencyPointer": "/statement/currency"},
+        {"pointer": "/statement/dueDate", "label": "Payment due date", "format": "date"},
+    ],
+}
+
 
 def extract_request(text: str) -> dict:
     if len(text.encode("utf-8")) > 65536:
@@ -317,6 +331,15 @@ def llm_configuration() -> dict:
     except ValueError as error:
         raise ValueError("BANKING_LLM_TEMPERATURE must be a finite number between 0 and 2") from error
     config["temperature"] = temperature
+    top_p = os.environ.get(prefix + "TOP_P", "").strip()
+    if top_p:
+        try:
+            top_p = float(top_p)
+            if not math.isfinite(top_p) or not 0 <= top_p <= 1:
+                raise ValueError()
+        except ValueError as error:
+            raise ValueError("BANKING_LLM_TOP_P must be a finite number between 0 and 1") from error
+        config["top_p"] = top_p
     diagnostics = os.environ.get(prefix + "DIAGNOSTICS", "false").lower()
     if diagnostics not in {"true", "false"}:
         raise ValueError("BANKING_LLM_DIAGNOSTICS must be true or false")
@@ -532,6 +555,8 @@ async def model_answer(facts: dict, response: dict, accounts: list, config: dict
                     {"role": "user", "content": json.dumps(evidence, ensure_ascii=False, separators=(",", ":"))}]
         request = {"model": config["model"], "messages": messages, "stream": False,
                    "max_tokens": config["max_output_tokens"], "temperature": config["temperature"]}
+        if "top_p" in config:
+            request["top_p"] = config["top_p"]
         if config["reasoning_effort"]:
             request["reasoning_effort"] = config["reasoning_effort"]
         # Admission, connection and streaming all share one wall-time limit; no hidden retries.
@@ -602,6 +627,7 @@ class BankingAdviceAgent(AgentExecutor):
             raise InvalidParamsError(str(error)) from error
         response["message"] = await model_answer(facts, response, accounts, self.model_config, self.capacity,
                                                  context.message.message_id, context.context_id)
+        response["presentation"] = RESULT_PRESENTATION
         await event_queue.enqueue_event(new_text_message(
             json.dumps(response, separators=(",", ":")),
             media_type="text/plain", context_id=context.context_id,

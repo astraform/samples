@@ -21,6 +21,13 @@ launcher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(launcher)
 
 
+def legacy_scenario(name):
+    """Keep existing omitted-field compatibility cases independent of newer declarations."""
+    scenario = json.loads((DIRECTORY / name).read_text())
+    scenario['launchRequestTemplate'].pop('domainId', None)
+    return scenario
+
+
 def document(value):
     return SimpleNamespace(to_json=lambda: json.dumps(value))
 
@@ -30,9 +37,11 @@ class CustomerLauncherTest(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.output = Path(temporary.name) / 'run'
+        self.sample = self.output.parent / 'legacy-scenario.json'
+        self.sample.write_text(json.dumps(legacy_scenario('issued-statement-configuration.json')))
         environment = patch.dict(os.environ, {
             'ASTRAFORM_API_BASE': 'http://platform:8084',
-            'BANKING_SAMPLE_FILE': str(DIRECTORY / 'issued-statement-configuration.json'),
+            'BANKING_SAMPLE_FILE': str(self.sample),
         })
         environment.start()
         self.addCleanup(environment.stop)
@@ -104,7 +113,7 @@ class CustomerLauncherTest(unittest.TestCase):
             self.assertTrue(session['scenario']['catalogDraftRequest']['requestId'])
             self.assertTrue(session['scenario']['launchRequestTemplate']['requestId'])
         # This persistence test uses the published-compatible omitted policy.
-        scenario = json.loads((DIRECTORY / 'issued-statement-configuration.json').read_text())
+        scenario = legacy_scenario('issued-statement-configuration.json')
         scenario['launchRequestTemplate']['completionPolicy'].pop('requireCustomerFinish')
         ordinary = self.output.parent / 'ordinary.json'
         ordinary.write_text(json.dumps(scenario))
@@ -136,7 +145,7 @@ class CustomerLauncherTest(unittest.TestCase):
     def test_invalid_finish_policy_stops_before_seed_or_catalog_writes(self):
         for value in (None, "true", "false", 1, 0, 1.0, [], {}, [True]):
             with self.subTest(value=value):
-                scenario = json.loads((DIRECTORY / 'issued-statement-configuration.json').read_text())
+                scenario = legacy_scenario('issued-statement-configuration.json')
                 scenario['launchRequestTemplate']['completionPolicy']['requireCustomerFinish'] = value
                 invalid = self.output.parent / 'invalid.json'
                 invalid.write_text(json.dumps(scenario))
@@ -161,7 +170,7 @@ class CustomerLauncherTest(unittest.TestCase):
                            'effectClass': 'READ_ONLY', 'scope': 'CUSTOMER_CONTEXT'}]}
 
     def test_prepare_only_emits_java_scenario_with_exact_grants_and_no_catalog_or_journey_writes(self):
-        sample = json.loads((DIRECTORY / 'three-month-configuration.json').read_text())
+        sample = legacy_scenario('three-month-configuration.json')
         sample['catalogDraftRequest']['draft']['tools'][0]['maxCalls'] = 3
         sample['launchRequestTemplate']['completionPolicy']['requireCustomerFinish'] = True
         selected = self.output.parent / 'monthly.json'
@@ -241,7 +250,7 @@ class CustomerLauncherTest(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_prepare_only_requires_native_strict_support_before_any_effect(self):
-        policy = json.loads((DIRECTORY / 'issued-statement-configuration.json').read_text())['launchRequestTemplate']['completionPolicy']
+        policy = legacy_scenario('issued-statement-configuration.json')['launchRequestTemplate']['completionPolicy']
         policy.pop('requireCustomerFinish')
         unsupported = AgentJourneyGoalCompletionPolicy.from_dict(policy)
         with patch.object(launcher.AgentJourneyGoalCompletionPolicy, 'from_dict', return_value=unsupported), \
@@ -364,18 +373,20 @@ class JourneyLaunchTransportTest(unittest.TestCase):
 
     def supports_finish_policy(self):
         """Read the selected real SDK's serializer; never mock model capability."""
-        policy = json.loads((DIRECTORY / 'issued-statement-configuration.json').read_text())['launchRequestTemplate']['completionPolicy']
+        policy = legacy_scenario('issued-statement-configuration.json')['launchRequestTemplate']['completionPolicy']
         return all(AgentJourneyGoalCompletionPolicy.from_dict(
             {**policy, 'requireCustomerFinish': value}).to_dict().get('requireCustomerFinish') is value
             for value in (False, True))
 
     @contextlib.contextmanager
-    def launch_inputs(self, finish='omitted', invalid_budget=False):
-        scenario = json.loads((DIRECTORY / 'issued-statement-configuration.json').read_text())
+    def launch_inputs(self, finish='omitted', invalid_budget=False, domain_id='omitted'):
+        scenario = legacy_scenario('issued-statement-configuration.json')
         if finish == 'omitted':
             scenario['launchRequestTemplate']['completionPolicy'].pop('requireCustomerFinish')
         else:
             scenario['launchRequestTemplate']['completionPolicy']['requireCustomerFinish'] = finish
+        if domain_id != 'omitted':
+            scenario['launchRequestTemplate']['domainId'] = domain_id
         if invalid_budget:
             scenario['launchRequestTemplate']['completionPolicy']['maxCustomerDecisions'] = 0
         selected = self.directory / 'scenario.json'
@@ -424,6 +435,34 @@ class JourneyLaunchTransportTest(unittest.TestCase):
         catalog.publish_agent_definition.assert_not_called()
         self.assertFalse(output.exists())
         self.assertEqual([], requests)
+
+    def test_declared_domain_uses_native_sdk_http_or_rejects_before_bank_and_catalog_writes(self):
+        for domain_id in ('banking', 'banking-python'):
+            with self.subTest(domain_id=domain_id), \
+                    self.launch_inputs(domain_id=domain_id) as (output, catalog, events, bank), \
+                    journey_http_fixture() as (host, requests), \
+                    launcher.ApiClient(launcher.Configuration(host=host, retries=0)) as client:
+                if 'domain_id' in launcher.AgentJourneyLaunchRequest.model_fields:
+                    result = launcher.launch(client, host, output)
+                    self.assert_native_launch_body(requests, output, result)
+                    self.assertEqual(domain_id, requests[0]['body']['domainId'])
+                    # Each subcase starts a distinct intentional launch in an empty directory.
+                    import shutil
+                    shutil.rmtree(output)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'cannot preserve launch.domainId'):
+                        launcher.launch(client, host, output)
+                    self.assert_unsupported_before_mutations(output, catalog, events, bank, requests)
+
+    def test_invalid_declared_domain_fails_before_bank_or_platform_writes(self):
+        for domain_id in (None, True, '', 'Banking', 'banking/team', 'a' * 129):
+            with self.subTest(domain_id=domain_id), \
+                    self.launch_inputs(domain_id=domain_id) as (output, catalog, events, bank), \
+                    journey_http_fixture() as (host, requests), \
+                    launcher.ApiClient(launcher.Configuration(host=host, retries=0)) as client:
+                with self.assertRaisesRegex(ValueError, 'launch.domainId must be'):
+                    launcher.launch(client, host, output)
+                self.assert_unsupported_before_mutations(output, catalog, events, bank, requests)
 
     def test_true_uses_capable_native_sdk_or_fails_before_mutations(self):
         with self.launch_inputs(True) as (output, catalog, events, bank), \

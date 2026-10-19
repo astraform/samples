@@ -2,14 +2,26 @@
 
 The image-only Python banking starter is prepared under
 [`deploy/banking-starter`](../deploy/banking-starter/README.md). It reuses this agent
-and the Python bank. Published Python SDK 0.3.3 supports launch, inspection and
+and the Python bank. Published Python SDK 0.3.4 supports launch, inspection and
 evidence export, including native `completionPolicy.requireCustomerFinish`.
 The strict issued-statement scenario also requires the published platform v0.3.0 implementation;
 the published platform v0.2.0 does not provide that stopping behavior.
 The published samples v0.1.0 Python banking starter retains its original scenario,
 SDK versions and completion behavior. The monthly source workflow below omits
 that field and remains compatible with the public platform bundle. Current source
-locks install Python SDK 0.3.3; rebuild images to consume those source changes.
+locks install Python SDK 0.3.4; rebuild images to consume those source changes.
+
+The issued-statement scenario additionally declares
+`launchRequestTemplate.domainId: "banking"`. This labels the run; it does not grant access or establish tenant
+ownership. Published Python 0.3.4 and Java 0.4.4 preserve this field in their
+native typed clients. It also requires a platform that implements explicit
+domain identity; publishing the SDK does not upgrade the platform v0.3.0 bundle.
+Verify that server capability before launching this scenario. The launcher checks declared values before bank seeding, including
+`--prepare-only`, and before Catalog writes. Custom scenarios deliberately
+omitting the field retain earlier compatibility, subject to their other
+requirements. Native monthly workflows retain identity from their accepted
+provider and do not need the optional field. Starter packaging selects its
+explicit bank variant: `banking-python` for Python or `banking` for Java.
 
 The partner owns the banking database and populates customer records before
 creating Astraform customers. Astraform receives each customer's persona, goals,
@@ -104,10 +116,10 @@ database. It starts before the first statement exists. This is a bounded monthly
 not evidence of years of simulation or 1,000-customer capacity. The older
 snapshot-based provider profile remains separate.
 
-The Java bank provider uses published [Java SDK 0.4.3 from Maven Central](https://central.sonatype.com/artifact/ai.astraform/remote-domain-author-kit-java/0.4.3).
+The Java bank provider uses published [Java SDK 0.4.4 from Maven Central](https://central.sonatype.com/artifact/ai.astraform/remote-domain-author-kit-java/0.4.4).
 The Python bank provider and this monthly scenario's launch helper use published
-[Python author kit 0.3.3](https://pypi.org/project/astraform-remote-domain-author-kit/0.3.3/).
-Both SDKs use [shared contract 1.2.1](https://github.com/astraform/remote-domain-contracts/releases/tag/v1.2.1)
+[Python author kit 0.3.4](https://pypi.org/project/astraform-remote-domain-author-kit/0.3.4/).
+Both SDKs use [shared contract 1.2.2](https://github.com/astraform/remote-domain-contracts/releases/tag/v1.2.2)
 and include domain helpers plus the platform client. Customer account reads use
 the bank's MCP endpoint; this separately running partner agent uses A2A plus
 the banking HTTP API.
@@ -139,10 +151,10 @@ export BANKING_LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/ope
 export BANKING_LLM_MODEL=gemini-3.6-flash
 export BANKING_LLM_AUTH_TYPE=bearer
 export BANKING_LLM_API_KEY="$GEMINI_API_KEY"
-export BANKING_LLM_BINDING_REVISION=banking-starter-gemini36-high-v1
+export BANKING_LLM_BINDING_REVISION=banking-starter-gemini36-high-v2
 export BANKING_LLM_REASONING_EFFORT=high
 export BANKING_LLM_MAX_OUTPUT_TOKENS=32768
-export BANKING_LLM_TIMEOUT_SECONDS=840
+export BANKING_LLM_TIMEOUT_SECONDS=60
 export BANKING_LLM_TEMPERATURE=1.0
 export BANKING_LLM_MAX_CONCURRENCY=1
 ```
@@ -160,15 +172,17 @@ export BANKING_LLM_BASE_URL=http://localhost:11434/v1
 export BANKING_LLM_MODEL=qwen3.5:4b
 export BANKING_LLM_AUTH_TYPE=none
 unset BANKING_LLM_API_KEY
-export BANKING_LLM_BINDING_REVISION=bank-ollama-qwen35-thinking-v8
+export BANKING_LLM_BINDING_REVISION=bank-ollama-qwen35-thinking-v9
 export BANKING_LLM_REASONING_EFFORT=high
 export BANKING_LLM_MAX_OUTPUT_TOKENS=32768
-export BANKING_LLM_TIMEOUT_SECONDS=840
+export BANKING_LLM_TIMEOUT_SECONDS=60
 export BANKING_LLM_TEMPERATURE=1.0
 ```
 
-That is a configuration example, not a fresh Ollama acceptance result for this
-partner. Model servers differ; this sample sends `max_tokens` and optional
+The local Ollama profile allows one model attempt with a 60-second total
+deadline covering admission, connection and response, including thinking. Late
+responses fail without an automatic retry or a fallback answer. Model servers
+differ; this sample sends `max_tokens` and optional
 `reasoning_effort`, and expects a non-streaming chat-completion text response.
 See [Gemini compatibility](https://ai.google.dev/gemini-api/docs/openai) and
 [Ollama compatibility](https://docs.ollama.com/api/openai-compatibility).
@@ -208,16 +222,22 @@ change and update the Astraform A2A target binding revision before launching a n
 | `BANKING_LLM_MAX_OUTPUT_TOKENS` | `2048` | Provider output cap, 1–32768 tokens |
 | `BANKING_LLM_MAX_CONCURRENCY` | `4` | Maximum concurrent model calls per process, 1–32 |
 | `BANKING_LLM_TEMPERATURE` | `0` | Explicit sampling temperature, a finite number from 0–2; lower variance does not prove factual accuracy |
+| `BANKING_LLM_TOP_P` | omitted | Optional explicit nucleus sampling limit, a finite number from 0–1; blank leaves the provider's behavior unchanged |
 | `BANKING_LLM_REASONING_EFFORT` | omitted | Optional provider-supported setting |
 | `BANKING_LLM_DIAGNOSTICS` | `false` | Include actual model request and response in service logs |
 
 The guarded bank read has a separate ten-second deadline. Configure Astraform's
 `simulation.event.runtime.a2a.request-timeout` above the bank + model deadlines;
-use `150s` only with the adapter's 120-second default. The supplied current
-Gemini profile and Ollama thinking preset instead use
-`reasoning_effort=high`, 32,768 total generated tokens, a finite 840-second model
-deadline and temperature `1.0`; configure A2A request and poll timeouts to `900s`.
+use `150s` only with the adapter's 120-second default. Both supplied thinking profiles keep `reasoning_effort=high`, 32,768 total
+generated tokens and temperature `1.0`. Both local test presets use a 60-second
+model deadline with one attempt; configure their A2A request and poll budgets to
+`120s`. These outer transport budgets allow bank reads and error handling without
+extending model generation.
 These partner limits are separate from Astraform's customer-model timeout.
+Set `BANKING_LLM_TOP_P` explicitly when a deployment requires a particular value.
+For Ollama 0.40.5's OpenAI-compatible endpoint, omission becomes `top_p=1.0`
+and overrides the model preset; configure `0.95` for the supplied Ollama profile.
+Sampling settings are deployment configuration, not instructions or evidence of answer quality.
 Those are ceilings, not guaranteed duration or accuracy. Ollama's compatibility
 API cannot set context size per request: configure the model server to allow the
 input plus generated tokens before testing. The [Qwen model card](https://huggingface.co/Qwen/Qwen3.5-4B)
@@ -297,10 +317,10 @@ simulation.event.runtime.domain.bindings.banking-reference.domain-id=banking
 simulation.event.runtime.domain.bindings.banking-reference.binding-revision=banking-reference-v1
 simulation.event.runtime.domain.bindings.banking-reference.allow-insecure-http=true
 simulation.event.runtime.a2a.enabled=true
-simulation.event.runtime.a2a.request-timeout=900s
-simulation.event.runtime.a2a.poll-timeout=900s
+simulation.event.runtime.a2a.request-timeout=120s
+simulation.event.runtime.a2a.poll-timeout=120s
 simulation.event.runtime.a2a.targets.banking-advice.base-url=http://host.docker.internal:8099
-simulation.event.runtime.a2a.targets.banking-advice.binding-revision=banking-starter-gemini36-high-v1
+simulation.event.runtime.a2a.targets.banking-advice.binding-revision=banking-starter-gemini36-high-v2
 simulation.event.runtime.a2a.targets.banking-advice.allow-insecure-http=true
 ```
 
@@ -362,10 +382,10 @@ simulation.event.runtime.domain.bindings.banking-python-reference.domain-id=bank
 simulation.event.runtime.domain.bindings.banking-python-reference.binding-revision=banking-python-reference-v1
 simulation.event.runtime.domain.bindings.banking-python-reference.allow-insecure-http=true
 simulation.event.runtime.a2a.enabled=true
-simulation.event.runtime.a2a.request-timeout=900s
-simulation.event.runtime.a2a.poll-timeout=900s
+simulation.event.runtime.a2a.request-timeout=120s
+simulation.event.runtime.a2a.poll-timeout=120s
 simulation.event.runtime.a2a.targets.banking-python-advice.base-url=http://host.docker.internal:8101
-simulation.event.runtime.a2a.targets.banking-python-advice.binding-revision=banking-starter-gemini36-high-v1
+simulation.event.runtime.a2a.targets.banking-python-advice.binding-revision=banking-starter-gemini36-high-v2
 simulation.event.runtime.a2a.targets.banking-python-advice.allow-insecure-http=true
 ```
 
@@ -446,11 +466,11 @@ provides domain authoring; the bank seed still uses the partner's own HTTP API.
 Install the published author kit in the launcher's Python 3.12+ virtual environment:
 
 ```bash
-python3 -m pip install 'astraform-remote-domain-author-kit==0.3.3'
+python3 -m pip install 'astraform-remote-domain-author-kit==0.3.4'
 ```
 
-For this monthly scenario, which omits `requireCustomerFinish`, no SDK source
-checkout or locally built wheel is needed. The Python bank installs
+No SDK source checkout or locally built wheel is needed for the customer
+launchers. The selected platform must support each scenario's declared fields. The Python bank installs
 the same version with the `[fastapi]` extra through its own project dependency
 lock; the launcher does not require that extra. Conformance remains separate
 testing tooling. See the [SDK dependencies](../README.md#sdk-development).
@@ -465,7 +485,9 @@ To verify a Java customer rather than only a Java bank provider, the same
 launcher supports `--prepare-only --output /fresh/empty/prepared-output`.
 It seeds and discovers capabilities but makes no Catalog create/publish or
 Journey launch writes. Its `prepared-scenario.json` has `catalog` and `launch`
-objects for the existing downloaded Java SDK 0.4.3 `FirstSimulation` client.
+objects for the existing downloaded `FirstSimulation` client. A declaring
+scenario uses published Java SDK 0.4.4 and typed validation before Catalog
+writes; the selected platform must also support its declared `domainId`.
 See the [extracted starter Java preparation route](../deploy/banking-starter/README.md#prepare-for-the-existing-java-customer-sdk-client)
 for paths and the launch-once/inspect-same-run boundary. No extra runtime layer
 or SDK transport bridge is introduced.
@@ -518,10 +540,19 @@ runs, not proof of a shared multi-customer platform run.
 ## An issued statement and a payment budget
 
 [`issued-statement-configuration.json`](issued-statement-configuration.json) gives
-Avery one practical question: understand the required payment and due date for an
-already-issued January statement, and whether a personal AU$100 budget covers the
-minimum payment and repays the full balance. Avery chooses its own questions,
-account lookups and follow-ups; the scenario does not prescribe a conversation.
+Avery one practical need: obtain the banking advice service's explanation of the
+required payment and due date for an already-issued January statement, and what
+a personal AU$100 budget covers against its minimum payment and full balance.
+Account records can help Avery prepare a question, but a lookup alone does not
+satisfy this request for the bank's own advice. Avery is asked to share the budget
+amount and currency so the bank can address that personal question. The model
+still chooses its own actions, questions, account lookups, clarifications and
+stopping decision; the scenario does not prescribe a conversation or its answer.
+The enquiry is resolved when Avery understands the bank's explanation and has
+no useful clarification left. Payment processing, due-date monitoring and waiting
+for another statement are outside this enquiry; they are not pending work after
+the explanation. The customer still decides whether the actual reply answers its
+question, needs clarification or leaves an unresolved limitation.
 
 The bank seed reuses the existing issued-statement fixture: AU$1,200 credit-card
 debt, an AU$48 minimum payment, a 31 January statement end and a 14 February due
@@ -553,18 +584,21 @@ partner receipt and a later accepted customer `FINISH` decision. A customer
 `CONTACT_PARTNER` follow-up continues through the existing dispatch path even if
 the previous receipt matched; all decision, interaction, repetition and time
 limits still apply. `FINISH` without matching evidence is not achievement.
+The human goal explicitly requests bank advice, matching that receipt requirement;
+it is not merely a goal to read and calculate the statement figures. A customer
+can still stop without achieving it, and the platform preserves that outcome.
 Omitted or false values preserve the earlier receipt-only stopping behavior.
 
 This optional field targets the platform v0.3.0 Experiment service and a native
 customer SDK whose generated completion-policy model preserves the supplied
-Boolean. Published Python SDK 0.3.3 supplies this native client support;
+Boolean. Published Python SDK 0.3.4 supplies this native client support;
 published platform v0.2.0 still lacks the required stopping behavior.
 The launcher checks raw type and typed round-trip fidelity before bank seeding or
 create/publish/launch writes, then uses the normal generated Agent Journey API.
 It never manually inserts a JSON extension, drops the value, retries a failed
 launch or chooses customer behavior. Both explicit true and explicit false fail
 with older SDK 0.3.2; omission remains compatible. Current source pins select
-0.3.3, while existing published images and archives retain their recorded versions.
+0.3.4, while existing published images and archives retain their recorded versions.
 
 The receipt conditions still verify statement records, not understanding. They
 match schema, payment status, customer, account, bill, statement end, minimum,
@@ -731,6 +765,20 @@ The reply follows [`output.schema.json`](output.schema.json): `payment_due`,
 Missing statements yield `need_information`; a failed bank lookup is an A2A
 error. Supplied statement fields never replace bank data in backend mode.
 Advice does not execute or schedule a payment.
+
+The optional `presentation` object carries provider-owned labels and formats for
+values in this same captured response. It is attached after model generation;
+it does not change the original advice, source values or completion rules.
+Its schema reference is
+`https://astraform.ai/schema/remote-domain/v1/result-presentation.v1.schema.json`.
+For offline validation, supply that canonical contract file explicitly from your
+matching local contracts checkout and register its `$id` in the validator's local
+registry; do not fetch it during a run or copy a second editable schema here.
+The optional JSON response field uses existing captured evidence and requires no
+new SDK version. Readers without presentation support retain the original values.
+
+Currency formatting retains the sign of `statement.closingAmount`; it does not
+turn that field into an inferred amount owed.
 
 ## Inspect the outcome
 

@@ -149,6 +149,9 @@
           "maximum": 253402300799998
         }
       }
+    },
+    "presentation": {
+      "$ref": "https://astraform.ai/schema/remote-domain/v1/result-presentation.v1.schema.json"
     }
   },
   "allOf": [

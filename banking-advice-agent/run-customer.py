@@ -4,6 +4,7 @@ import argparse
 import importlib.util
 import json
 import math
+import re
 import sys
 import os
 from pathlib import Path
@@ -54,6 +55,22 @@ def launch(client, api, output, prepare_only=False):
     subject = os.environ.get("BANKING_SUBJECT_REF", "customer-a")
     sample_path = Path(os.environ.get("BANKING_SAMPLE_FILE", directory / "sample-configuration.json"))
     sample = json.loads(sample_path.read_text())
+    template = sample["launchRequestTemplate"]
+    if "domainId" in template:
+        domain_id = template["domainId"]
+        if type(domain_id) is not str or re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,127}", domain_id) is None:
+            raise ValueError("launch.domainId must be a lowercase domain identifier of 1 to 128 characters")
+        # Probe the real generated model before any bank, Catalog or Journey writes.
+        probe = AgentJourneyLaunchRequest.from_dict({
+            "requestId": str(uuid4()), "catalogAgentId": str(uuid4()),
+            "catalogRevisionId": str(uuid4()), "catalogDefinitionDigest": "sha256:" + "0" * 64,
+            "instruction": "Validate declared domain identity", "domainId": domain_id})
+        if client.sanitize_for_serialization(probe).get("domainId") != domain_id:
+            raise ValueError(
+                "The selected Python SDK cannot preserve launch.domainId. "
+                "Install astraform-remote-domain-author-kit==0.3.4 or a newer compatible release, "
+                "or deliberately omit domainId in a custom scenario; this launcher "
+                "refuses to remove or manually reinsert the configured value.")
     policy = sample["launchRequestTemplate"].get("completionPolicy", {})
     if "requireCustomerFinish" in policy:
         required_finish = policy["requireCustomerFinish"]
@@ -63,8 +80,8 @@ def launch(client, api, output, prepare_only=False):
         if serialized.get("requireCustomerFinish") is not required_finish:
             raise ValueError(
                 "The selected Python SDK cannot preserve completionPolicy.requireCustomerFinish. "
-                "Published SDK 0.3.2 does not support this field. Install a typed SDK with completion "
-                "support; this launcher refuses to remove or change the configured value.")
+                "Install astraform-remote-domain-author-kit==0.3.4 or a newer compatible release; "
+                "this launcher refuses to remove or change the configured value.")
     configured_tools = [tool for tool in sample["catalogDraftRequest"]["draft"]["tools"]
                         if tool.get("kind") == "MCP" and tool.get("toolName") == "get_customer_accounts"]
     if len(configured_tools) != 1:
