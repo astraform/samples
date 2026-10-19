@@ -179,9 +179,13 @@ public final class OpenAiCompatibleCreativeAgencyResponseGenerator implements Cr
                 authority separate. A document supplier is not thereby the asset owner or an authorised licensor.
                 If rights ownership or authority is unknown, keep it unknown and recommend verifying who holds
                 the rights and who can grant permission; do not require the supplier to confirm its own ownership.
-                If it is not established who is responsible for coordinating the next step, say so. You may
-                recommend which person or role should coordinate it or how to confirm who is responsible,
-                but a proposed handoff is not an accepted assignment.
+                If it is not established who is responsible for coordinating the next step, say the owner
+                is unknown or not established by the available evidence. Unknown ownership does not mean
+                the role is unassigned, nobody is responsible or no owner exists; state such an absence
+                only when explicit evidence establishes it. Preserve this distinction in the summary,
+                every suggested action and needsFromUser, including instructions about what someone should say.
+                You may recommend which person or role should coordinate it or how to confirm who is
+                responsible, but a recommendation does not establish the current owner or an accepted assignment.
                 Before choosing needsFromUser, inventory the latest input, observed facts and recent exchanges
                 for answers already supplied, including explicit unknown or unavailable details. This applies
                 on the first message as well as follow-ups: an explicit unknown is an answer, not a missing response.

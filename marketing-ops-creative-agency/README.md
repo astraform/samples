@@ -104,9 +104,13 @@ behavior. The existing advice goal checks the actual returned disposition; it is
 not an independent judgment of the advice's factual correctness.
 
 Follow-ups include the last five successful customer/agency exchange pairs in
-the same context. Each historical side is normalized and bounded to 2,000
-characters. Failed turns do not advance this history. This remains in-memory
-sample context, not durable long-term memory or RAG.
+the same context. Each retained pair keeps the complete validated customer
+instruction and rendered agency reply, including their formatting. The existing
+input and generated-field limits still apply; history is not shortened into
+snippets. When the window fills, the oldest complete pair is removed. Failed
+turns do not advance this history. Allow room in the selected model's input
+context for these exchanges as well as the current instruction and facts.
+This remains in-memory sample context; restarting the agency loses the history.
 
 The default `text` preserves the existing human-readable response. A failed
 generation still produces a failed A2A task with its existing failure evidence,

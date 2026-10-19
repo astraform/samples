@@ -28,14 +28,14 @@ public class CreativeAgencyConversationStore {
 
     public Snapshot record(String contextId, CreativeAgencyScenarioKey scenario, String message, String agencyReply) {
         if (contextId == null || contextId.isBlank()) {
-            return new Snapshot(null, scenario, 1, List.of(new Exchange(compactSnippet(message), compactSnippet(agencyReply))), Instant.now());
+            return new Snapshot(null, scenario, 1, List.of(new Exchange(message, agencyReply)), Instant.now());
         }
         ConversationState state = conversations.compute(contextId, (ignored, existing) -> {
             ConversationState next = existing == null ? new ConversationState() : existing;
             next.scenario = scenario;
             next.turnCount++;
             next.updatedAt = Instant.now();
-            Exchange exchange = new Exchange(compactSnippet(message), compactSnippet(agencyReply));
+            Exchange exchange = new Exchange(message, agencyReply);
             if (!exchange.customerInput().isBlank()) {
                 if (next.recentExchanges.size() == MAX_EXCHANGES) {
                     next.recentExchanges.removeFirst();
@@ -45,17 +45,6 @@ public class CreativeAgencyConversationStore {
             return next;
         });
         return state.snapshot(contextId);
-    }
-
-    private String compactSnippet(String message) {
-        if (message == null) {
-            return "";
-        }
-        String normalized = message.replaceAll("\\s+", " ").trim();
-        if (normalized.length() <= 2_000) {
-            return normalized;
-        }
-        return normalized.substring(0, 1_997) + "...";
     }
 
     public record Snapshot(
@@ -71,6 +60,10 @@ public class CreativeAgencyConversationStore {
     }
 
     public record Exchange(String customerInput, String agencyReply) {
+        public Exchange {
+            customerInput = customerInput == null ? "" : customerInput;
+            agencyReply = agencyReply == null ? "" : agencyReply;
+        }
     }
 
     private static final class ConversationState {

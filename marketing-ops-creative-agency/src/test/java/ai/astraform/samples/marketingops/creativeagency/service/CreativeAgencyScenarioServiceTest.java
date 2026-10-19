@@ -83,7 +83,7 @@ class CreativeAgencyScenarioServiceTest {
         service.buildReply(command("history", "Can you clarify your previous recommendation?"));
         var previous = requests.getLast().recentExchanges().getFirst();
         assertThat(previous.customerInput()).isEqualTo("Please revise my campaign asset.");
-        assertThat(previous.agencyReply()).contains(first.responseText().replaceAll("\\s+", " "));
+        assertThat(previous.agencyReply()).isEqualTo(first.responseText());
         for (int index = 0; index < 6; index++) service.buildReply(command("history", "Please revise asset " + index));
         assertThat(requests.getLast().recentExchanges()).hasSize(5);
     }

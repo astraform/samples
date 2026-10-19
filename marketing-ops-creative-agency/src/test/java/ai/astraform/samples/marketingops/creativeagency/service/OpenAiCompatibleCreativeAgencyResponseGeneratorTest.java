@@ -195,6 +195,54 @@ class OpenAiCompatibleCreativeAgencyResponseGeneratorTest {
     }
 
     @Test
+    void followUpModelRequestRetainsCompleteAcceptedInstructionAndRenderedAgencyReply() throws Exception {
+        String instruction = "Proposed handoff:\n  "
+                + "The studio will supply a document for review; this is not permission to launch. ".repeat(32)
+                + "\n\nImportant qualification:\n  I do not know the rights holder or licensing authority; neither should be treated as absent.";
+        String decisiveAnswer = "Keep the rights holder and licensing authority unknown until verified; "
+                + "a document supplier is not automatically either one.";
+        String summary = "The proposed handoff can guide a review, but documentary evidence and approval "
+                + "must be verified separately. ";
+        List<String> actions = List.of(
+                "Compare the document's scope with each intended campaign use before treating it as evidence. ".repeat(4),
+                "Check which rights are covered and distinguish that evidence from a proposed delivery commitment. ".repeat(4),
+                "Record what the document establishes without treating a recommendation as accepted execution. ".repeat(4),
+                "Keep the launch blocked while the stated documentary and approval prerequisites remain unresolved. ".repeat(4),
+                decisiveAnswer);
+        responses.add(new StubResponse(200, completedDecision("requested-model", "launch-blocker", "UNBLOCK_PLAN",
+                summary.repeat(8).trim(), actions, List.of())));
+        responses.add(new StubResponse(200, completedDecision("requested-model", "launch-blocker", "UNBLOCK_PLAN",
+                "Retain the qualification from the handoff and the earlier advice.",
+                List.of("Verify the outstanding evidence before launch."), List.of())));
+        var store = new CreativeAgencyConversationStore();
+        var service = new CreativeAgencyScenarioService(store, generator(1));
+        ObjectNode envelope = objectMapper.createObjectNode();
+        envelope.put("schemaVersion", "astraform.isolated-event-a2a-invocation.v1");
+        ObjectNode request = envelope.putObject("request");
+        request.put("instruction", instruction);
+        request.putObject("facts")
+                .put("scenario", "launch-blocker")
+                .put("campaignKey", "brand-refresh-social")
+                .put("queueState", "blocked");
+        var firstCommand = new CreativeAgencyCommand("complete-history", objectMapper.writeValueAsString(envelope), Map.of());
+
+        var firstReply = service.buildReply(firstCommand);
+        assertThat(instruction.indexOf("Important qualification")).isGreaterThan(2_000);
+        assertThat(firstReply.responseText().indexOf(decisiveAnswer)).isGreaterThan(2_000);
+
+        String followUp = "Does that qualification still apply to my proposed handoff?";
+        request.put("instruction", followUp);
+        service.buildReply(new CreativeAgencyCommand("complete-history", objectMapper.writeValueAsString(envelope), Map.of()));
+
+        JsonNode context = objectMapper.readTree(
+                receivedRequest.get().path("messages").get(1).path("content").stringValue());
+        JsonNode retainedExchange = context.path("recentExchanges").get(0);
+        assertThat(retainedExchange.path("customerInput").stringValue()).isEqualTo(firstCommand.input().instruction());
+        assertThat(retainedExchange.path("agencyReply").stringValue()).isEqualTo(firstReply.responseText());
+        assertThat(context.path("latestUserInput").stringValue()).isEqualTo(followUp);
+    }
+
+    @Test
     void shapeValidOwnershipAndCompletionMistakesRemainVisibleWithoutAnswerRepair() throws Exception {
         String unsupportedSummary = "The supplier owns the asset and has already granted usage permission.";
         String unsupportedAction = "The approval work has already been completed.";
