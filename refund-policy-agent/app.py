@@ -20,7 +20,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from refund_policy import assess
-from ollama_backend import OllamaError, OllamaResponder
+from ollama_backend import CONTEXT_TOKENS, OUTPUT_TOKENS, TIMEOUT_SECONDS, OllamaError, OllamaResponder
 from conversation import ConversationStore, INPUT_SCHEMA, MAX_DELAY_MS
 
 
@@ -116,10 +116,16 @@ def create_app(base_url: str | None = None, *, mode: str | None = None,
     if mode not in {"deterministic", "ollama", "conversation-reference"}:
         raise ValueError("REFUND_AGENT_MODE must be deterministic, ollama or conversation-reference")
     if mode == "ollama" and responder is None:
+        thinking = os.environ.get("OLLAMA_THINKING", "true").strip().lower()
+        if thinking not in {"true", "false"}:
+            raise ValueError("OLLAMA_THINKING must be true or false")
         responder = OllamaResponder(
             os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
             os.environ.get("OLLAMA_MODEL", ""),
-            float(os.environ.get("OLLAMA_TIMEOUT_SECONDS", "90")),
+            float(os.environ.get("OLLAMA_TIMEOUT_SECONDS", str(TIMEOUT_SECONDS))),
+            thinking=thinking == "true",
+            context_tokens=int(os.environ.get("OLLAMA_CONTEXT_TOKENS", str(CONTEXT_TOKENS))),
+            output_tokens=int(os.environ.get("OLLAMA_OUTPUT_TOKENS", str(OUTPUT_TOKENS))),
         )
     delay_ms = 0
     if mode == "conversation-reference":

@@ -43,11 +43,19 @@ class OllamaConfigurationTest(unittest.TestCase):
                 OllamaResponder("http://localhost:11434", "qwen3:8b", timeout)
 
 
+    def test_rejects_invalid_thinking_and_unbounded_token_budgets(self):
+        for configuration in ({"thinking": "true"}, {"thinking": 1},
+                              {"context_tokens": 0}, {"output_tokens": -1},
+                              {"output_tokens": True}, {"context_tokens": 1024, "output_tokens": 1024}):
+            with self.subTest(configuration=configuration), self.assertRaises(ValueError):
+                OllamaResponder("http://localhost:11434", "qwen3:8b", **configuration)
+
+
 class OllamaResponseTest(unittest.IsolatedAsyncioTestCase):
-    def responder(self, handler):
+    def responder(self, handler, **configuration):
         transport = ClosingTransport(handler)
         self.addCleanup(lambda: self.assertTrue(transport.closed))
-        return OllamaResponder("http://ollama.internal:11434", "qwen3:8b", transport=transport)
+        return OllamaResponder("http://ollama.internal:11434", "qwen3:8b", transport=transport, **configuration)
 
     async def test_sends_supplied_policy_without_case_id_and_preserves_raw_answer(self):
         # This intentionally wrong decision must survive untouched for the grader.
@@ -60,10 +68,11 @@ class OllamaResponseTest(unittest.IsolatedAsyncioTestCase):
             payload = json.loads(request.content)
             self.assertEqual("qwen3:8b", payload["model"])
             self.assertFalse(payload["stream"])
-            self.assertFalse(payload["think"])
+            self.assertTrue(payload["think"])
             self.assertEqual(RESPONSE_SCHEMA, payload["format"])
             self.assertEqual(0, payload["options"]["temperature"])
             self.assertGreater(payload["options"]["num_predict"], 0)
+            self.assertGreater(payload["options"]["num_ctx"], payload["options"]["num_predict"])
             supplied = json.loads(payload["messages"][1]["content"])
             self.assertEqual("Apply this supplied policy.", supplied["instruction"])
             self.assertEqual({key: value for key, value in facts.items() if key != "caseId"}, supplied["facts"])
@@ -135,6 +144,7 @@ class OllamaResponseTest(unittest.IsolatedAsyncioTestCase):
             ({"done": True, "done_reason": {}, "message": {"content": "partial"}}, "without a completed"),
             ({"done": True, "message": {"content": " "}}, "no answer text"),
             ({"done": True, "message": {"content": None}}, "no answer text"),
+            ({"done": True, "done_reason": "stop", "message": {"thinking": "Reasoning only, no final answer."}}, "no answer text"),
             ({"done": True}, "no answer text"),
             ({"error": "generation failed"}, "generation error"),
             ([], "invalid response object"),

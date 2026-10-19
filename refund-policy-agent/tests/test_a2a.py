@@ -1,11 +1,13 @@
 import json
 import unittest
+
+import httpx
 from unittest.mock import AsyncMock, Mock, patch
 
 from starlette.testclient import TestClient
 
 from app import create_app
-from ollama_backend import OllamaError
+from ollama_backend import OllamaError, OllamaResponder
 
 
 class A2AContractTest(unittest.TestCase):
@@ -130,12 +132,44 @@ class LLMA2AContractTest(unittest.TestCase):
         card = self.client.get("/.well-known/agent-card.json").json()
         self.assertIn(responder.model, card["description"])
 
+    def test_ollama_environment_reaches_provider_without_changing_raw_answer(self):
+        raw = ' {"decision":"wrong","reasonCode":"unchanged","policyVersion":"other"}\n'
+        context_tokens, output_tokens, timeout = 2048, 256, 2
+        for configured_thinking, expected_thinking in ((None, True), ("false", False)):
+            with self.subTest(thinking=configured_thinking):
+                def handle(request):
+                    payload = json.loads(request.content)
+                    self.assertEqual(expected_thinking, payload["think"])
+                    self.assertEqual(context_tokens, payload["options"]["num_ctx"])
+                    self.assertEqual(output_tokens, payload["options"]["num_predict"])
+                    self.assertTrue(all(value == timeout for value in request.extensions["timeout"].values()))
+                    return httpx.Response(200, json={"done": True, "done_reason": "stop",
+                        "message": {"thinking": "Provider reasoning is not the business answer.", "content": raw}})
+
+                def configured_responder(*args, **kwargs):
+                    return OllamaResponder(*args, **kwargs, transport=httpx.MockTransport(handle))
+
+                environment = {"OLLAMA_MODEL": "test-model", "OLLAMA_CONTEXT_TOKENS": str(context_tokens),
+                    "OLLAMA_OUTPUT_TOKENS": str(output_tokens), "OLLAMA_TIMEOUT_SECONDS": str(timeout)}
+                if configured_thinking is not None:
+                    environment["OLLAMA_THINKING"] = configured_thinking
+                with patch.dict("os.environ", environment, clear=True), patch("app.OllamaResponder", side_effect=configured_responder):
+                    with TestClient(create_app("http://refund-ollama:8095", mode="ollama")) as client:
+                        self.client = client
+                        message = self.send('{"itemCondition":"opened"}').json()["result"]["message"]
+                self.assertEqual(raw, message["parts"][0]["text"])
+
     def test_invalid_mode_and_missing_model_fail_at_startup(self):
         with self.assertRaises(ValueError):
             create_app(mode="unknown")
         with patch.dict("os.environ", {"OLLAMA_MODEL": ""}):
             with self.assertRaises(ValueError):
                 create_app(mode="ollama")
+        for configuration in ({"OLLAMA_THINKING": "maybe"}, {"OLLAMA_CONTEXT_TOKENS": "0"},
+                              {"OLLAMA_OUTPUT_TOKENS": "unlimited"}):
+            with self.subTest(configuration=configuration), patch.dict("os.environ", {"OLLAMA_MODEL": "test-model", **configuration}, clear=True):
+                with self.assertRaises(ValueError):
+                    create_app(mode="ollama")
 
 
 if __name__ == "__main__":

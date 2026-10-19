@@ -26,8 +26,9 @@ RESPONSE_SCHEMA = {
 
 # Bound the sample's local inference. Exhausting the output budget is an error,
 # never a reason to manufacture a business decision or send a second request.
-CONTEXT_TOKENS = 8192
-OUTPUT_TOKENS = 512
+CONTEXT_TOKENS = 65536
+OUTPUT_TOKENS = 32768
+TIMEOUT_SECONDS = 60.0
 
 SYSTEM_INSTRUCTION = (
     "You are a read-only refund policy reviewer. Assess the supplied case using "
@@ -54,8 +55,11 @@ class OllamaResponder:
         self,
         base_url: str,
         model: str,
-        timeout_seconds: float = 90.0,
+        timeout_seconds: float = TIMEOUT_SECONDS,
         *,
+        thinking: bool = True,
+        context_tokens: int = CONTEXT_TOKENS,
+        output_tokens: int = OUTPUT_TOKENS,
         transport: httpx.AsyncBaseTransport | None = None,
     ):
         try:
@@ -82,6 +86,14 @@ class OllamaResponder:
         if (not isinstance(timeout_seconds, (int, float)) or isinstance(timeout_seconds, bool)
                 or not math.isfinite(timeout_seconds) or timeout_seconds <= 0):
             raise ValueError("Ollama timeout must be a finite positive number of seconds")
+        if type(thinking) is not bool:
+            raise ValueError("Ollama thinking must be true or false")
+        if (type(context_tokens) is not int or type(output_tokens) is not int
+                or output_tokens <= 0 or context_tokens <= output_tokens):
+            raise ValueError("Ollama token budgets must be positive integers with output below context")
+        self.thinking = thinking
+        self.context_tokens = context_tokens
+        self.output_tokens = output_tokens
         self.base_url = base_url.rstrip("/")
         self.model = model.strip()
         self.timeout_seconds = timeout_seconds
@@ -105,12 +117,12 @@ class OllamaResponder:
                 }, allow_nan=False)},
             ],
             "stream": False,
-            "think": False,
+            "think": self.thinking,
             "format": RESPONSE_SCHEMA,
             "options": {
                 "temperature": 0,
-                "num_ctx": CONTEXT_TOKENS,
-                "num_predict": OUTPUT_TOKENS,
+                "num_ctx": self.context_tokens,
+                "num_predict": self.output_tokens,
             },
         }
         try:

@@ -32,9 +32,20 @@ that supports the request options used here. We use the native
 [chat API](https://docs.ollama.com/api/chat) and
 [structured JSON output](https://docs.ollama.com/capabilities/structured-outputs).
 The JSON schema constrains the three field types; it supplies no correct
-decision. Settings are temperature 0, thinking disabled, 8192 context tokens,
-512 maximum output tokens, and a 90-second inference deadline. Results may
-still vary between models, versions or runs.
+decision. Thinking is enabled by default. The bounded local profile uses temperature
+0, 65,536 context tokens, 32,768 maximum output tokens (including thinking), and
+a 60-second total inference deadline with one attempt and no automatic retry.
+These are ceilings, not reserved output or an expected response time. The larger context can use more memory than the old
+8,192-token profile. Results may still vary between models, versions or runs.
+
+The existing environment configuration accepts `OLLAMA_THINKING=true|false`,
+`OLLAMA_CONTEXT_TOKENS`, `OLLAMA_OUTPUT_TOKENS`, and `OLLAMA_TIMEOUT_SECONDS`.
+Thinking may be explicitly disabled by an operator for a different model;
+there is no automatic fallback to disabled thinking. Token budgets must be
+positive integers with output below context, and the deadline must be finite
+and positive. Keep the caller's A2A deadline longer than the model deadline.
+A thinking-only or truncated response still fails; the agent never returns
+reasoning as a business answer.
 
 ## Run the agent directly
 
@@ -65,16 +76,18 @@ single entry instead of duplicating it:
 
 ```properties
 simulation.event.runtime.a2a.enabled=true
-simulation.event.runtime.a2a.request-timeout=120s
+simulation.event.runtime.a2a.request-timeout=70s
 simulation.event.runtime.a2a.targets.refund-ollama.base-url=http://refund-ollama:8095
-simulation.event.runtime.a2a.targets.refund-ollama.binding-revision=refund-ollama-qwen3-5-4b-v1
+simulation.event.runtime.a2a.targets.refund-ollama.binding-revision=refund-ollama-qwen3-5-4b-thinking-v3
 simulation.event.runtime.a2a.targets.refund-ollama.allow-insecure-http=true
 ```
 
-The 120-second transport timeout applies to this evaluation runtime's A2A
-targets, allowing the sample's 90-second model call to finish or report an
-error. The checker below waits up to 180 seconds per case. A checker timeout
-does not cancel work accepted by the remote agent.
+The 70-second A2A transport budget gives the sample time to report a
+60-second model timeout. The checker waits up to 90 seconds per case. Neither
+outer budget extends the model deadline or enables another model attempt.
+Timing out the checker alone does not cancel work already accepted by the agent.
+Provider cancellation closes the local request; immediate GPU quiescence depends
+on the Ollama server.
 
 Run these commands from the **bundle directory**, replacing the sample path:
 
@@ -83,7 +96,7 @@ Run these commands from the **bundle directory**, replacing the sample path:
 ./astraform.sh restart agent-runtime
 ./astraform.sh up -d --wait
 python3 ./check-agent.py --target-key refund-ollama \
-  --scenario scenarios/refund-policy-v1.json --timeout 180 --confirm-target-test
+  --scenario scenarios/refund-policy-v1.json --timeout 90 --confirm-target-test
 ```
 
 This adds the LLM service without requiring the deterministic service. To
@@ -94,7 +107,7 @@ The overlay reaches the host's existing Ollama at
 `http://host.docker.internal:11434` on Docker Desktop. For another host setup,
 set `OLLAMA_BASE_URL` in the bundle's `.env` to an address reachable from the
 agent container. The container's `localhost` is not the host. `OLLAMA_MODEL`
-and `OLLAMA_TIMEOUT_SECONDS` can also be set there. The wrapper reads `.env`
+and the thinking, token-budget and timeout variables above can also be set there. The wrapper reads `.env`
 over inherited shell settings. Recreate the LLM service after changing these
 environment values. Record a new target binding revision when model or prompt
 behavior changes; the model name alone does not pin its installed weights.
@@ -110,7 +123,7 @@ With the bundle, refund agent, and Ollama service running, execute this from
 the **bundle directory**. The bundled refund scenario is selected by default:
 
 ```bash
-python3 check-agent.py --target-key refund-ollama --timeout 180 --confirm-target-test
+python3 check-agent.py --target-key refund-ollama --timeout 90 --confirm-target-test
 ```
 
 Each run writes new evidence. No image rebuild or runtime restart is needed
@@ -129,37 +142,13 @@ This keeps the model installed and the agent configured. The next assessment
 loads it again. See Ollama's [memory management FAQ](https://docs.ollama.com/faq)
 and [CLI reference](https://docs.ollama.com/cli).
 
-## Verification
+## Check behavior
 
-Current default, local run on 2026-09-20: `qwen3.5:4b` completed all nine
-Astraform A2A cases; **seven passed and two failed business grading**. All nine
-runtime executions completed, and all nine ledger-replay checks passed. The
-two failures were:
-
-- Missing purchase date: returned `ineligible / MISSING_REQUIRED_INFORMATION`;
-  expected `needs_information / MISSING_REQUIRED_INFORMATION`.
-- Missing item condition: returned `eligible / WITHIN_WINDOW_UNOPENED`;
-  expected `needs_information / MISSING_REQUIRED_INFORMATION`.
-
-The run took approximately 38.36 seconds. Across 35 Ollama `/api/ps` samples,
-the largest reported model allocation was 3,299,155,638 bytes (about 3.3 GB),
-with the model entirely loaded on the GPU and an 8192-token context. This is the model allocation
-reported by Ollama, **not total system memory use**. The model was unloaded
-after the evaluation; it remains installed and configured for the next run.
-
-Evidence in the Astraform platform workspace is under
-`output/partner-evaluation-refund-sample/evidence/partner-eval-1b68958a-a9e6-4c0f-be98-dbd5bff98360/`:
-`summary.json`, `ollama-memory.json`, and `ollama-manifest.json`.
-These observations describe one local run, not a general accuracy or
-performance benchmark.
-
-Historical local run on 2026-09-20: Ollama 0.34.2 with `qwen3:8b` completed all nine
-Astraform A2A cases; **five passed and four failed business grading**. Failures
-were the unopened day-31 case, the two missing-information cases, and the
-opened day-31 rule-precedence case. These were model answers, not connection
-failures. This single run is evidence that the integration and grader work;
-it is not a claim that this model reliably follows the policy. This historical
-result is separate from the `qwen3.5:4b` run above.
+Inspect the original business answer and grade for each case. Completion and
+correctness are separate: a completed response can still misapply the policy,
+invent missing facts or choose the wrong decision. Thinking does not guarantee
+accuracy. A timeout, thinking-only response or truncated answer remains a failure;
+the sample does not repair the answer, disable thinking or retry generation.
 
 Offline tests use mock HTTP responses and do not invoke Ollama:
 
