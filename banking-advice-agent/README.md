@@ -14,7 +14,7 @@ locks install Python SDK 0.3.4; rebuild images to consume those source changes.
 The issued-statement scenario additionally declares
 `launchRequestTemplate.domainId: "banking"`. This labels the run; it does not grant access or establish tenant
 ownership. Published Python 0.3.4 and Java 0.4.4 preserve this field in their
-native typed clients. It also requires a platform that implements explicit
+native typed clients. It also requires platform v0.4.0 or later for explicit
 domain identity; publishing the SDK does not upgrade the platform v0.3.0 bundle.
 Verify that server capability before launching this scenario. The launcher checks declared values before bank seeding, including
 `--prepare-only`, and before Catalog writes. Custom scenarios deliberately
@@ -37,9 +37,9 @@ that same banking backend with different access:
   the customer prompt.
 
 The customer uses the model selected by Astraform's deployment binding, such as
-Ollama or Gemini. Current strict templates use the published
-[platform v0.3.0 bundle](https://github.com/astraform/releases/releases/tag/v0.3.0).
-Download its archive and checksum, then verify and initialize the selected
+Ollama or Gemini. Current issued templates target platform v0.4.0.
+Obtain its archive and checksum from [platform releases](https://github.com/astraform/releases/releases)
+only after publication, then verify and initialize the selected
 profile using its included README. The immutable samples v0.1.0 starter retains
 its original [platform v0.2.0 dependency](https://github.com/astraform/releases/releases/tag/v0.2.0).
 No platform source checkout or source build is required for a matching release.
@@ -109,7 +109,7 @@ General multi-turn partner memory and model-selected bank tools are not implemen
 by this sample.
 
 The non-strict monthly sample below can run alongside platform v0.2.0; current
-strict issued-statement templates target platform v0.3.0. Sample services are not included
+strict issued-statement templates with explicit domain identity target platform v0.4.0. Sample services are not included
 in the platform images. The configuration uses the reference-state domain profile to attach a
 prepopulated bank customer and generate monthly statements in that same bank
 database. It starts before the first statement exists. This is a bounded monthly-statement example,

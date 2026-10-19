@@ -8,7 +8,8 @@ capabilities as described in the [shared banking guide](../banking-advice-agent/
 The historical
 [platform v0.2.0 bundle](https://github.com/astraform/releases/releases/tag/v0.2.0)
 supports compatible non-strict scenarios; strict customer-FINISH requires v0.3.0,
-and an explicit `domainId` additionally requires its supporting server capability.
+and an explicit `domainId` additionally requires platform v0.4.0 or later.
+Download the selected bundle only after publication and verification.
 Follow the selected bundle's README for initialization.
 
 The native customer-simulation path reuses the banking rules in this provider

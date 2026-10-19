@@ -2,7 +2,8 @@
 
 
 Connect the marketing domain provider and its LLM creative agency to a matching
-Astraform platform candidate. The updated source templates opt in to
+Astraform platform, targeting v0.4.0 or later. Download a compatible bundle only
+after publication and verification. The updated source templates opt in to
 `completionPolicy.requestFactBindingMode: "RESOLVE_TRUSTED"`; this requires the
 coordinator implementation and a native typed customer SDK that preserves
 that field. Published Python SDK 0.3.4 and Java SDK 0.4.4 provide the client

@@ -6,11 +6,14 @@ versioned separately. Detailed notes live under [docs/releases](docs/releases).
 ## v0.2.0 (unreleased)
 
 - Prepare Python-issued, Java-issued, Java-monthly and scheduled-marketing
-  archives under one samples release, targeting platform v0.3.0 and published
+  archives under one samples release, targeting platform v0.4.0 and published
   Java 0.4.4/Python 0.3.4/contracts 1.2.2.
 - Validate and forward explicit bank/scenario selections through the existing
   release owner; retain native completion/domain requirements and deterministic
   archive, anonymous-image and immutable-publication checks.
+- Declare each selected scenario's domain identity, strict-completion and
+  request-fact binding requirements; reject unsupported platform versions before
+  image access or archive output without removing scenario fields.
 - Preserve explicitly marked local rehearsals and historical v0.1.0 bytes.
   The draft release selection remains unready until real revisions, image
   digests and archive checksums are reviewed.

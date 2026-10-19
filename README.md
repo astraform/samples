@@ -3,7 +3,7 @@
 Build and adapt partner services that Astraform customer agents can exercise.
 Platform operations use the published Java/Python SDKs directly; partner
 services expose A2A, MCP and domain APIs. The next samples release, **v0.2.0**,
-is being prepared for the published **platform v0.3.0**, Java **0.4.4**, Python
+is being prepared for **platform v0.4.0**, Java **0.4.4**, Python
 **0.3.4** and contracts **1.2.2**. The new sample images and starter archives are
 not yet published.
 Strict issued banking requires the supporting platform as well as the native
@@ -29,12 +29,12 @@ cd samples
 
 For the historical starter v0.1.0 and compatible non-strict source scenarios,
 the public baseline is [Astraform Platform v0.2.0](https://github.com/astraform/releases/releases/tag/v0.2.0).
-Strict customer-FINISH behavior and the next starter release target platform
-**v0.3.0**; obtain its archive/checksum from the
-[published v0.3.0 release](https://github.com/astraform/releases/releases/tag/v0.3.0).
-The current source scenarios additionally need explicit domain-label and trusted
-request-fact binding support as described in their guides. Verify those server
-capabilities separately before launching; selecting v0.3.0 alone does not establish them.
+The current source scenarios and next starter release target platform **v0.4.0**
+for explicit banking domain identity and marketing trusted request-fact binding.
+Obtain its archive/checksum from the platform releases only after publication.
+Platform v0.3.0 supplies strict customer-FINISH behavior but does not supply
+these additional capabilities. Verify the selected server and image versions
+before launching.
 Follow the selected bundle's README to verify, extract and initialize it, select
 Gemini or Ollama for customer agents, and start the platform. The platform bundle
 and editable sample source are separate: the samples do not build or import
@@ -169,9 +169,9 @@ do not yet have published starter archives. The released banking starter targets
 platform **v0.2.0**, Python SDK **0.3.2** and contracts **1.2.0**.
 
 The **v0.2.0 preparation** selects Python-issued, Java-issued, Java-monthly
-[banking starters](deploy/banking-starter/README.md#local-java-and-scheduled-statement-candidates)
+[banking starters](deploy/banking-starter/README.md#java-and-monthly-banking)
 and a [scheduled marketing starter](deploy/marketing-starter/README.md), requiring
-platform **v0.3.0**. The existing packagers accept an explicit supporting platform
+platform **v0.4.0**. The existing packagers accept an explicit supporting platform
 release for public-mode candidates and retain a separate `localVerificationOnly`
 mode for installed-image rehearsals. Neither mode publishes artifacts.
 `release.json` stays `publicationReady:false` with unset artifact identities until

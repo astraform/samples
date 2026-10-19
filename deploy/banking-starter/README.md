@@ -2,11 +2,26 @@
 
 This starter connects a real LLM customer in Astraform to a real LLM banking agent over A2A 1.0 JSON-RPC. The customer reads its own bank account through MCP; the partner agent reads the same bank backend through its banking API. Bank records live in this starter's separate PostgreSQL database. Astraform stores simulation state and evidence in its own database.
 
-The immutable published baseline uses **Astraform Platform v0.2.0** and **Python SDK 0.3.2** in the bank/advice images. Current source targets **Java SDK 0.4.4 / Python SDK 0.3.4** for newly built local candidates; a source version target does not upgrade an existing image. You need the platform and starter archives, Docker and your model configuration; no private source checkout or host SDK installation is required. A package marked `localVerificationOnly` requires the recorded locally installed images and is an engineering rehearsal, not a public starter release.
+Samples v0.2.0 uses **Java SDK 0.4.4 / Python SDK 0.3.4** and **contracts 1.2.2**,
+with platform **v0.4.0** for the issued scenario's explicit domain identity.
+Verify the selected release's manifests, archive checksums and image versions
+before installation. You need the separate platform and starter archives, Docker
+and your model configuration; no private source checkout or host SDK installation
+is required. The historical samples v0.1.0 archive retains platform v0.2.0 and
+Python SDK 0.3.2 compatibility.
 
-The current issued-statement scenario opts into `completionPolicy.requireCustomerFinish: true`. It requires the supporting platform v0.3.0 implementation and a customer SDK whose generated completion-policy model preserves this field. Platform v0.3.0 is published; samples v0.2.0 remains in preparation. Use the new sample images and starter archives only after they are published and verified. Published platform v0.2.0 and Python SDK 0.3.2 do not support it. A customer launcher using SDK 0.3.2 rejects any explicit Boolean value before bank seeding or create/publish/launch writes; it does not add the field through a transport bridge. Inspection of an existing run still uses the published SDK. Existing published images and archives retain their recorded dependency versions. Older `starter-config.json` manifests retain their recorded `requiresUnreleasedCustomerSdk` and `requiredCustomerSdkCapabilities` markers. Published Python SDK 0.3.4 supplies the native client capability; using it requires a new verified customer installation/image and the supporting platform. Existing archive bytes and recorded image versions are unchanged.
+The issued-statement scenario opts into
+`completionPolicy.requireCustomerFinish: true`, requiring an accepted customer
+FINISH as well as matching partner evidence. Platform v0.3.0 introduced this
+stopping behavior; the scenario's additional domain identity requires v0.4.0.
+Python SDK 0.3.4 preserves the completion field natively. An older SDK 0.3.2
+launcher rejects any explicit Boolean before bank seeding or create/publish/launch
+writes; it does not add fields through a transport bridge. Existing images and
+archives retain their recorded versions; changing source pins does not upgrade them.
 
-The banking image owns `run-customer.py` and the shared `customer-run-evidence.py` beside it in `/app`. The updated Docker build includes both. This archive does not supply replacement launcher scripts or a helper service, and an older published image is not assumed to contain the updated code.
+The banking image owns `run-customer.py` and the shared `customer-run-evidence.py`
+beside it in `/app`. Use the image selected by the archive; the archive does not
+supply replacement launcher scripts or a helper service.
 
 ## What you will run
 
@@ -18,21 +33,25 @@ The current issued-statement source scenario also supplies optional
 `launchRequestTemplate.domainId`. Packaging uses the explicit starter identity:
 `banking-python` for Python or `banking` for Java. This run label is not an access
 grant or tenant boundary. Published Python 0.3.4 and Java 0.4.4 preserve the
-field; a supporting platform implementing explicit domain identity is also
-required. The launcher rejects unsupported typed serialization before bank setup
-or Catalog writes, including preparation. Public packaging continues to refuse
-this scenario while its required platform capability is unreleased; local
-rehearsal records that server requirement explicitly.
+field; platform v0.4.0 or later is required for explicit domain identity. Download
+that platform only after publication and verification. The launcher rejects
+unsupported typed serialization before bank setup or Catalog writes, including
+preparation. Public packaging accepts a declared v0.4.0 or later release and
+rejects older versions before image access or archive output; that declaration
+does not prove the platform is published. Local rehearsal records the server
+requirement explicitly.
 Native monthly scenarios retain provider-derived identity without the field.
 
-Three prebuilt images run the bank, its PostgreSQL database and the banking agent. The agent image contains the launch/inspect/export helper. The historical public v0.1.0 image contains Python SDK 0.3.2; a current candidate must be rebuilt with a customer SDK supporting its selected scenario. This is an evaluation sample; the banking agent reads current bank records per request and does not claim persistent conversation memory or implement real payment execution.
+Three prebuilt images run the bank, its PostgreSQL database and the banking agent.
+The agent image contains the launch/inspect/export helper. This is an evaluation
+sample; the banking agent reads current bank records per request and does not
+claim persistent conversation memory or implement real payment execution.
 
 ## Download and extract
 
 Select a published [Astraform Samples release](https://github.com/astraform/samples/releases) and download its banking starter archive and matching checksum. Samples share one repository version; each prepared starter is a separate asset, so you do not need to install the other examples. Check before extracting:
 
-The prepared v0.2.0 release uses these distinct names; download them only after
-publication. Choose the asset matching your bank and scenario:
+For v0.2.0, choose the available release asset matching your bank and scenario:
 
 | Variant | Archive |
 | --- | --- |
@@ -49,7 +68,7 @@ cd "${archive%.tar.gz}"
 
 Set `archive` to the exact downloaded filename, including its version. The historical Python archive uses `v0.1.0`. On Linux, use `sha256sum -c` instead of `shasum -a 256 -c`. Keep `bundle-manifest.json`, `image-lock.json` and `release.env` with the extracted files: they identify the package contents and exact container images. The starter and platform are separate downloads and can have different version numbers.
 
-For the immutable starter v0.1.0, use the [public platform v0.2.0 release](https://github.com/astraform/releases/releases/tag/v0.2.0). The prepared starter v0.2.0 requires the published [platform v0.3.0 bundle](https://github.com/astraform/releases/releases/tag/v0.3.0); download its archive and checksum and verify them before initialization. Follow the selected bundle's guide and configure its customer model before continuing.
+For the immutable starter v0.1.0, use the [public platform v0.2.0 release](https://github.com/astraform/releases/releases/tag/v0.2.0). Starter v0.2.0 targets platform v0.4.0; obtain the compatible archive and checksum from an available [platform release](https://github.com/astraform/releases/releases) and verify them before initialization. Follow the selected bundle's guide and configure its customer model before continuing.
 
 ## Prerequisites
 
@@ -64,7 +83,7 @@ The starter publishes no host ports. It connects to the platform's private Docke
 From the extracted starter directory, point initialization at a fresh, initialized platform bundle:
 
 ```sh
-python3 init.py --platform ../astraform-platform-v0.3.0 --model gemini
+python3 init.py --platform ../astraform-platform-v0.4.0 --model gemini
 ```
 
 Use the actual platform folder name. `--model ollama` selects the partner's local-model template instead. Initialization writes `.env` and `private/partner.env`, creates `runs/`, saves a backup of the platform Runtime connection file and appends the banking MCP/A2A bindings to it. It refuses existing banking bindings so it cannot silently replace your integration. No services or simulations start during initialization.
@@ -89,7 +108,7 @@ If Runtime was already running when you initialized the starter, recreate it to 
 ./astraform.sh up -d --force-recreate --wait agent-runtime
 ```
 
-The Gemini and Ollama banking templates use `reasoning_effort=high`, a 32,768-token output ceiling and temperature `1.0`. Both local test templates limit each model call to 60 seconds with one attempt. Initialization adds 60 seconds around the selected model deadline for bank reads and A2A response handling, producing request and poll budgets of `120s` for either provider. These transport budgets do not extend the model deadline or retry model generation. The Runtime target and partner use the same selected binding revision (`banking-starter-gemini36-high-v2` for Gemini). Initialization refuses an existing request or poll timeout before writing anything, and refuses an already initialized starter; it never upgrades or overwrites a private profile. These limits are separate from the customer model and the scenario's two-hour wall-time limit (7,200,000 ms). A longer HTTP timeout does not itself extend the simulation.
+The Gemini and Ollama banking templates use `reasoning_effort=high`, a 32,768-token output ceiling and temperature `1.0`. Both templates limit each model call to 60 seconds with one attempt. Initialization adds 60 seconds around the selected model deadline for bank reads and A2A response handling, producing request and poll budgets of `120s` for either provider. These transport budgets do not extend the model deadline or retry model generation. The Runtime target and partner use the same selected binding revision (`banking-starter-gemini36-high-v2` for Gemini). Initialization refuses an existing request or poll timeout before writing anything, and refuses an already initialized starter; it never upgrades or overwrites a private profile. These limits are separate from the customer model and the scenario's two-hour wall-time limit (7,200,000 ms). A longer HTTP timeout does not itself extend the simulation.
 
 The local source Ollama partner preset enables thinking with `BANKING_LLM_REASONING_EFFORT=high`, uses temperature `1.0`, and identifies the configuration as `banking-starter-qwen35-4b-thinking-v9`. To adopt it, build `advice` from the updated source and update both `BANKING_LLM_BINDING_REVISION` and the platform Runtime target's `simulation.event.runtime.a2a.targets.banking-advice.binding-revision`. Review the partner configuration, recreate `advice` and `agent-runtime`, then use a fresh run. Existing published images and private profiles retain their original provenance. The partner bounds the whole upstream response, including reasoning, to 1 MiB and returns only the original final answer (at most 4,096 characters). Thinking does not prove factual accuracy; check the actual answer against its bank records.
 
@@ -140,7 +159,7 @@ A new intentional experiment uses a new directory such as `/runs/second-run`. Ed
 ## Prepare for the existing Java customer SDK client
 
 A Java bank provider and a Python customer launcher are separate SDK boundaries.
-From an extracted, freshly built candidate, prepare the same scenario without
+From the extracted starter, prepare the same scenario without
 creating a Catalog definition or launching a Journey:
 
 ```sh
@@ -200,17 +219,13 @@ This removes the starter containers and its internal network while retaining ban
 The Astraform-authored code, configuration and documentation in this component are licensed under the [Apache License 2.0](LICENSE); see [NOTICE](NOTICE). This permits use, modification and redistribution under that license. Third-party dependencies retain their own terms. This grant does not license Astraform's platform software or other sample components.
 
 
-## Local Java and scheduled-statement candidates
+## Java and monthly banking
 
 The existing packager selects `--bank python|java` and `--scenario issued|monthly`.
-Public-mode preparation requires `--platform-release v0.3.0`, digest-pinned
-anonymous images and their actual full source revision. The shared samples
-v0.2.0 release plan selects Python-issued, Java-issued and Java-monthly variants.
-Its `publicationReady:false` selection is completed only after real artifact
-review; preparing an archive does not publish it. The separate
-`--local-verification` mode retains installed-image IDs and explicit local-only
-markers, including the existing Python-monthly option. Do not mix the two modes.
-Historical v0.1.0 archives and digests remain immutable.
+Public-mode preparation uses `--platform-release v0.4.0`, digest-pinned
+anonymous images and their actual full source revision. Samples v0.2.0 names
+Python-issued, Java-issued and Java-monthly archives separately; use only the
+assets listed by the selected release. Preparing an archive does not publish it.
 
 `starter-config.json` identifies the implementation, bank port, native domain
 profile and scenario. Java uses port 8094, JDBC settings and domain`banking`;
@@ -219,11 +234,9 @@ the same separate bank database, banking advice service and Python customer
 launcher. The monthly scenario omits `requireCustomerFinish` and can use published
 Python SDK 0.3.2 for launch/inspect/export. The strict issued scenario requires a
 native typed customer SDK that preserves its explicit completion field; its
-client capability is published in Python SDK 0.3.4 and the supporting platform
-v0.3.0 is published. Coordinated sample image/archive delivery remains pending. Earlier candidate
-images retain their recorded Java 0.4.2 / Python 0.3.2 dependencies. A fresh local
-candidate must verify its assembled Java 0.4.4 / Python 0.3.4 image contents;
-manifest source targets alone do not prove installed versions. The default
+client capability is available in Python SDK 0.3.4. Verify the selected images'
+SDK versions as well as the archive's declared compatibility; source targets
+alone do not prove installed versions. The default
 customer launcher remains Python, so running it against a Java bank proves the
 Java provider path, not a Java customer launch/export path. Use the preparation
 route above when verifying the Java customer SDK.
@@ -243,10 +256,21 @@ coverage in the same run's exported evidence. The source's ten-minute monthly
 wall limit is separate from the issued scenario's two-hour limit. Model failures
 and exhausted limits remain recorded outcomes.
 
-For all local candidates, use the packaged images already installed and follow
-the existing initialization/start/inspect instructions. Do not pull local tags.
 The issued variant explicitly requires the customer-FINISH behavior targeted
 by platform v0.3.0; the public v0.2.0 download cannot supply it. Public-mode
 manifests record the selected release and required capabilities without claiming
-that it is published. Local manifests retain the unreleased-platform warning.
+that it is published.
 Initialization never upgrades platform images or silently removes the criterion.
+The issued scenario's explicit domain identity requires v0.4.0 even though its
+strict-FINISH rule was already supported in v0.3.0. A custom scenario omitting
+the identity keeps its earlier compatibility requirement.
+
+## Local archive rehearsals
+
+The packager's separate `--local-verification` mode supports installed-image
+rehearsals, including Python monthly. It records `localVerificationOnly`, the
+installed image IDs and explicit capability requirements. Such archives require
+those images already installed; follow the same initialization/start/inspect
+instructions without pulling local tags. Keep these archives local, and do not
+relabel them as public downloads. Historical public archives retain their own
+versions, manifest fields and immutable image identities.

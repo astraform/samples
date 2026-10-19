@@ -7,10 +7,12 @@ offline protocol fixture.
 
 Build and run this service from the sample source with Java 21 and Maven 3.9+.
 It uses public Spring Boot and A2A SDK dependencies. For customer simulations,
-run Astraform separately from the public
-[platform v0.2.0 bundle](https://github.com/astraform/releases/releases/tag/v0.2.0)
+run Astraform separately from a compatible platform bundle
 and follow the [marketing setup guide](../integration/marketing-ops-a2a/README.md#native-customer-simulation).
-No private platform source or platform build is required.
+The current scenarios target platform v0.4.0 for trusted request-fact binding;
+download it only after publication and verification. Platform v0.2.0/v0.3.0
+cannot supply that capability. No private platform source or platform build is
+required when the compatible bundle is available.
 
 ## Protocol and runtime
 
@@ -472,7 +474,7 @@ customer-goal success.
 
 The [marketing simulation guide](../integration/marketing-ops-a2a/README.md#native-customer-simulation)
 provides the complete domain, A2A and response-schema bindings. Add those settings
-to `private/runtime.properties` in the extracted platform v0.2.0 bundle. Configure
+to `private/runtime.properties` in the extracted compatible platform bundle. Configure
 Astraform's customer model separately in `private/model.env`.
 
 For a host-run agency, Runtime uses `http://host.docker.internal:8091`, not

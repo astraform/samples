@@ -6,8 +6,7 @@ remain independent. Do not create per-language or per-starter tags.
 
 ## Prepare v0.2.0
 
-The next samples release targets the published
-[platform v0.3.0](https://github.com/astraform/releases/releases/tag/v0.3.0),
+The next samples release targets **platform v0.4.0**,
 **Java SDK 0.4.4**, **Python SDK 0.3.4** and **contracts 1.2.2**. Samples v0.2.0
 is not published yet. The historical samples v0.1.0/platform v0.2.0 pairing
 retains its original bytes and compatibility. Do not overwrite that samples tag,
@@ -26,7 +25,7 @@ packager or creating output.
 | Java monthly banking | `scripts/package-banking-starter.py` | `bank: java`, `scenario: monthly` | `astraform-java-banking-monthly-starter-v0.2.0.tar.gz` |
 | Scheduled marketing | `scripts/package-marketing-starter.py` | `scenario: scheduled`, no `bank` | `astraform-marketing-scheduled-starter-v0.2.0.tar.gz` |
 
-The common top-level `platformRelease` is `v0.3.0`. The release driver validates
+The common top-level `platformRelease` is `v0.4.0`. The release driver validates
 all four selections, known packager paths, immutable revisions, digest pins,
 unique archive identities and reviewed hashes before external preparation.
 It passes only the supported selectors and `--platform-release`; arbitrary
@@ -35,11 +34,12 @@ original committed manifest/packager and omits these newer arguments.
 
 ## Source, images and reviewed archives
 
-1. Obtain and verify the new public platform v0.3.0 bundle and exact image digests.
+1. Obtain and verify the new public platform v0.4.0 bundle and exact image digests
+   after its publication in [platform releases](https://github.com/astraform/releases/releases).
    A version declaration does not establish publication, strict-completion
    behavior or native retained-participation support. The old platform v0.2.0
    does not supply strict customer-FINISH behavior. Current banking domain labels
-   and marketing `RESOLVE_TRUSTED` binding also require matching server support.
+   and marketing `RESOLVE_TRUSTED` binding require v0.4.0 or later.
    Java 0.4.4/Python 0.3.4 preserve these fields but do not add that behavior to a
    platform image; do not publish a starter against an unsupported platform.
 2. Review and merge sample source, packaging support and
@@ -66,7 +66,7 @@ For example, save the selected Java bank/advice/PostgreSQL digest references as
 
 ```sh
 python3 scripts/package-banking-starter.py \
-  --version v0.2.0 --platform-release v0.3.0 \
+  --version v0.2.0 --platform-release v0.4.0 \
   --bank java --scenario issued \
   --source-revision FULL_IMAGE_BUILD_COMMIT \
   --image-lock java-banking-images.json \
@@ -79,7 +79,7 @@ maps. For marketing, save `domain`, `agency` and `tools` digests and run:
 
 ```sh
 python3 scripts/package-marketing-starter.py \
-  --version v0.2.0 --platform-release v0.3.0 --scenario scheduled \
+  --version v0.2.0 --platform-release v0.4.0 --scenario scheduled \
   --source-revision FULL_IMAGE_BUILD_COMMIT \
   --image-lock marketing-images.json \
   --output /tmp/astraform-marketing-v0.2.0-review

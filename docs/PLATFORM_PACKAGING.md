@@ -13,7 +13,8 @@ paired with the original Python starter v0.1.0. Strict customer-FINISH behavior
 uses the published
 [Astraform Platform v0.3.0 release](https://github.com/astraform/releases/releases/tag/v0.3.0).
 The current banking domain label and marketing trusted-fact binding additionally
-require a platform implementing those capabilities. The published SDKs preserve
+target platform v0.4.0 or later; obtain it only after publication and verification.
+The published SDKs preserve
 the fields; do not infer server support from their publication or the v0.3.0
 version alone. Download and verify the selected platform archive and checksum;
 do not follow the strict walkthrough against v0.2.0.
@@ -178,18 +179,19 @@ platform **v0.2.0**, Python SDK **0.3.2** and contracts **1.2.0**. Java and mark
 remain source examples in that release; they do not yet have starter archives.
 The v0.2.0 release plan covers Python-issued, Java-issued, Java-monthly and
 scheduled-marketing archives through the existing deterministic packagers.
-Their public mode takes `--platform-release v0.3.0`; the separate local mode
+Their public mode takes `--platform-release v0.4.0`; the separate local mode
 still covers Java/Python issued/monthly and scheduled/current marketing,
 records `localVerificationOnly`, installed image IDs and payload hashes, and
-cannot be relabelled as a public package. Historical published bytes are unchanged. The next public-mode candidates require an explicit **platform v0.3.0**
+cannot be relabelled as a public package. Historical published bytes are unchanged. The next public-mode candidates require an explicit **platform v0.4.0**
 selection and published Java 0.4.4/Python 0.3.4/contracts 1.2.2. Current source
-also requires the domain-identity/trusted-binding server capabilities described
-in the selected guide. The existing packagers preserve required completion/native-domain capabilities and verify
+uses its domain-identity/trusted-binding server capabilities described
+in the selected guide. The existing packagers reject earlier releases when the
+selected scenario requires either new field, preserve completion/native-domain requirements and verify
 anonymous digest/architecture/source metadata. Public platform v0.2.0 does not
 supply strict stopping. Platform v0.3.0 is publicly available; samples v0.2.0
 remains in preparation. Its release selection stays unready until actual sample
 images, revisions and archive checksums are reviewed.
-See the [banking guide](../deploy/banking-starter/README.md#local-java-and-scheduled-statement-candidates)
+See the [banking guide](../deploy/banking-starter/README.md#java-and-monthly-banking)
 and [marketing guide](../deploy/marketing-starter/README.md). Provider callbacks
 and Python customer launch/export are distinct verification paths. Older 0.3.2
 customer images cannot launch explicit strict templates; regenerate images and

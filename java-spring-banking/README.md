@@ -352,8 +352,10 @@ docker run --rm -p 8094:8094 astraform/java-spring-banking:local
 ## Connect to Astraform
 
 Use the [shared banking guide](../banking-advice-agent/README.md) for the complete
-MCP, A2A and optional monthly-statement setup. In the extracted platform v0.2.0
-bundle, partner connection settings belong in `private/runtime.properties`;
+MCP, A2A and optional monthly-statement setup. The current issued scenario targets
+platform v0.4.0 for explicit domain identity; obtain and verify its bundle after
+publication. In the extracted compatible platform bundle, partner connection
+settings belong in `private/runtime.properties`;
 customer model settings belong in `private/model.env`. The Java bank must be
 reachable from the Runtime container, for example on host port `8098`:
 

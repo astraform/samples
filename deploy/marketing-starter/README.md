@@ -10,7 +10,8 @@ The authored templates require a platform implementing both
 preserves both fields. The domain image must implement
 `marketing-ops.native-events.v4`; its source uses Java SDK **0.4.4** and public
 contracts **1.2.2**. Use matching domain/tools images and a supporting platform
-release. SDK publication does not add server behavior, and platform v0.3.0's
+release, targeting v0.4.0 or later. Download the selected platform only after
+publication and verification. SDK publication does not add server behavior, and platform v0.3.0's
 strict FINISH support does not establish trusted-binding support. Source updates
 do not update existing images or archives.
 
@@ -48,7 +49,7 @@ on a trusted private network. This starter publishes no host ports.
 Verify the archive's SHA256 checksum before extraction. From its directory:
 
 ```sh
-python3 init.py --platform ../astraform-platform-candidate --model gemini
+python3 init.py --platform ../astraform-platform-v0.4.0 --model gemini
 ```
 
 Select `--model ollama` for the existing local marketing model profile. Configure
@@ -74,7 +75,7 @@ Start the platform, then recreate its Runtime to load the new connections:
 
 For a verified public archive, run `./starter.sh pull` before starting its services.
 Local archives require installed images; do not pull their local tags from a
-registry. Platform v0.2.0 cannot run these strict marketing templates. A new launch creates and publishes one Catalog definition and launches
+registry. Platform v0.2.0/v0.3.0 cannot run these trusted-binding templates. A new launch creates and publishes one Catalog definition and launches
 one journey. The helper saves those operation identities before its first write.
 A response timeout never causes a replacement customer or launch.
 
@@ -107,7 +108,7 @@ flag. To change a packaged case, prepare another archive or edit its complete
 scenario before launching. The source launcher can select either authored case
 directly when that environment variable is unset.
 
-The `scheduled` candidate starts at 2026-01-15 08:30 UTC; the domain's 09:00 review
+The `scheduled` scenario starts at 2026-01-15 08:30 UTC; the domain's 09:00 review
 publishes its own finding, and the customer chooses its actions. The `current`
 variant starts at09:00 with the review admitted at the current boundary. Both
 reuse the existing marketing scenarios and native domain provider. The scheduled
@@ -154,7 +155,7 @@ and final content can fit without changing the final business-field limits.
 Compose uses one model attempt and the adapter's
 two-second connect default; the complete provider budget must fit inside the
 outer deadline. Initialization derives Runtime request/poll timeouts from that
-selected deadline with a 150-second floor: both local test profiles use `150s`.
+selected deadline with a 150-second floor: both supplied profiles use `150s`.
 These A2A transport budgets do not extend either model deadline. A slow or
 failed model response is reported without an automatic model retry; thinking stays enabled.
 The selected revisions `marketing-starter-gemini36-high-v2` and
