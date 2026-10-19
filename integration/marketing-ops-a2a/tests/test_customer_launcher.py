@@ -146,8 +146,10 @@ class MarketingCustomerLauncherTest(unittest.TestCase):
         reads.inspect_simulation_run_ledger.return_value = document({"events": [{"eventId": "event-1"}]})
         reads.get_simulation_run_evidence_export_readiness_with_http_info.return_value = SimpleNamespace(status_code=204)
         reads.export_simulation_run_evidence.return_value = b"actual-failed-goal-export"
-        with patch.object(self.evidence, "SimulationRunsApi", return_value=reads), patch.object(launcher, "launch") as launch, patch.object(self.evidence.time, "sleep"):
-            self.assertEqual(0, launcher.main(["--inspect", "run-1", "--output", str(self.output)]))
+        with patch.dict(os.environ, {"MARKETING_SAMPLE_FILE": str(self.output.parent / "not-needed.json")}), \
+                patch.object(self.evidence, "SimulationRunsApi", return_value=reads), \
+                patch.object(launcher, "launch") as launch, patch.object(self.evidence.time, "sleep"):
+            self.assertEqual(0, launcher.main(["--case", "proposal-review", "--inspect", "run-1", "--output", str(self.output)]))
         launch.assert_not_called()
         self.assertEqual(run, json.loads((self.output / "run.json").read_text()))
         self.assertEqual(b"actual-failed-goal-export", (self.output / "evidence.zip").read_bytes())
@@ -231,26 +233,38 @@ class MarketingCustomerLauncherTest(unittest.TestCase):
                         self.assertFalse(output.exists())
                         self.assertEqual([], requests)
 
-    def test_default_templates_use_native_policy_or_reject_before_writes(self):
-        for name in ("sample-configuration.json", "current-state-configuration.json"):
-            with self.subTest(template=name):
+    def test_case_selection_and_current_state_override_use_native_sdk_or_reject_before_writes(self):
+        for name, case, custom in (("sample-configuration.json", "advice", False),
+                                  ("proposal-review-configuration.json", "proposal-review", False),
+                                  ("current-state-configuration.json", "proposal-review", True)):
+            with self.subTest(case=case, custom=custom):
                 selected = DIRECTORY / name
-                policy = json.loads(selected.read_text())["launchRequestTemplate"]["completionPolicy"]
-                self.assertIs(True, policy["requireCustomerFinish"])
+                scenario = json.loads(selected.read_text())
+                policy = scenario["launchRequestTemplate"]["completionPolicy"]
                 output = self.output.parent / ("default-" + selected.stem)
                 catalog = self.catalog()
-                with patch.dict(os.environ, {"MARKETING_SAMPLE_FILE": str(selected)}), \
+                with patch.dict(os.environ), \
                         patch.object(launcher, "AgentCatalogApi", return_value=catalog), \
                         journey_http_fixture() as (host, requests), \
                         launcher.ApiClient(launcher.Configuration(host=host, retries=0)) as client:
+                    os.environ["ASTRAFORM_API_BASE"] = host
+                    if custom:
+                        os.environ["MARKETING_SAMPLE_FILE"] = str(selected)
+                    else:
+                        os.environ.pop("MARKETING_SAMPLE_FILE", None)
                     if self.supports_finish_policy() and self.supports_binding_mode(policy["requestFactBindingMode"]):
-                        result = launcher.launch(client, host, output)
+                        self.assertEqual(0, launcher.main(["--case", case, "--output", str(output)]))
+                        result = json.loads((output / "launch.json").read_text())
                         self.assert_native_launch_body(client, requests, output, result)
+                        created_draft = client.sanitize_for_serialization(
+                            catalog.create_agent_definition.call_args.args[0])["draft"]
+                        self.assertEqual(scenario["catalogDraftRequest"]["draft"], created_draft)
+                        self.assertEqual(scenario["launchRequestTemplate"]["domain"], requests[0]["body"]["domain"])
                         self.assertIs(True, requests[0]["body"]["completionPolicy"]["requireCustomerFinish"])
                         self.assertEqual(policy["requestFactBindingMode"], requests[0]["body"]["completionPolicy"]["requestFactBindingMode"])
                     else:
                         with self.assertRaisesRegex(ValueError, "requireCustomerFinish|requestFactBindingMode"):
-                            launcher.launch(client, host, output)
+                            launcher.main(["--case", case, "--output", str(output)])
                         catalog.create_agent_definition.assert_not_called()
                         catalog.publish_agent_definition.assert_not_called()
                         self.assertFalse(output.exists())

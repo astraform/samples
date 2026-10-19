@@ -17,9 +17,15 @@ The creative agency exposes A2A 1.0 JSON-RPC through the A2A Java SDK.
 
 ## Native customer simulation
 
-[`sample-configuration.json`](sample-configuration.json) configures one real-model
-customer, Quinn, using the existing marketing provider and Creative
-Agency. [`run-customer.py`](run-customer.py) creates a Catalog draft, publishes
+Choose an authored customer case using [`run-customer.py`](run-customer.py):
+
+| Case | Customer goal | Configuration |
+| --- | --- | --- |
+| `advice` (default) | Obtain an actionable recommendation for the observed launch dependency. One adequate agency reply may be sufficient. | [`sample-configuration.json`](sample-configuration.json) |
+| `proposal-review` | Obtain advice, develop a proposed handoff, and ask the agency to assess what it addresses and what remains unverified. Initial advice alone does not meet this goal. | [`proposal-review-configuration.json`](proposal-review-configuration.json) |
+
+Both cases use one real-model customer, Quinn, with the existing marketing
+provider and Creative Agency. The launcher creates a Catalog draft, publishes
 it and launches it once with generated `AgentJourneysApi.launch_agent_journey`.
 It neither sends follow-up
 turns nor advances simulated time. Astraform owns subsequent execution and simulated-time progression after
@@ -33,16 +39,19 @@ observation to Quinn. No global clock or elapsed real-time delay drives the
 review. The customer chooses its messages and actions using its persona and
 goal; its outcome is not guaranteed.
 
-The goal is to obtain an **actionable recommendation** for the observed external
+The advice case seeks an **actionable recommendation** for the observed external
 launch dependency: who should take the next step, what they should do and how
 that addresses the dependency. A generic instruction to monitor or wait without
 those details does not give Quinn a practical next step. Quinn can ask for
 clarification, wait or decide to stop; neither model is forced to select a
-particular action or success label.
+particular action or success label. The proposal-review case adds a distinct
+customer-authored proposal and an assessment of that proposal. The customer
+chooses the proposal and messages; the sample does not script a handoff, force
+a FINISH decision or enforce a minimum number of turns.
 
 The Creative Agency provides advice only; a request to it does not contact the
 production studio, assign work, obtain a licence or clear the launch. Quinn's
-current goal is to understand a recommendation, not execute it. If an escalation
+goal concerns advice or proposal assessment, not execution. If an escalation
 coordinator is unknown, a useful clarification distinguishes an established
 responsibility from a recommendation about which person or role should coordinate
 the next step or contact the studio. Repeating a request for execution through an
@@ -60,35 +69,55 @@ does not establish a new execution commitment. These instructions guide the
 models; original unsupported or repetitive answers remain observable.
 The agency also distinguishes a completed readiness review from blocked launch
 approval; completion of the review does not mean the campaign is approved.
-Customer instructions use separate sample memory entries, `reviewCompletionStatus`
-and `launchApprovalStatus`, derived from observations or kept unknown. These are
-prompt conventions, not platform-required fields or output validation.
+The provider reports separate `reviewCompletionStatus` and `launchApprovalStatus`
+facts. Customer memory should preserve those distinctions. These are domain-owned
+business facts, rather than platform-wide status fields or output validation.
 
-The scheduled review's `payload.reviewFinding` defines a sample business fact:
-the external production studio has not supplied the signed usage licence for
-the hero photograph and is responsible for supplying it. The finding does not
-establish who owns the photograph or has authority to grant usage rights. No
-delivery date is confirmed, and launch approval remains blocked until usage
-rights are established. The provider publishes that finding in the existing
-review record's summary only when the 09:00 review executes. Before then, the
-customer sees the pending-review description. The future fixture is visible in
-operator configuration, not supplied as advance knowledge in the customer prompt.
+The scheduled review separates its narrative evidence, `payload.reviewFinding`,
+from explicit domain-owned `payload.reviewFacts`:
+
+| Fact | Evidence after the scheduled review |
+| --- | --- |
+| Review completion | `COMPLETED` |
+| Launch approval | `BLOCKED` |
+| Licence document | Known to be `MISSING` |
+| Document supplier | Known to be the external production studio |
+| Coordination owner, rights holder, licensing authority and delivery date | Explicitly `UNKNOWN` |
+
+The supplier is responsible for supplying the signed usage licence for the hero
+photograph; that responsibility does not establish ownership or licensing
+authority. An unknown coordination owner does not establish an unassigned role.
+Each knowledge-bearing fact contains `knowledge: "KNOWN"`, `"UNKNOWN"` or
+`"UNREPORTED"`; only a known fact contains a `value`. `UNREPORTED` means the
+provider has not reported that fact, rather than an explicit finding that its
+answer is unknown. The two status fields independently report review completion
+and launch approval.
+
+The payload names the seeded approval `brand-refresh-social-review` explicitly.
+The provider publishes the finding and its structured facts in `selectedReview`
+only when the 09:00 work executes. Before then, the customer sees the pending
+review description and unreported review facts. The future fixture remains in
+operator configuration, not advance knowledge in the customer's initial facts.
+Historical checkpoints without structured facts also remain unreported; the
+provider does not infer facts from their prose.
 
 With `requestFactBindingMode: "RESOLVE_TRUSTED"`, Astraform fills each configured
 bound request field from the customer's current accepted observations, including
-`reviewSummary`. The model still chooses whether and when to contact the agency,
+`reviewSummary` and `reviewFacts`. The model still chooses whether and when to contact the agency,
 its instruction or question, and any unbound facts; the platform supplies the
 bound metadata without asking the model to copy long facts verbatim. The agency
 receives the actual finding rather than only a blocked status and still chooses
 its own advice. Configured success requires an
 actual JSON response with scenario `launch-blocker` and disposition `ESCALATE`
-or `UNBLOCK_PLAN`; those existing conditions are unchanged. Both templates also
+or `UNBLOCK_PLAN`; those existing conditions are unchanged. All templates also
 set `completionPolicy.requireCustomerFinish:true`: a qualifying receipt alone
 does not stop a customer-selected follow-up. Success requires the qualifying
 advice and the customer's own later FINISH decision within the existing limits.
 The customer remains free to ask for clarification, wait or stop; no fixed turn
 sequence or answer is prescribed. Receipt matching and FINISH do not establish
-advice quality, an executed escalation or a resolved campaign blocker. Invalid
+advice quality, assessment of a specific proposal, an executed escalation or a
+resolved campaign blocker. Evaluate the original conversation against the chosen
+case goal as well as checking its execution status. Invalid
 or unhelpful model behavior and unmet completion requirements remain observable.
 
 ### Start the two sample services
@@ -162,7 +191,7 @@ for the target binding revision. The scenario's separate wall-time and interacti
 ```properties
 simulation.event.runtime.domain.bindings.marketing-ops.base-url=http://host.docker.internal:18090
 simulation.event.runtime.domain.bindings.marketing-ops.domain-id=marketing-ops
-simulation.event.runtime.domain.bindings.marketing-ops.binding-revision=marketing-ops-native-review-findings-v3
+simulation.event.runtime.domain.bindings.marketing-ops.binding-revision=marketing-ops-native-review-facts-v4
 simulation.event.runtime.domain.bindings.marketing-ops.allow-insecure-http=true
 simulation.event.runtime.a2a.enabled=true
 simulation.event.runtime.a2a.request-timeout=150s
@@ -178,20 +207,22 @@ secret configuration. Never place that secret in the Catalog or launch body.
 
 Set the target's `input-schema-json` from [`input.schema.json`](input.schema.json).
 This target accepts enquiries about the **observed campaign state**:
-The operation selector `scenario: "launch-blocker"`, `campaignKey`, `queueState`
-and `reviewSummary` are required. The exact provider states are
+The operation selector `scenario: "launch-blocker"`, `approvalId`, `campaignKey`,
+`queueState`, `reviewSummary` and `reviewFacts` are required. The exact provider states are
 `review_pending`, `blocked`, `active` and `clear`. The launch's existing
-`requestFactBindings` identify trusted sources for campaign, queue state and
-`reviewSummary`. Both templates select `requestFactBindingMode: "RESOLVE_TRUSTED"`:
+`requestFactBindings` identify trusted sources for the selected approval,
+campaign, queue state, review summary and explicit facts. All templates select
+`requestFactBindingMode: "RESOLVE_TRUSTED"`:
 Astraform projects these fields from the latest accepted provider observation
-into the dispatched request. In particular, `/reviewSummary` comes from
-`/domain/observation/pendingApprovals/0/summary`; this example retains one
-pending/blocked approval. Before 09:00 that summary describes the pending task;
-after the review it contains the configured finding. A model-supplied omission
+into the dispatched request. These fields come from matching fields under
+`/domain/observation/selectedReview`, rather than combining an aggregate queue
+state with whichever approval happens to be first. Before 09:00 the selected
+summary describes the pending task and the review facts are unreported; after the
+review it contains the configured finding and facts. A model-supplied omission
 or paraphrase does not replace the bound source. Missing trusted evidence still
 fails admission. Omitted mode or explicit `VALIDATE` retains the legacy exact-match
 validation behavior; explicit modes require a typed SDK that preserves them. The current provider revision is
-`marketing-ops.native-events.v3`; update its Runtime binding and the target's
+`marketing-ops.native-events.v4`; update its Runtime binding and the target's
 input schema/revision together before creating new runs.
 
 Quinn may legitimately contact the agency before the review. The LLM receives the
@@ -226,7 +257,7 @@ new runs; existing runs retain their accepted binding revisions and configuratio
 
 ### Launch and inspect
 
-Both marketing templates require `completionPolicy.requireCustomerFinish:true`
+The marketing templates require `completionPolicy.requireCustomerFinish:true`
 and `completionPolicy.requestFactBindingMode: "RESOLVE_TRUSTED"`. Published
 **Astraform Python author kit 0.3.4** preserves both fields. Use it with a
 platform candidate implementing the mode; the SDK cannot supply coordinator
@@ -238,8 +269,26 @@ python3 -m venv .venv
 . .venv/bin/activate
 python3 -m pip install 'astraform-remote-domain-author-kit==0.3.4'
 ASTRAFORM_API_BASE=http://localhost:8084 \
-  python3 integration/marketing-ops-a2a/run-customer.py --output /tmp/marketing-first --wait
+  python3 integration/marketing-ops-a2a/run-customer.py \
+  --case advice --output /tmp/marketing-advice --wait
 ```
+
+For proposal review, use a fresh output directory:
+
+```bash
+ASTRAFORM_API_BASE=http://localhost:8084 \
+  python3 integration/marketing-ops-a2a/run-customer.py \
+  --case proposal-review --output /tmp/marketing-proposal --wait
+```
+
+`MARKETING_SAMPLE_FILE` explicitly overrides either named case with your own
+complete configuration. Unset it when selecting an authored case with `--case`.
+The existing [`current-state-configuration.json`](current-state-configuration.json)
+is an advice variant whose start and horizon are both the scheduled 09:00 review
+boundary. Select it through `MARKETING_SAMPLE_FILE` to inspect due work at the
+current boundary rather than start before the review. To author a current-boundary
+proposal case, copy the proposal configuration and set both logical timestamps to
+that review boundary; the goal and the boundary are independent settings.
 
 The current provider source uses Java author-kit/conformance **0.4.4** from Maven
 Central with shared contract **1.2.2**. These domain callbacks do not provide the
@@ -263,7 +312,7 @@ save, bounded read polling and same-run export behavior with
 launcher. A standalone marketing archive includes that utility beside
 `run-customer.py`; its existing read-only Compose mount keeps both available.
 
-For both default templates and a custom `MARKETING_SAMPLE_FILE` supplying
+For the authored templates and a custom `MARKETING_SAMPLE_FILE` supplying
 `completionPolicy.requireCustomerFinish` as either `true` or `false`, the launcher
 checks the raw Boolean and native typed SDK serialization before writing output
 or creating, publishing or launching a Catalog definition. With published Python
@@ -353,12 +402,8 @@ export `CREATIVE_AGENCY_A2A_TOKEN` before invoking the script.
 
 This checks the sample's A2A protocol handling only. It does not launch an
 Astraform customer or establish real-model simulation success. Use the SDK
-workflow above for that purpose. Internal platform restart and replay proofs
-are maintained with the platform source. Retired clock-runtime proofs are
-historical evidence; the current samples use supported native SDK operations,
-and the banking source removes retired clock and dependent Runtime requests.
-Those historical proofs are not instructions for building or running these
-sample services. Published images and archives retain their released source.
+workflow above for that purpose. Native simulations use supported SDK operations;
+retired clock-runtime workflows are not supported launch instructions.
 
 
 ## Same-run evidence and local image-only starter
@@ -372,7 +417,7 @@ Use the returned run ID to resume:
 ```sh
 ASTRAFORM_API_BASE=http://localhost:8084 \
   python3 integration/marketing-ops-a2a/run-customer.py \
-  --inspect RUN_ID --output /tmp/marketing-first --wait
+  --inspect RUN_ID --output /tmp/marketing-advice --wait
 ```
 
 `--inspect` is read-only. Status/ledger/export reads can retry bounded temporary
@@ -385,13 +430,9 @@ inspection/export through the SDK. Marketing does not import the banking
 executable or start another coordinator.
 
 [The image-only marketing starter](../../deploy/marketing-starter/README.md)
-packages these scripts, scenario and private-network image topology. The
-samples v0.2.0 release plan selects its scheduled variant with explicit platform
-v0.3.0 compatibility and reviewed anonymous images. It is not published yet;
-the separate local-verification mode keeps its local-only markers and does not
-replace this editable source example. Current domain source uses Java SDK 0.4.4.
-The updated customer templates use Python SDK 0.3.4 for the typed capabilities
-described above. Existing tools images and starter artifacts retain their recorded
-versions; rebuild the tools image with that SDK and verify the supporting
-platform before packaging these templates for partners. Public platform/image/archive
-and independent onboarding delivery remain pending.
+packages the launcher, selected scenario and private-network image topology. Use images
+and a platform with the capabilities required by the selected configuration;
+the source templates do not update existing published images or archives.
+Current domain source uses Java SDK 0.4.4, and the customer templates use Python
+SDK 0.3.4. Rebuild the tools image with that SDK and verify the supporting platform
+before packaging updated templates for partners.

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Observed marketing campaign enquiry",
-  "description": "Facts accompanying the customer's own message. Astraform binds campaignKey, queueState and reviewSummary to the latest accepted provider observation for this single-approval scenario. Before the review, reviewSummary is the pending task description; only after due work runs does it contain the actual finding. Invented or rewritten bound facts are rejected before A2A dispatch.",
+  "description": "Facts accompanying the customer's own message. Astraform binds campaignKey, queueState, reviewSummary, approvalId and reviewFacts from the same selected provider review. Review facts are published only after the domain work executes; UNKNOWN and UNREPORTED do not establish absence, assignment or completed work.",
   "type": "object",
   "additionalProperties": true,
   "properties": {
@@ -27,13 +27,372 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 1200,
-      "description": "Verbatim summary of the current provider review record, taken from the latest observed pendingApprovals[0].summary. Do not invent or paraphrase this bound fact."
+      "description": "Verbatim summary of the selected provider review, kept with its own approval identity and status."
+    },
+    "approvalId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "Stable identity of the selected provider approval/review record."
+    },
+    "reviewFacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Provider-owned review and approval facts. Missing historical/configured facts are explicitly UNREPORTED; no fact is inferred from narrative advice.",
+      "properties": {
+        "reviewCompletionStatus": {
+          "enum": [
+            "PENDING",
+            "IN_PROGRESS",
+            "COMPLETED",
+            "UNKNOWN",
+            "UNREPORTED"
+          ]
+        },
+        "launchApprovalStatus": {
+          "enum": [
+            "PENDING_REVIEW",
+            "BLOCKED",
+            "READY_FOR_LAUNCH",
+            "APPROVED",
+            "UNKNOWN",
+            "UNREPORTED"
+          ]
+        },
+        "licenceDocument": {
+          "allOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "knowledge": {
+                  "enum": [
+                    "KNOWN",
+                    "UNKNOWN",
+                    "UNREPORTED"
+                  ]
+                },
+                "value": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1200,
+                  "pattern": "\\S"
+                }
+              },
+              "required": [
+                "knowledge"
+              ],
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "knowledge": {
+                        "const": "KNOWN"
+                      }
+                    },
+                    "required": [
+                      "knowledge"
+                    ]
+                  },
+                  "then": {
+                    "required": [
+                      "value"
+                    ]
+                  },
+                  "else": {
+                    "not": {
+                      "required": [
+                        "value"
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "if": {
+                "properties": {
+                  "knowledge": {
+                    "const": "KNOWN"
+                  }
+                },
+                "required": [
+                  "knowledge"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "enum": [
+                      "MISSING",
+                      "RECEIVED",
+                      "VERIFIED"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "documentSupplier": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "knowledge": {
+              "enum": [
+                "KNOWN",
+                "UNKNOWN",
+                "UNREPORTED"
+              ]
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1200,
+              "pattern": "\\S"
+            }
+          },
+          "required": [
+            "knowledge"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "knowledge": {
+                    "const": "KNOWN"
+                  }
+                },
+                "required": [
+                  "knowledge"
+                ]
+              },
+              "then": {
+                "required": [
+                  "value"
+                ]
+              },
+              "else": {
+                "not": {
+                  "required": [
+                    "value"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "coordinationOwner": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "knowledge": {
+              "enum": [
+                "KNOWN",
+                "UNKNOWN",
+                "UNREPORTED"
+              ]
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1200,
+              "pattern": "\\S"
+            }
+          },
+          "required": [
+            "knowledge"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "knowledge": {
+                    "const": "KNOWN"
+                  }
+                },
+                "required": [
+                  "knowledge"
+                ]
+              },
+              "then": {
+                "required": [
+                  "value"
+                ]
+              },
+              "else": {
+                "not": {
+                  "required": [
+                    "value"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "rightsHolder": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "knowledge": {
+              "enum": [
+                "KNOWN",
+                "UNKNOWN",
+                "UNREPORTED"
+              ]
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1200,
+              "pattern": "\\S"
+            }
+          },
+          "required": [
+            "knowledge"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "knowledge": {
+                    "const": "KNOWN"
+                  }
+                },
+                "required": [
+                  "knowledge"
+                ]
+              },
+              "then": {
+                "required": [
+                  "value"
+                ]
+              },
+              "else": {
+                "not": {
+                  "required": [
+                    "value"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "licensingAuthority": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "knowledge": {
+              "enum": [
+                "KNOWN",
+                "UNKNOWN",
+                "UNREPORTED"
+              ]
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1200,
+              "pattern": "\\S"
+            }
+          },
+          "required": [
+            "knowledge"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "knowledge": {
+                    "const": "KNOWN"
+                  }
+                },
+                "required": [
+                  "knowledge"
+                ]
+              },
+              "then": {
+                "required": [
+                  "value"
+                ]
+              },
+              "else": {
+                "not": {
+                  "required": [
+                    "value"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "deliveryDate": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "knowledge": {
+              "enum": [
+                "KNOWN",
+                "UNKNOWN",
+                "UNREPORTED"
+              ]
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1200,
+              "pattern": "\\S"
+            }
+          },
+          "required": [
+            "knowledge"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "knowledge": {
+                    "const": "KNOWN"
+                  }
+                },
+                "required": [
+                  "knowledge"
+                ]
+              },
+              "then": {
+                "required": [
+                  "value"
+                ]
+              },
+              "else": {
+                "not": {
+                  "required": [
+                    "value"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "required": [
+        "reviewCompletionStatus",
+        "launchApprovalStatus",
+        "licenceDocument",
+        "documentSupplier",
+        "coordinationOwner",
+        "rightsHolder",
+        "licensingAuthority",
+        "deliveryDate"
+      ]
     }
   },
   "required": [
     "scenario",
     "campaignKey",
     "queueState",
-    "reviewSummary"
+    "reviewSummary",
+    "approvalId",
+    "reviewFacts"
   ]
 }

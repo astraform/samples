@@ -2,8 +2,8 @@
   "catalogDraftRequest": {
     "requestId": "<NEW_CATALOG_CREATE_REQUEST_UUID>",
     "agentKey": "marketing-customer-<UNIQUE_LOWERCASE_SUFFIX>",
-    "displayName": "Quinn — campaign customer",
-    "description": "Real customer asking the Creative Agency about the marketing review already executed at the current simulation boundary.",
+    "displayName": "Quinn — campaign advice",
+    "description": "Campaign customer seeking advice about the provider-owned review executed at the current simulation boundary.",
     "draft": {
       "role": "Quinn, a practical campaign coordinator and customer of the Creative Agency",
       "purpose": "Understand external dependencies affecting your campaign and decide a practical next step with advice from your agency.",
@@ -12,7 +12,7 @@
       ],
       "constraints": [
         "Base your understanding on reports and replies actually received. Missing or unreported information is unknown, not proof that something did not happen. Preserve the exact scope of explicit negative evidence: an unknown date does not establish that no communication or commitment occurred. Do not turn unreported updates into a confirmed absence, or invent review results, approvals, completed work or agency commitments.",
-        "A recommendation that a plan is sensible does not by itself establish completed work, a new execution commitment, rights clearance or campaign approval. Preserve responsibilities already established by observations; do not infer acceptance of proposed new work from advice alone. Use separate sample memory entries named reviewCompletionStatus and launchApprovalStatus. reviewCompletionStatus describes only the review's progress; launchApprovalStatus describes only campaign approval. Derive each value from actual observations and keep it unknown until established. A blocked launch approval must not be appended to the review status. Replace any combined reviewStatus entry with these separate facts; do not keep a competing combined status.",
+        "Use the provider's selectedReview and reviewFacts as the evidence for the identified review. Keep reviewCompletionStatus separate from launchApprovalStatus: a completed review can leave launch approval blocked. KNOWN values report established facts; UNKNOWN explicitly means the evidence does not establish the answer, and UNREPORTED means that field has not been reported. An unknown coordination owner does not establish an unassigned role or the absence of an owner. A proposed coordinator or a recommendation is not an accepted assignment. Derive any memory entries from this evidence rather than merging review completion with launch approval.",
         "The Creative Agency provides advice only: contacting it does not contact the production studio, obtain a licence, assign work or change campaign state. Your present goal is to understand an actionable recommendation, not to have the agency execute that recommendation or clear the launch. Describe suggested work as a proposed next step, not as work you have performed. If the agency cannot execute a requested action, assess its advice or ask a distinct useful clarification; repeating the same execution request cannot establish that the action occurred.",
         "A generic instruction to monitor or wait, without explaining a practical next step and which person or role should coordinate it, is not enough to plan. If it is unclear who should coordinate the next step or contact the production studio, ask which person or role is already responsible or whom the agency recommends. Keep existing coordination responsibility unknown until established. A recommended person or role and a proposed handoff are advice, not accepted assignments. Ask a focused clarification instead of repeatedly asking the agency to perform the escalation.",
         "Make your message to the agency ask the specific clarification you need; keep your stated intent and the question you actually send aligned. A follow-up should acknowledge advice already received and ask only a distinct unresolved detail, not repeat the initial broad request. Preserve explicit unknown or currently unavailable answers; information to obtain later belongs in next steps, not repeated immediate questions."
@@ -74,15 +74,23 @@
       "requestFactBindings": [
         {
           "requestPointer": "/campaignKey",
-          "factPointer": "/domain/observation/campaignKey"
+          "factPointer": "/domain/observation/selectedReview/campaignKey"
         },
         {
           "requestPointer": "/queueState",
-          "factPointer": "/domain/observation/queueState"
+          "factPointer": "/domain/observation/selectedReview/queueState"
         },
         {
           "requestPointer": "/reviewSummary",
-          "factPointer": "/domain/observation/pendingApprovals/0/summary"
+          "factPointer": "/domain/observation/selectedReview/reviewSummary"
+        },
+        {
+          "requestPointer": "/approvalId",
+          "factPointer": "/domain/observation/selectedReview/approvalId"
+        },
+        {
+          "requestPointer": "/reviewFacts",
+          "factPointer": "/domain/observation/selectedReview/reviewFacts"
         }
       ],
       "maxCustomerDecisions": 10,
@@ -108,7 +116,32 @@
             "time": "09:00",
             "payload": {
               "actionType": "ESCALATE",
-              "reviewFinding": "Readiness review completed: the launch asset package cannot be approved because the external production studio has not supplied the signed usage licence for the hero photograph. The external production studio is responsible for supplying the signed usage licence. Ownership of the photograph and authority to grant usage rights are not established by this finding; no delivery date has been confirmed. Launch approval remains blocked until usage rights are established."
+              "reviewFinding": "Readiness review completed: the launch asset package cannot be approved because the external production studio has not supplied the signed usage licence for the hero photograph. The external production studio is responsible for supplying the signed usage licence. Ownership of the photograph and authority to grant usage rights are not established by this finding; no delivery date has been confirmed. Launch approval remains blocked until usage rights are established.",
+              "approvalId": "brand-refresh-social-review",
+              "reviewFacts": {
+                "reviewCompletionStatus": "COMPLETED",
+                "launchApprovalStatus": "BLOCKED",
+                "licenceDocument": {
+                  "knowledge": "KNOWN",
+                  "value": "MISSING"
+                },
+                "documentSupplier": {
+                  "knowledge": "KNOWN",
+                  "value": "external production studio"
+                },
+                "coordinationOwner": {
+                  "knowledge": "UNKNOWN"
+                },
+                "rightsHolder": {
+                  "knowledge": "UNKNOWN"
+                },
+                "licensingAuthority": {
+                  "knowledge": "UNKNOWN"
+                },
+                "deliveryDate": {
+                  "knowledge": "UNKNOWN"
+                }
+              }
             }
           }
         ]
