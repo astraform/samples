@@ -7,7 +7,7 @@ versioned separately. Detailed notes live under [docs/releases](docs/releases).
 
 - Prepare Python-issued, Java-issued, Java-monthly and scheduled-marketing
   archives under one samples release, targeting platform v0.3.0 and published
-  Java 0.4.3/Python 0.3.3/contracts 1.2.1.
+  Java 0.4.4/Python 0.3.4/contracts 1.2.2.
 - Validate and forward explicit bank/scenario selections through the existing
   release owner; retain native completion/domain requirements and deterministic
   archive, anonymous-image and immutable-publication checks.
