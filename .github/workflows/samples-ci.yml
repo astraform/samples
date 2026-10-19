@@ -112,7 +112,7 @@ jobs:
         working-directory: python-fastapi-banking
         run: uv run --locked --extra test pytest
       - name: Install profile-capable conformance SDK
-        run: uv pip install --python python-fastapi-banking/.venv/bin/python 'astraform-remote-domain-conformance==0.3.2'
+        run: uv pip install --python python-fastapi-banking/.venv/bin/python 'astraform-remote-domain-conformance==0.3.4'
       - name: Policy Wind Tunnel conformance
         run: |
           PYTHONPATH="python-fastapi-banking/conformance${PYTHONPATH:+:${PYTHONPATH}}" \
