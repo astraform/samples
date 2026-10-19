@@ -61,6 +61,8 @@ public class CreativeAgencyGenerationProperties implements InitializingBean {
         private StructuredOutputMode structuredOutputMode = StructuredOutputMode.JSON_SCHEMA;
         private TokenLimitParameter tokenLimitParameter = TokenLimitParameter.MAX_TOKENS;
         private String reasoningEffort = "";
+        private Double temperature;
+        private Double topP;
         private Duration connectTimeout = Duration.ofSeconds(2);
         private Duration readTimeout = Duration.ofSeconds(15);
         private int maxAttempts = 1;
@@ -150,6 +152,22 @@ public class CreativeAgencyGenerationProperties implements InitializingBean {
             this.reasoningEffort = reasoningEffort;
         }
 
+        public Double getTemperature() {
+            return temperature;
+        }
+
+        public void setTemperature(Double temperature) {
+            this.temperature = temperature;
+        }
+
+        public Double getTopP() {
+            return topP;
+        }
+
+        public void setTopP(Double topP) {
+            this.topP = topP;
+        }
+
         public Duration getConnectTimeout() {
             return connectTimeout;
         }
@@ -233,6 +251,12 @@ public class CreativeAgencyGenerationProperties implements InitializingBean {
             if (reasoningEffort != null && !reasoningEffort.isBlank()) {
                 requireSafeIdentifier(reasoningEffort, "CREATIVE_AGENCY_LLM_REASONING_EFFORT");
             }
+            if (temperature != null && (!Double.isFinite(temperature) || temperature < 0 || temperature > 2)) {
+                throw new IllegalArgumentException("CREATIVE_AGENCY_LLM_TEMPERATURE must be a finite number between 0 and 2");
+            }
+            if (topP != null && (!Double.isFinite(topP) || topP < 0 || topP > 1)) {
+                throw new IllegalArgumentException("CREATIVE_AGENCY_LLM_TOP_P must be a finite number between 0 and 1");
+            }
             if (authType == AuthType.BEARER) {
                 requireText(apiKey, "CREATIVE_AGENCY_LLM_API_KEY", 512, false);
                 if (!apiKey.equals(apiKey.trim()) || apiKey.chars().anyMatch(Character::isWhitespace)) {
@@ -243,18 +267,18 @@ public class CreativeAgencyGenerationProperties implements InitializingBean {
                         "CREATIVE_AGENCY_LLM_API_KEY must be empty when CREATIVE_AGENCY_LLM_AUTH_TYPE=none");
             }
             requireDuration(connectTimeout, "CREATIVE_AGENCY_LLM_CONNECT_TIMEOUT", Duration.ofSeconds(30));
-            requireDuration(readTimeout, "CREATIVE_AGENCY_LLM_READ_TIMEOUT", Duration.ofMinutes(2));
+            requireDuration(readTimeout, "CREATIVE_AGENCY_LLM_READ_TIMEOUT", Duration.ofMinutes(15));
             requireDuration(retryBackoff, "CREATIVE_AGENCY_LLM_RETRY_BACKOFF", Duration.ofSeconds(5));
             if (maxAttempts < 1 || maxAttempts > 3) {
                 throw new IllegalArgumentException("CREATIVE_AGENCY_LLM_MAX_ATTEMPTS must be between 1 and 3");
             }
-            if (maxOutputTokens < 64 || maxOutputTokens > 16_384) {
+            if (maxOutputTokens < 64 || maxOutputTokens > 32_768) {
                 throw new IllegalArgumentException(
-                        "CREATIVE_AGENCY_LLM_MAX_OUTPUT_TOKENS must be between 64 and 16384");
+                        "CREATIVE_AGENCY_LLM_MAX_OUTPUT_TOKENS must be between 64 and 32768");
             }
-            if (maxResponseBytes < 4_096 || maxResponseBytes > 262_144) {
+            if (maxResponseBytes < 4_096 || maxResponseBytes > 1_048_576) {
                 throw new IllegalArgumentException(
-                        "CREATIVE_AGENCY_LLM_MAX_RESPONSE_BYTES must be between 4096 and 262144");
+                        "CREATIVE_AGENCY_LLM_MAX_RESPONSE_BYTES must be between 4096 and 1048576");
             }
             if (maxConcurrency < 1 || maxConcurrency > 32) {
                 throw new IllegalArgumentException("CREATIVE_AGENCY_LLM_MAX_CONCURRENCY must be between 1 and 32");

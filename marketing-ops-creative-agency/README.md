@@ -44,6 +44,18 @@ not mean the host overrides the model's decision. `generationDecisionSource`
 records `llm` or `deterministic`; a model failure produces a failed task, with no
 silent template fallback.
 
+When asked to execute an escalation, the agency explains that it can only advise
+and can recommend which person or role should coordinate the next step or contact
+the studio. It separates the document supplier from coordination responsibility;
+an unknown existing responsibility stays unknown, while a suggested person or role
+remains a proposal. Follow-ups should address a distinct unresolved question instead of
+repeating a checklist or treating an unconfirmed date as proof of silence.
+Unknown ownership should lead to verifying the actual rights holder and licensing
+authority, not requiring a document supplier to confirm it owns the asset. Already
+unknown details and future proof belong in proposed verification steps rather
+than repeated immediate questions the customer cannot currently answer.
+These are model instructions, not answer rewriting or a guaranteed outcome.
+
 Marketing Ops domain state and Scenario Lab evidence remain owned by the sibling
 `marketing-ops-remote` provider. Conversation context and A2A tasks are held in
 memory, so this is a sample target agent rather than a production system of
@@ -55,6 +67,20 @@ record.
 sample-owned [business response schema](src/main/resources/schemas/creative-agency-response.v1.schema.json).
 The A2A message still carries a text part; its text is now a JSON object with
 `schemaVersion`, `scenario`, `disposition`, `responseText` and `metadata`.
+
+The optional `presentation` object carries provider-owned labels and formats for
+values in this same captured response. It is attached after model generation;
+it does not change the original advice, source values or completion rules.
+Its schema reference is
+`https://astraform.ai/schema/remote-domain/v1/result-presentation.v1.schema.json`.
+For offline validation, supply that canonical contract file explicitly from your
+matching local contracts checkout and register its `$id` in the validator's local
+registry; do not fetch it during a run or copy a second editable schema here.
+The optional JSON response field uses existing captured evidence and requires no
+new SDK version. Readers without presentation support retain the original values.
+
+“Agency review disposition” labels the recorded advice classification. It does
+not establish campaign launch approval or a platform evaluation verdict.
 The selected generator supplies the business fields. In the default LLM mode,
 `scenario` and `disposition` come from the validated model output.
 
@@ -181,21 +207,22 @@ export CREATIVE_AGENCY_LLM_BASE_URL=https://generativelanguage.googleapis.com/v1
 export CREATIVE_AGENCY_LLM_AUTH_TYPE=bearer
 export CREATIVE_AGENCY_LLM_API_KEY="$GEMINI_API_KEY"
 export CREATIVE_AGENCY_LLM_MODEL=gemini-3.6-flash
-export CREATIVE_AGENCY_LLM_BINDING_REVISION=marketing-starter-gemini36-high-v1
+export CREATIVE_AGENCY_LLM_BINDING_REVISION=marketing-starter-gemini36-high-v2
 export CREATIVE_AGENCY_LLM_REASONING_EFFORT=high
 export CREATIVE_AGENCY_LLM_TOKEN_LIMIT_PARAMETER=max-completion-tokens
 export CREATIVE_AGENCY_LLM_MAX_OUTPUT_TOKENS=16384
-export CREATIVE_AGENCY_LLM_READ_TIMEOUT=120s
+export CREATIVE_AGENCY_LLM_READ_TIMEOUT=60s
 export CREATIVE_AGENCY_LLM_MAX_ATTEMPTS=1
-export CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS=300
+export CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS=70
 ```
 
 The current Gemini profile sends `max_completion_tokens=16384` with high
-reasoning. Its two-second connect and 120-second read use one attempt inside
-the 300-second agency deadline. Set Runtime A2A request and poll budgets to
-`300s`, and use the same binding revision there. These are the agency adapter's
-bounds; do not copy banking's 32,768-token/840-second settings. The raw
-response-byte limit remains enforced locally. The customer model is configured
+reasoning. Its complete provider request has a 60-second deadline and one attempt
+inside the 70-second agency deadline. Set Runtime A2A request and poll budgets to
+`150s`, and use the same binding revision there. The outer transport budget does
+not extend model generation or enable an automatic retry. Use the complete selected
+provider profile: the Ollama settings below have a larger reasoning budget.
+The raw response-byte limit remains enforced locally. The customer model is configured
 independently in the platform's `private/model.env`; choose
 `AI_CHAT_MODEL=gemini-3.6-flash` there for Gemini on both roles. Existing private
 profiles, published images and accepted runs retain their original provenance;
@@ -212,17 +239,34 @@ export CREATIVE_AGENCY_LLM_BASE_URL=http://localhost:11434/v1
 export CREATIVE_AGENCY_LLM_AUTH_TYPE=none
 unset CREATIVE_AGENCY_LLM_API_KEY
 export CREATIVE_AGENCY_LLM_MODEL=qwen3.5:4b
-export CREATIVE_AGENCY_LLM_BINDING_REVISION=ollama-qwen35-nonthinking-decisions-v1
+export CREATIVE_AGENCY_LLM_BINDING_REVISION=marketing-starter-qwen35-4b-thinking-v3
 export CREATIVE_AGENCY_LLM_TOKEN_LIMIT_PARAMETER=max-tokens
-export CREATIVE_AGENCY_LLM_REASONING_EFFORT=none
+export CREATIVE_AGENCY_LLM_REASONING_EFFORT=high
+export CREATIVE_AGENCY_LLM_MAX_OUTPUT_TOKENS=32768
+export CREATIVE_AGENCY_LLM_MAX_RESPONSE_BYTES=1048576
+export CREATIVE_AGENCY_LLM_READ_TIMEOUT=60s
+export CREATIVE_AGENCY_LLM_MAX_ATTEMPTS=1
+export CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS=70
 ```
 
-For this local Qwen profile, `none` requests non-thinking generation through
-[Ollama's OpenAI compatibility endpoint](https://docs.ollama.com/api/openai-compatibility).
-Ollama maps `reasoning_effort=none` to `think=false` for models with boolean
-thinking support. This avoids spending the response deadline on hidden reasoning;
-it does not guarantee a particular response time. The setting is optional and
-omitted by default, preserving the selected provider/model's defaults.
+This complete local Qwen profile enables thinking through Ollama's OpenAI
+compatibility endpoint. Load all of its settings together: the 32,768-token
+ceiling includes reasoning and final content, the raw provider response is bounded
+to 1 MiB, and the provider request and complete response body have a
+60-second deadline with one attempt. A timeout fails without retrying or
+substituting an answer. The 70-second agency deadline leaves room for error
+handling. Set Runtime A2A request and poll budgets to `150s` with the same
+binding revision. The starter initializer does this for a fresh `--model ollama`
+installation. The longer A2A transport budget does not extend the model deadline. A model
+that cannot finish within 60 seconds fails; thinking remains enabled.
+
+An operator may explicitly select `reasoning_effort=none` when needed; change
+the binding revision and verify the resulting profile. Generic compatible
+provider settings remain explicit because providers support different reasoning
+parameters. The generic 800-token/15-second defaults below are not the local
+Ollama profile. Existing initialized private profiles and accepted runs are not
+rewritten; adopting this profile requires an explicit local configuration change
+and a fresh run.
 
 That `localhost` URL is only correct when the sample itself runs directly on
 the host with Maven. From the sample's Docker container, `localhost` means the
@@ -267,6 +311,8 @@ optional request fields are therefore explicit rather than guessed:
 | `CREATIVE_AGENCY_LLM_STRUCTURED_OUTPUT_MODE` | `json-schema`, `json-object`, `prompt-only` | `json-schema` | Model servers differ in structured-output support |
 | `CREATIVE_AGENCY_LLM_TOKEN_LIMIT_PARAMETER` | `max-completion-tokens`, `max-tokens`, `omit` | `max-tokens` | Compatible servers differ; omit an undocumented field instead of guessing |
 | `CREATIVE_AGENCY_LLM_REASONING_EFFORT` | Provider-supported value, such as `none`, `low`, `medium`, or `high` | Empty; omitted | Explicitly requests the reasoning mode supported by the deployed model |
+| `CREATIVE_AGENCY_LLM_TEMPERATURE` | Finite number from 0–2 | Empty; omitted | Explicit sampling temperature when supported by the provider/model |
+| `CREATIVE_AGENCY_LLM_TOP_P` | Finite number from 0–1 | Empty; omitted | Explicit nucleus sampling limit when supported by the provider/model |
 
 `json-schema` sends the standard strict JSON Schema shape. `json-object` sends
 the older JSON mode. `prompt-only` omits `response_format` for weaker local
@@ -275,9 +321,13 @@ The service never auto-downgrades after a provider rejects a setting.
 
 The prompt puts the agency policy in a `system` message and the customer
 instruction, observed facts and bounded exchanges in a separate `user` message. No tools,
-provider-specific extensions, arbitrary headers, or temperature are sent.
-`reasoning_effort` is sent only when explicitly configured; unsupported values
-remain provider errors. Change the binding revision when changing this policy.
+provider-specific extensions or arbitrary headers are sent.
+`reasoning_effort`, `temperature` and `top_p` are sent only when explicitly configured;
+unsupported settings remain provider errors. Leave sampling fields blank for models
+that do not support them. Ollama 0.40.5's compatibility endpoint translates omitted
+temperature and top_p to `1.0`, overriding the model preset. Set both explicitly
+when a deployment requires other values. Change the binding revision when changing
+these deployment settings or this policy.
 
 For reasoning models, `max_completion_tokens` may include both hidden reasoning
 and visible output. Treat `CREATIVE_AGENCY_LLM_MAX_OUTPUT_TOKENS` as the budget
@@ -285,7 +335,8 @@ for the selected wire parameter—not a promise that every token is visible—an
 validate the value against the chosen model. `finish_reason=length` is rejected
 rather than accepted as a complete business response.
 
-Operational settings:
+Operational settings (generic adapter defaults; use the complete Ollama profile
+above for local thinking):
 
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
@@ -303,7 +354,12 @@ Operational settings:
 The default is one attempt because a timeout does not prove the provider failed
 to generate or bill the request. If retries are enabled, every upstream attempt
 counts against the local rate limit. The complete provider timeout/retry budget
-must fit inside the outer A2A deadline or startup fails.
+must fit inside the outer A2A deadline or startup fails. Reads are bounded to
+900 seconds, output caps to 32,768 tokens, raw responses to 1 MiB, and outer A2A
+deadlines to 900 seconds. Final business-field size limits remain unchanged.
+The selected Ollama profile leaves headroom between its 60-second provider
+deadline and 70-second outer agency deadline, without automatic model retries.
+Customer goal wall limits remain independent.
 
 Official compatibility references:
 

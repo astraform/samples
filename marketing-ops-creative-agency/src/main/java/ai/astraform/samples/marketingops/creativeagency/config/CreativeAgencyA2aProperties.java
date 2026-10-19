@@ -114,8 +114,8 @@ public class CreativeAgencyA2aProperties implements InitializingBean {
         if (responseFormat == null) {
             throw new IllegalArgumentException("response-format must be text or json");
         }
-        if (blockingAgentTimeoutSeconds < 5 || blockingAgentTimeoutSeconds > 300) {
-            throw new IllegalArgumentException("blocking-agent-timeout-seconds must be between 5 and 300");
+        if (blockingAgentTimeoutSeconds < 5 || blockingAgentTimeoutSeconds > 900) {
+            throw new IllegalArgumentException("blocking-agent-timeout-seconds must be between 5 and 900");
         }
         if (blockingConsumptionTimeoutSeconds < 1 || blockingConsumptionTimeoutSeconds > 30) {
             throw new IllegalArgumentException("blocking-consumption-timeout-seconds must be between 1 and 30");

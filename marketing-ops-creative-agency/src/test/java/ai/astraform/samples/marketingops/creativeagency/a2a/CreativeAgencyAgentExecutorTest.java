@@ -95,12 +95,19 @@ class CreativeAgencyAgentExecutorTest {
         if (format == CreativeAgencyA2aProperties.ResponseFormat.TEXT) {
             assertThat(text).isEqualTo(reply.responseText());
         } else {
-            assertThat(mapper.readTree(text)).isEqualTo(mapper.valueToTree(Map.of(
-                    "schemaVersion", "marketing.creative-agency.response.v1",
-                    "scenario", "launch-blocker",
-                    "disposition", "ESCALATE",
-                    "responseText", reply.responseText(),
-                    "metadata", reply.metadata())));
+            var serialized = mapper.readTree(text);
+            assertThat(serialized.path("disposition").stringValue()).isEqualTo(reply.disposition());
+            assertThat(serialized.path("responseText").stringValue()).isEqualTo(reply.responseText());
+            assertThat(serialized.path("metadata")).isEqualTo(mapper.valueToTree(reply.metadata()));
+            var presentation = serialized.path("presentation");
+            assertThat(presentation.path("schemaVersion").stringValue())
+                    .isEqualTo("astraform.result-presentation.v1");
+            var fields = presentation.path("fields");
+            assertThat(fields).anySatisfy(field -> {
+                assertThat(field.path("pointer").stringValue()).isEqualTo("/disposition");
+                assertThat(field.path("label").stringValue()).isEqualTo("Agency review disposition");
+            });
+            assertThat(serialized.path("metadata").path("generationContentAuthoritative").asBoolean()).isFalse();
         }
     }
 

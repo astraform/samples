@@ -27,6 +27,17 @@ public class CreativeAgencyAgentExecutor implements AgentExecutor {
 
     private static final Logger log = LoggerFactory.getLogger(CreativeAgencyAgentExecutor.class);
 
+    // Provider-owned labels accompany the accepted reply; model text remains unchanged.
+    private static final Map<String, Object> RESULT_PRESENTATION = Map.of(
+            "schemaVersion", "astraform.result-presentation.v1",
+            "fields", List.of(
+                    Map.of("pointer", "/disposition", "label", "Agency review disposition"),
+                    Map.of("pointer", "/scenario", "label", "Review scenario"),
+                    Map.of("pointer", "/metadata/turnCount", "label", "Agency conversation turn"),
+                    Map.of("pointer", "/metadata/followUp", "label", "Follow-up reply"),
+                    Map.of("pointer", "/metadata/generationFallback", "label", "Fallback used"),
+                    Map.of("pointer", "/metadata/generationContentAuthoritative", "label", "Provider content-authority flag")));
+
     private final CreativeAgencyScenarioService scenarioService;
     private final CreativeAgencyA2AAdmissionGate admissionGate;
     private final CreativeAgencyA2aProperties properties;
@@ -95,6 +106,7 @@ public class CreativeAgencyAgentExecutor implements AgentExecutor {
         response.put("disposition", reply.disposition());
         response.put("responseText", reply.responseText());
         response.put("metadata", reply.metadata());
+        response.put("presentation", RESULT_PRESENTATION);
         return objectMapper.writeValueAsString(response);
     }
 

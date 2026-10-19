@@ -10,6 +10,8 @@ import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -76,6 +78,8 @@ class OpenAiCompatibleCreativeAgencyResponseGeneratorTest {
         assertThat(receivedRequest.get().path("model").stringValue()).isEqualTo(properties.getLlm().getModel());
         assertThat(receivedRequest.get().path("max_tokens").asInt()).isEqualTo(properties.getLlm().getMaxOutputTokens());
         assertThat(receivedRequest.get().has("reasoning_effort")).isFalse();
+        assertThat(receivedRequest.get().has("temperature")).isFalse();
+        assertThat(receivedRequest.get().has("top_p")).isFalse();
         assertThat(receivedRequest.get()
                 .path("response_format").path("json_schema").path("strict").asBoolean()).isTrue();
         assertThat(receivedRequest.get().path("messages").get(1).path("content").stringValue())
@@ -83,20 +87,49 @@ class OpenAiCompatibleCreativeAgencyResponseGeneratorTest {
                 .doesNotContain("authoritativeDecision", "REQUEST_CHANGES");
     }
 
-    @Test
-    void sendsExplicitReasoningEffortAndRecordsItInTheReceipt() throws Exception {
-        responses.add(new StubResponse(200, completedResponse(
+    @ParameterizedTest
+    @ValueSource(strings = {"high", "none"})
+    void sendsSelectedReasoningEffortAndRecordsItInTheReceipt(String effort) throws Exception {
+        ObjectNode response = (ObjectNode) objectMapper.readTree(completedResponse(
                 "requested-model", "Review the launch dependency.",
-                List.of("Confirm the approval owner."), List.of())));
+                List.of("Confirm the approval owner."), List.of()));
+        if ("high".equals(effort)) {
+            ((ObjectNode) response.path("choices").get(0).path("message"))
+                    .put("reasoning_content", "r".repeat(131_072));
+        }
+        responses.add(new StubResponse(200, objectMapper.writeValueAsString(response)));
         CreativeAgencyGenerationProperties properties = properties(1, 60);
-        properties.getLlm().setReasoningEffort("none");
+        properties.getLlm().setReasoningEffort(effort);
+        properties.getLlm().setTemperature("high".equals(effort) ? 0.6 : 0.0);
+        properties.getLlm().setTopP("high".equals(effort) ? 0.95 : 0.0);
+        properties.getLlm().setMaxResponseBytes(1_048_576);
 
         CreativeAgencyResponseGenerator.GenerationResult result =
                 new OpenAiCompatibleCreativeAgencyResponseGenerator(properties, objectMapper, "test")
                         .generate(request());
 
-        assertThat(receivedRequest.get().path("reasoning_effort").stringValue()).isEqualTo("none");
-        assertThat(result.receiptMetadata()).containsEntry("llmReasoningEffort", "none");
+        assertThat(receivedRequest.get().path("reasoning_effort").stringValue()).isEqualTo(effort);
+        assertThat(receivedRequest.get().has("temperature")).isTrue();
+        assertThat(receivedRequest.get().has("top_p")).isTrue();
+        assertThat(receivedRequest.get().path("temperature").asDouble()).isEqualTo(properties.getLlm().getTemperature());
+        assertThat(receivedRequest.get().path("top_p").asDouble()).isEqualTo(properties.getLlm().getTopP());
+        assertThat(result.receiptMetadata()).containsEntry("llmReasoningEffort", effort);
+        assertThat(result.summary()).isEqualTo("Review the launch dependency.");
+    }
+
+    @Test
+    void rejectsOversizedProviderReasoningBeforeAcceptingBusinessContent() throws Exception {
+        ObjectNode response = (ObjectNode) objectMapper.readTree(completedResponse(
+                "requested-model", "A complete business answer.", List.of("Review the result."), List.of()));
+        ((ObjectNode) response.path("choices").get(0).path("message"))
+                .put("reasoning_content", "r".repeat(4_096));
+        responses.add(new StubResponse(200, objectMapper.writeValueAsString(response)));
+        CreativeAgencyGenerationProperties properties = properties(1, 60);
+        properties.getLlm().setReasoningEffort("high");
+        properties.getLlm().setMaxResponseBytes(4_096);
+        OpenAiCompatibleCreativeAgencyResponseGenerator generator =
+                new OpenAiCompatibleCreativeAgencyResponseGenerator(properties, objectMapper, "test");
+        assertInvalidResponse(() -> generator.generate(request()));
     }
 
     @Test
@@ -140,17 +173,21 @@ class OpenAiCompatibleCreativeAgencyResponseGeneratorTest {
         facts.put("assetCopyrightOwner", null);
         facts.put("usagePermission", null);
         facts.put("completedWork", null);
+        facts.put("escalationOwner", null);
+        facts.put("confirmedDeliveryDate", null);
         var history = new CreativeAgencyConversationStore.Exchange(
-                "Can we use the asset?", "Request permission and confirm the approval status.");
+                "Please escalate to the supplier.",
+                "I can advise but cannot contact the supplier. The escalation owner and delivery date are unknown.");
+        String latestInput = "I do not know the escalation owner or delivery date. I requested the document earlier; please escalate it.";
         var result = generator(1).generate(new CreativeAgencyResponseGenerator.GenerationRequest(
                 CreativeAgencyScenarioKey.LAUNCH_BLOCKER, CreativeAgencyScenarioKey.LAUNCH_BLOCKER,
-                "I requested the document earlier. What should happen next?", facts, true, List.of(history)));
+                latestInput, facts, true, List.of(history)));
 
         JsonNode wire = receivedRequest.get();
         JsonNode context = objectMapper.readTree(wire.path("messages").get(1).path("content").stringValue());
         assertThat(context.path("observedFacts")).isEqualTo(objectMapper.valueToTree(facts));
         assertThat(context.path("recentExchanges")).isEqualTo(objectMapper.valueToTree(List.of(history)));
-        assertThat(context.path("latestUserInput").stringValue()).contains("requested the document earlier");
+        assertThat(context.path("latestUserInput").stringValue()).isEqualTo(latestInput);
         assertThat(context.has("authoritativeDecision")).isFalse();
         assertThat(result.disposition()).isEqualTo("AWAIT_REVIEW");
         assertThat(result.summary()).isEqualTo(
@@ -307,21 +344,42 @@ class OpenAiCompatibleCreativeAgencyResponseGeneratorTest {
     }
 
     @Test
+    void reasoningGenerationReportsProviderReadTimeoutWithoutAcceptingAnAnswer() {
+        responses.add(new StubResponse(200, "{}", 250));
+        CreativeAgencyGenerationProperties properties = properties(1, 60);
+        properties.getLlm().setReasoningEffort("high");
+        properties.getLlm().setReadTimeout(Duration.ofMillis(40));
+        OpenAiCompatibleCreativeAgencyResponseGenerator generator =
+                new OpenAiCompatibleCreativeAgencyResponseGenerator(properties, objectMapper, "test");
+
+        assertThatThrownBy(() -> generator.generate(request()))
+                .isInstanceOf(CreativeAgencyGenerationException.class)
+                .extracting(failure -> ((CreativeAgencyGenerationException) failure).code())
+                .isEqualTo(CreativeAgencyGenerationException.Code.TIMEOUT);
+        assertThat(requestCount).hasValue(1);
+        assertThat(receivedRequest.get().path("reasoning_effort").stringValue()).isEqualTo("high");
+    }
+
+    @Test
     void rejectsTruncatedRefusedAndToolCallResponses() throws Exception {
+        CreativeAgencyGenerationProperties properties = properties(1, 60);
+        properties.getLlm().setReasoningEffort("high");
+        OpenAiCompatibleCreativeAgencyResponseGenerator generator =
+                new OpenAiCompatibleCreativeAgencyResponseGenerator(properties, objectMapper, "test");
         responses.add(new StubResponse(200, responseWithChoice("length", textMessage("{}"))));
-        assertInvalidResponse(() -> generator(1).generate(request()));
+        assertInvalidResponse(() -> generator.generate(request()));
 
         ObjectNode refused = objectMapper.createObjectNode();
         refused.put("role", "assistant");
         refused.putNull("content");
         refused.put("refusal", "cannot comply");
         responses.add(new StubResponse(200, responseWithChoice("stop", refused)));
-        assertInvalidResponse(() -> generator(1).generate(request()));
+        assertInvalidResponse(() -> generator.generate(request()));
 
         ObjectNode toolCall = textMessage("{}");
         toolCall.putArray("tool_calls").addObject().put("id", "tool-1");
         responses.add(new StubResponse(200, responseWithChoice("stop", toolCall)));
-        assertInvalidResponse(() -> generator(1).generate(request()));
+        assertInvalidResponse(() -> generator.generate(request()));
     }
 
     @Test
@@ -451,6 +509,15 @@ class OpenAiCompatibleCreativeAgencyResponseGeneratorTest {
         receivedAuthorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
         receivedRequest.set(objectMapper.readTree(exchange.getRequestBody()));
         StubResponse response = responses.removeFirst();
+        if (response.delayMillis() > 0) {
+            try {
+                Thread.sleep(response.delayMillis());
+            } catch (InterruptedException failure) {
+                Thread.currentThread().interrupt();
+                exchange.close();
+                return;
+            }
+        }
         byte[] body = response.body().getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().add("Content-Type", "application/json");
         exchange.sendResponseHeaders(response.status(), body.length);
@@ -458,6 +525,9 @@ class OpenAiCompatibleCreativeAgencyResponseGeneratorTest {
         exchange.close();
     }
 
-    private record StubResponse(int status, String body) {
+    private record StubResponse(int status, String body, long delayMillis) {
+        StubResponse(int status, String body) {
+            this(status, body, 0);
+        }
     }
 }

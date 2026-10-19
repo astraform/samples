@@ -1,6 +1,9 @@
 package ai.astraform.samples.marketingops.creativeagency.config;
 
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.ObjectMapper;
+
+import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -34,15 +37,30 @@ class CreativeAgencyGenerationPropertiesTest {
     }
 
     @Test
-    void noneAuthAcceptsLocalEndpointWithoutKey() {
+    void localThinkingProfileFitsInsideItsBoundedA2aDeadline() {
         CreativeAgencyGenerationProperties properties = validLlmProperties();
         properties.getLlm().setBaseUrl("http://localhost:11434/v1");
         properties.getLlm().setAuthType(CreativeAgencyGenerationProperties.AuthType.NONE);
         properties.getLlm().setApiKey("");
         properties.getLlm().setProviderId("ollama");
-        properties.getLlm().setModel("qwen3:8b");
+        properties.getLlm().setModel("qwen3.5:4b");
+        properties.getLlm().setReasoningEffort("high");
+        properties.getLlm().setReadTimeout(Duration.ofSeconds(840));
+        properties.getLlm().setMaxOutputTokens(32_768);
+        properties.getLlm().setMaxResponseBytes(1_048_576);
+        CreativeAgencyA2aProperties a2a = new CreativeAgencyA2aProperties();
+        a2a.setInboundToken("local-test-inbound-token-with-32-characters");
+        a2a.setBlockingAgentTimeoutSeconds(900);
 
         assertThatCode(properties::afterPropertiesSet).doesNotThrowAnyException();
+        assertThatCode(a2a::afterPropertiesSet).doesNotThrowAnyException();
+        CreativeAgencyResponseGenerationConfiguration configuration = new CreativeAgencyResponseGenerationConfiguration();
+        assertThatCode(() -> configuration.creativeAgencyResponseGenerator(properties, a2a, new ObjectMapper()))
+                .doesNotThrowAnyException();
+        properties.getLlm().setMaxAttempts(2);
+        assertThatThrownBy(() -> configuration.creativeAgencyResponseGenerator(properties, a2a, new ObjectMapper()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("timeout/retry budget must fit");
     }
 
     @Test
@@ -103,6 +121,45 @@ class CreativeAgencyGenerationPropertiesTest {
         assertThatThrownBy(properties::afterPropertiesSet)
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("credentials");
+    }
+
+    @Test
+    void rejectsSamplingAndBudgetsBeyondFiniteProviderAndAgentBounds() {
+        CreativeAgencyGenerationProperties properties = validLlmProperties();
+        for (double invalid : new double[]{Double.NaN, 2.1}) {
+            properties.getLlm().setTemperature(invalid);
+            assertThatThrownBy(properties::afterPropertiesSet)
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("CREATIVE_AGENCY_LLM_TEMPERATURE");
+        }
+        properties.getLlm().setTemperature(0.6);
+        for (double invalid : new double[]{Double.POSITIVE_INFINITY, 1.1}) {
+            properties.getLlm().setTopP(invalid);
+            assertThatThrownBy(properties::afterPropertiesSet)
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("CREATIVE_AGENCY_LLM_TOP_P");
+        }
+        properties.getLlm().setTopP(0.95);
+        assertThatCode(properties::afterPropertiesSet).doesNotThrowAnyException();
+        properties.getLlm().setReadTimeout(Duration.ofSeconds(901));
+        assertThatThrownBy(properties::afterPropertiesSet)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("CREATIVE_AGENCY_LLM_READ_TIMEOUT");
+        properties.getLlm().setReadTimeout(Duration.ofSeconds(900));
+        properties.getLlm().setMaxOutputTokens(32_769);
+        assertThatThrownBy(properties::afterPropertiesSet)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("CREATIVE_AGENCY_LLM_MAX_OUTPUT_TOKENS");
+        properties.getLlm().setMaxOutputTokens(32_768);
+        properties.getLlm().setMaxResponseBytes(1_048_577);
+        assertThatThrownBy(properties::afterPropertiesSet)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("CREATIVE_AGENCY_LLM_MAX_RESPONSE_BYTES");
+        CreativeAgencyA2aProperties a2a = new CreativeAgencyA2aProperties();
+        a2a.setBlockingAgentTimeoutSeconds(901);
+        assertThatThrownBy(a2a::afterPropertiesSet)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("blocking-agent-timeout-seconds");
     }
 
     private CreativeAgencyGenerationProperties validLlmProperties() {
