@@ -78,7 +78,9 @@ class MarketingCustomerLauncherTest(unittest.TestCase):
         self.output = Path(temporary.name) / "run"
         # Preserve receipt-only transport/recovery coverage as an explicit custom scenario.
         receipt_only = json.loads((DIRECTORY / "sample-configuration.json").read_text())
+        receipt_only["launchRequestTemplate"].pop("domainId", None)
         receipt_only["launchRequestTemplate"]["completionPolicy"].pop("requireCustomerFinish", None)
+        receipt_only["launchRequestTemplate"]["completionPolicy"].pop("requestFactBindingMode", None)
         self.receipt_only_sample = self.output.parent / "receipt-only.json"
         self.receipt_only_sample.write_text(json.dumps(receipt_only))
         self.enterContext(patch.dict(os.environ, {"ASTRAFORM_API_BASE": "http://platform:8084",
@@ -186,6 +188,11 @@ class MarketingCustomerLauncherTest(unittest.TestCase):
             {**policy, 'requireCustomerFinish': value}).to_dict().get('requireCustomerFinish') is value
             for value in (False, True))
 
+    def supports_binding_mode(self, value):
+        policy = json.loads(self.receipt_only_sample.read_text())["launchRequestTemplate"]["completionPolicy"]
+        policy["requestFactBindingMode"] = value
+        return AgentJourneyGoalCompletionPolicy.from_dict(policy).to_dict().get("requestFactBindingMode") == value
+
     def assert_native_launch_body(self, client, requests, output, result):
         self.assertEqual(1, len(requests))
         self.assertEqual('/api/agent-journeys', requests[0]['path'])
@@ -201,7 +208,8 @@ class MarketingCustomerLauncherTest(unittest.TestCase):
     def test_custom_finish_flags_use_capable_native_sdk_or_reject_before_writes(self):
         for value in (False, True):
             with self.subTest(requireCustomerFinish=value):
-                scenario = json.loads((DIRECTORY / 'sample-configuration.json').read_text())
+                scenario = json.loads(self.receipt_only_sample.read_text())
+                scenario['launchRequestTemplate']['completionPolicy'].pop('requestFactBindingMode', None)
                 scenario['launchRequestTemplate']['completionPolicy']['requireCustomerFinish'] = value
                 selected = self.output.parent / ('strict-' + str(value) + '.json')
                 selected.write_text(json.dumps(scenario))
@@ -223,7 +231,7 @@ class MarketingCustomerLauncherTest(unittest.TestCase):
                         self.assertFalse(output.exists())
                         self.assertEqual([], requests)
 
-    def test_default_templates_require_finish_with_native_sdk_or_reject_before_writes(self):
+    def test_default_templates_use_native_policy_or_reject_before_writes(self):
         for name in ("sample-configuration.json", "current-state-configuration.json"):
             with self.subTest(template=name):
                 selected = DIRECTORY / name
@@ -235,17 +243,103 @@ class MarketingCustomerLauncherTest(unittest.TestCase):
                         patch.object(launcher, "AgentCatalogApi", return_value=catalog), \
                         journey_http_fixture() as (host, requests), \
                         launcher.ApiClient(launcher.Configuration(host=host, retries=0)) as client:
-                    if self.supports_finish_policy():
+                    if self.supports_finish_policy() and self.supports_binding_mode(policy["requestFactBindingMode"]):
                         result = launcher.launch(client, host, output)
                         self.assert_native_launch_body(client, requests, output, result)
                         self.assertIs(True, requests[0]["body"]["completionPolicy"]["requireCustomerFinish"])
+                        self.assertEqual(policy["requestFactBindingMode"], requests[0]["body"]["completionPolicy"]["requestFactBindingMode"])
                     else:
-                        with self.assertRaisesRegex(ValueError, "requireCustomerFinish"):
+                        with self.assertRaisesRegex(ValueError, "requireCustomerFinish|requestFactBindingMode"):
                             launcher.launch(client, host, output)
                         catalog.create_agent_definition.assert_not_called()
                         catalog.publish_agent_definition.assert_not_called()
                         self.assertFalse(output.exists())
                         self.assertEqual([], requests)
+
+    def test_declared_domain_uses_native_sdk_http_or_rejects_before_writes(self):
+        scenario = json.loads(self.receipt_only_sample.read_text())
+        scenario['launchRequestTemplate']['domainId'] = 'marketing-ops'
+        selected = self.output.parent / 'declared-domain.json'
+        selected.write_text(json.dumps(scenario))
+        catalog = self.catalog()
+        with patch.dict(os.environ, {'MARKETING_SAMPLE_FILE': str(selected)}), \
+                patch.object(launcher, 'AgentCatalogApi', return_value=catalog), \
+                journey_http_fixture() as (host, requests), \
+                launcher.ApiClient(launcher.Configuration(host=host, retries=0)) as client:
+            if 'domain_id' in launcher.AgentJourneyLaunchRequest.model_fields:
+                result = launcher.launch(client, host, self.output)
+                self.assert_native_launch_body(client, requests, self.output, result)
+                self.assertEqual('marketing-ops', requests[0]['body']['domainId'])
+            else:
+                with self.assertRaisesRegex(ValueError, 'cannot preserve launch.domainId'):
+                    launcher.launch(client, host, self.output)
+                catalog.create_agent_definition.assert_not_called()
+                catalog.publish_agent_definition.assert_not_called()
+                self.assertFalse(self.output.exists())
+                self.assertEqual([], requests)
+
+    def test_invalid_declared_domain_fails_before_catalog_output_or_http(self):
+        with journey_http_fixture() as (host, requests), \
+                launcher.ApiClient(launcher.Configuration(host=host, retries=0)) as client:
+            for domain_id in (None, True, '', 'Marketing', 'marketing/team', 'a' * 129):
+                with self.subTest(domain_id=domain_id):
+                    scenario = json.loads(self.receipt_only_sample.read_text())
+                    scenario['launchRequestTemplate']['domainId'] = domain_id
+                    selected = self.output.parent / 'invalid-domain.json'
+                    selected.write_text(json.dumps(scenario))
+                    catalog = self.catalog()
+                    with patch.dict(os.environ, {'MARKETING_SAMPLE_FILE': str(selected)}), \
+                            patch.object(launcher, 'AgentCatalogApi', return_value=catalog):
+                        with self.assertRaisesRegex(ValueError, 'launch.domainId must be'):
+                            launcher.launch(client, host, self.output)
+                    catalog.create_agent_definition.assert_not_called()
+                    catalog.publish_agent_definition.assert_not_called()
+                    self.assertFalse(self.output.exists())
+                    self.assertEqual([], requests)
+
+    def test_explicit_binding_modes_use_native_sdk_http_or_reject_before_writes(self):
+        for mode in ("VALIDATE", "RESOLVE_TRUSTED"):
+            with self.subTest(mode=mode):
+                scenario = json.loads(self.receipt_only_sample.read_text())
+                scenario["launchRequestTemplate"]["completionPolicy"]["requestFactBindingMode"] = mode
+                selected = self.output.parent / (mode + ".json")
+                selected.write_text(json.dumps(scenario))
+                output = self.output.parent / mode
+                catalog = self.catalog()
+                with patch.dict(os.environ, {"MARKETING_SAMPLE_FILE": str(selected)}), \
+                        patch.object(launcher, "AgentCatalogApi", return_value=catalog), \
+                        journey_http_fixture() as (host, requests), \
+                        launcher.ApiClient(launcher.Configuration(host=host, retries=0)) as client:
+                    if self.supports_binding_mode(mode):
+                        result = launcher.launch(client, host, output)
+                        self.assert_native_launch_body(client, requests, output, result)
+                        self.assertEqual(mode, requests[0]["body"]["completionPolicy"]["requestFactBindingMode"])
+                    else:
+                        with self.assertRaisesRegex(ValueError, "requestFactBindingMode"):
+                            launcher.launch(client, host, output)
+                        catalog.create_agent_definition.assert_not_called()
+                        catalog.publish_agent_definition.assert_not_called()
+                        self.assertFalse(output.exists())
+                        self.assertEqual([], requests)
+
+    def test_invalid_binding_modes_fail_before_catalog_output_or_http(self):
+        with journey_http_fixture() as (host, requests), \
+                launcher.ApiClient(launcher.Configuration(host=host, retries=0)) as client:
+            for mode in (None, True, "resolve_trusted"):
+                with self.subTest(mode=mode):
+                    scenario = json.loads(self.receipt_only_sample.read_text())
+                    scenario["launchRequestTemplate"]["completionPolicy"]["requestFactBindingMode"] = mode
+                    selected = self.output.parent / "invalid-mode.json"
+                    selected.write_text(json.dumps(scenario))
+                    catalog = self.catalog()
+                    with patch.dict(os.environ, {"MARKETING_SAMPLE_FILE": str(selected)}), \
+                            patch.object(launcher, "AgentCatalogApi", return_value=catalog):
+                        with self.assertRaisesRegex(ValueError, "requestFactBindingMode must be"):
+                            launcher.launch(client, host, self.output)
+                    catalog.create_agent_definition.assert_not_called()
+                    catalog.publish_agent_definition.assert_not_called()
+                    self.assertFalse(self.output.exists())
+                    self.assertEqual([], requests)
 
     def test_omitted_finish_flag_uses_actual_native_sdk_http(self):
         self.enterContext(patch.dict(os.environ, {"MARKETING_SAMPLE_FILE": str(self.receipt_only_sample)}))
@@ -262,7 +356,7 @@ class MarketingCustomerLauncherTest(unittest.TestCase):
                 launcher.ApiClient(launcher.Configuration(host=host, retries=0)) as client:
             for value in (None, 'true', 'false', 1, 0, 1.0, [], {}, [True]):
                 with self.subTest(value=value):
-                    scenario = json.loads((DIRECTORY / 'sample-configuration.json').read_text())
+                    scenario = json.loads(self.receipt_only_sample.read_text())
                     scenario['launchRequestTemplate']['completionPolicy']['requireCustomerFinish'] = value
                     selected = self.output.parent / 'invalid.json'
                     selected.write_text(json.dumps(scenario))

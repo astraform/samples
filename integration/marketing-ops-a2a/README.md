@@ -1,14 +1,19 @@
 # Marketing customer simulation and A2A integration
 
 
-Connect the marketing domain provider and its LLM creative agency to the
-published [Astraform v0.3.0 deployment bundle](https://github.com/astraform/releases/releases/tag/v0.3.0).
-Download and verify its archive and checksum; the immutable v0.2.0 bundle does
-not support these strict templates. The matching bundle supplies Runtime and the
-coordinator as released images.
-Build the sample services below and use the published SDK to launch a customer;
-no platform source checkout is required. The creative agency exposes A2A 1.0
-JSON-RPC through the A2A Java SDK.
+Connect the marketing domain provider and its LLM creative agency to a matching
+Astraform platform candidate. The updated source templates opt in to
+`completionPolicy.requestFactBindingMode: "RESOLVE_TRUSTED"`; this requires the
+coordinator implementation and a native typed customer SDK that preserves
+that field. Published Python SDK 0.3.4 and Java SDK 0.4.4 provide the client
+capability through contracts 1.2.2. The matching server capability still requires
+a supporting platform; SDK publication does not establish that delivery.
+Do not use the released [platform v0.3.0 bundle](https://github.com/astraform/releases/releases/tag/v0.3.0)
+as evidence that trusted binding is supported. Its existing strict FINISH support
+and the new trusted-binding mode are separate capabilities. Build and verify the
+matching platform/sample candidate with the published SDK before launch;
+publication and rebuilt image/archive delivery remain separate requirements.
+The creative agency exposes A2A 1.0 JSON-RPC through the A2A Java SDK.
 
 ## Native customer simulation
 
@@ -35,6 +40,17 @@ those details does not give Quinn a practical next step. Quinn can ask for
 clarification, wait or decide to stop; neither model is forced to select a
 particular action or success label.
 
+The Creative Agency provides advice only; a request to it does not contact the
+production studio, assign work, obtain a licence or clear the launch. Quinn's
+current goal is to understand a recommendation, not execute it. If an escalation
+coordinator is unknown, a useful clarification distinguishes an established
+responsibility from a recommendation about which person or role should coordinate
+the next step or contact the studio. Repeating a request for execution through an
+advice-only service is not progress, and model summaries cannot establish work
+that has no confirming observation. Quinn's actual message should ask the specific
+clarification identified in the customer's intent, rather than resend a broad
+request while merely describing a more focused question in a summary.
+
 The customer and agency instructions distinguish unreported information from an
 explicit negative fact and preserve the scope of observed responsibilities. Both
 roles are asked to acknowledge supplied answers, including unknown or unavailable
@@ -58,9 +74,13 @@ review record's summary only when the 09:00 review executes. Before then, the
 customer sees the pending-review description. The future fixture is visible in
 operator configuration, not supplied as advance knowledge in the customer prompt.
 
-Quinn's request includes the current `reviewSummary`, bound to that observed
-record, so the agency receives the actual finding rather than only a blocked
-status. The agency LLM still chooses its advice. Configured success requires an
+With `requestFactBindingMode: "RESOLVE_TRUSTED"`, Astraform fills each configured
+bound request field from the customer's current accepted observations, including
+`reviewSummary`. The model still chooses whether and when to contact the agency,
+its instruction or question, and any unbound facts; the platform supplies the
+bound metadata without asking the model to copy long facts verbatim. The agency
+receives the actual finding rather than only a blocked status and still chooses
+its own advice. Configured success requires an
 actual JSON response with scenario `launch-blocker` and disposition `ESCALATE`
 or `UNBLOCK_PLAN`; those existing conditions are unchanged. Both templates also
 set `completionPolicy.requireCustomerFinish:true`: a qualifying receipt alone
@@ -101,21 +121,27 @@ configure its required partner token in both the agency and Astraform target.
 The customer uses the independent real-model binding below. For Gemini, use
 [the Gemini configuration](#gemini-model-selection).
 
-The recorded local LLM setup adds these agency settings to that configuration:
+The complete local Ollama profile adds these agency settings to that configuration:
 
 ```dotenv
 CREATIVE_AGENCY_LLM_MODEL=qwen3.5:4b
-CREATIVE_AGENCY_LLM_REASONING_EFFORT=none
-CREATIVE_AGENCY_LLM_MAX_OUTPUT_TOKENS=2048
-CREATIVE_AGENCY_LLM_READ_TIMEOUT=90s
+CREATIVE_AGENCY_LLM_REASONING_EFFORT=high
+CREATIVE_AGENCY_LLM_MAX_OUTPUT_TOKENS=32768
+CREATIVE_AGENCY_LLM_MAX_RESPONSE_BYTES=1048576
+CREATIVE_AGENCY_LLM_READ_TIMEOUT=60s
 CREATIVE_AGENCY_LLM_MAX_ATTEMPTS=1
-CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS=110
-CREATIVE_AGENCY_LLM_BINDING_REVISION=marketing-agency-ollama-decisions-v1
+CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS=70
+CREATIVE_AGENCY_LLM_BINDING_REVISION=marketing-starter-qwen35-4b-thinking-v3
 ```
 
-The agency's optional reasoning setting leaves other deployments unchanged
-when omitted. This local model enables thinking by default; `none` requests
-nonthinking generation through Ollama's OpenAI-compatible endpoint.
+This profile enables thinking by default and includes its finite token and
+response budgets. The complete provider request has a 60-second deadline
+with one attempt; timeout is an error without a retry or fallback answer. Set
+Runtime A2A request and poll timeouts to `150s`, with the same target binding
+revision. This transport allowance does not extend model generation. Generic provider reasoning remains explicitly
+configured; intentional operator overrides remain available. Existing private
+profiles are preserved until explicitly updated; accepted runs keep their original
+model settings and outputs.
 
 ### Configure Astraform Runtime
 
@@ -128,8 +154,10 @@ Add these connections to the bundle's `private/runtime.properties`, preserving
 any existing bindings. These examples reach sample services on the Docker host.
 On Linux, host services must listen on an interface reachable from Docker;
 replace `host.docker.internal` with a reachable private address where appropriate.
-The A2A request/poll budgets must cover the agency's outer deadline. The scenario's separate
-wall-time and interaction limits still apply.
+The A2A request/poll budgets must cover the agency's outer deadline. The example
+below uses the Gemini target revision. Both local test profiles use `150s`
+for the transport budgets; for Ollama, select `marketing-starter-qwen35-4b-thinking-v3`
+for the target binding revision. The scenario's separate wall-time and interaction limits still apply.
 
 ```properties
 simulation.event.runtime.domain.bindings.marketing-ops.base-url=http://host.docker.internal:18090
@@ -137,10 +165,10 @@ simulation.event.runtime.domain.bindings.marketing-ops.domain-id=marketing-ops
 simulation.event.runtime.domain.bindings.marketing-ops.binding-revision=marketing-ops-native-review-findings-v3
 simulation.event.runtime.domain.bindings.marketing-ops.allow-insecure-http=true
 simulation.event.runtime.a2a.enabled=true
-simulation.event.runtime.a2a.request-timeout=300s
-simulation.event.runtime.a2a.poll-timeout=300s
+simulation.event.runtime.a2a.request-timeout=150s
+simulation.event.runtime.a2a.poll-timeout=150s
 simulation.event.runtime.a2a.targets.creative-agency.base-url=http://host.docker.internal:18091
-simulation.event.runtime.a2a.targets.creative-agency.binding-revision=marketing-starter-gemini36-high-v1
+simulation.event.runtime.a2a.targets.creative-agency.binding-revision=marketing-starter-gemini36-high-v2
 simulation.event.runtime.a2a.targets.creative-agency.allow-insecure-http=true
 ```
 
@@ -153,12 +181,16 @@ This target accepts enquiries about the **observed campaign state**:
 The operation selector `scenario: "launch-blocker"`, `campaignKey`, `queueState`
 and `reviewSummary` are required. The exact provider states are
 `review_pending`, `blocked`, `active` and `clear`. The launch's existing
-`requestFactBindings` require the campaign and queue state to match the latest
-accepted provider observation. `reviewSummary` must exactly match
+`requestFactBindings` identify trusted sources for campaign, queue state and
+`reviewSummary`. Both templates select `requestFactBindingMode: "RESOLVE_TRUSTED"`:
+Astraform projects these fields from the latest accepted provider observation
+into the dispatched request. In particular, `/reviewSummary` comes from
 `/domain/observation/pendingApprovals/0/summary`; this example retains one
 pending/blocked approval. Before 09:00 that summary describes the pending task;
-after the review it contains the configured finding. Inventing or paraphrasing
-a bound field fails admission. The current provider revision is
+after the review it contains the configured finding. A model-supplied omission
+or paraphrase does not replace the bound source. Missing trusted evidence still
+fails admission. Omitted mode or explicit `VALIDATE` retains the legacy exact-match
+validation behavior; explicit modes require a typed SDK that preserves them. The current provider revision is
 `marketing-ops.native-events.v3`; update its Runtime binding and the target's
 input schema/revision together before creating new runs.
 
@@ -195,24 +227,35 @@ new runs; existing runs retain their accepted binding revisions and configuratio
 ### Launch and inspect
 
 Both marketing templates require `completionPolicy.requireCustomerFinish:true`
-and a native typed customer SDK that preserves this field. Published **Astraform
-Python author kit 0.3.3** supplies that support. The launcher rejects older 0.3.2
-before output, Catalog or launch writes. Use a supporting platform implementation;
-published platform v0.2.0 alone does not provide the strict stopping behavior.
-From the sample repository root, install the published whole SDK in Python 3.12+:
+and `completionPolicy.requestFactBindingMode: "RESOLVE_TRUSTED"`. Published
+**Astraform Python author kit 0.3.4** preserves both fields. Use it with a
+platform candidate implementing the mode; the SDK cannot supply coordinator
+behavior. From the sample repository root, install the published package in
+Python 3.12+:
 
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-python3 -m pip install 'astraform-remote-domain-author-kit==0.3.3'
+python3 -m pip install 'astraform-remote-domain-author-kit==0.3.4'
 ASTRAFORM_API_BASE=http://localhost:8084 \
   python3 integration/marketing-ops-a2a/run-customer.py --output /tmp/marketing-first --wait
 ```
 
-The current provider source uses Java author-kit/conformance **0.4.3** from Maven
-Central with shared contract **1.2.1**. The stricter customer completion field is
-included in the published Python 0.3.3 client; see the
+The current provider source uses Java author-kit/conformance **0.4.4** from Maven
+Central with shared contract **1.2.2**. These domain callbacks do not provide the
+customer-launch behavior in the server. The new mode requires both the
+published typed client and a supporting platform implementation. Source pins
+do not update existing images or archives; see the
 [SDK dependencies](../../README.md#sdk-development).
+
+The native provider supplies the marketing run identity. A custom scenario can
+also declare `launchRequestTemplate.domainId: "marketing-ops"`, which must match
+that provider. It is run classification, not an access grant or tenant boundary.
+Published Python 0.3.4 preserves this optional field. The selected platform
+candidate must also implement explicit domain identity. The launcher rejects an
+invalid or unsupported declaration before output or Catalog writes. Omitting it
+retains existing provider-derived identity and compatibility; it is never
+silently removed or manually inserted into raw HTTP.
 
 The launcher uses the normal generated Catalog and Agent Journey APIs. It shares
 save, bounded read polling and same-run export behavior with
@@ -227,9 +270,13 @@ or creating, publishing or launching a Catalog definition. With published Python
 SDK 0.3.2, this launcher rejects either explicit value. A custom scenario that omits the field
 retains the existing receipt-only behavior; omission does not satisfy these
 strict customer-completion requirements. The selected SDK must preserve the
-configured value. There is no transport bridge, manual field insertion or
-silent flag removal. SDK support is published; supporting platform and coordinated
-image/archive delivery remain separate requirements.
+configured value. Any explicit `requestFactBindingMode` must be `VALIDATE` or
+`RESOLVE_TRUSTED` and survive native typed serialization; published 0.3.4
+preserves both explicit modes. Older 0.3.3 clients cannot preserve them.
+Omission retains legacy validation. These checks
+run before output or Catalog/launch writes. There is no transport bridge, manual
+field insertion or silent mode removal. The SDK support is published; matching
+platform behavior and rebuilt image/archive delivery require separate verification.
 
 The helper prints a JSON document containing the actual launch request,
 Catalog identity and launch result. Defaults can be changed with
@@ -267,21 +314,22 @@ endpoint and credentials, export:
 
 ```bash
 export CREATIVE_AGENCY_LLM_MODEL=gemini-3.6-flash
-export CREATIVE_AGENCY_LLM_BINDING_REVISION=marketing-starter-gemini36-high-v1
+export CREATIVE_AGENCY_LLM_BINDING_REVISION=marketing-starter-gemini36-high-v2
 export CREATIVE_AGENCY_LLM_REASONING_EFFORT=high
 export CREATIVE_AGENCY_LLM_TOKEN_LIMIT_PARAMETER=max-completion-tokens
 export CREATIVE_AGENCY_LLM_MAX_OUTPUT_TOKENS=16384
-export CREATIVE_AGENCY_LLM_READ_TIMEOUT=120s
+export CREATIVE_AGENCY_LLM_READ_TIMEOUT=60s
 export CREATIVE_AGENCY_LLM_MAX_ATTEMPTS=1
-export CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS=300
+export CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS=70
 ```
 
 Use the same revision in the Runtime A2A target binding. Restart the agency and Runtime before
 launching a new run. The [agency Gemini profile](../../marketing-ops-creative-agency/README.md#google-gemini-through-its-openai-compatibility-endpoint)
-contains the remaining endpoint and credential settings. The two-second connect
-and 120-second read use one attempt within the 300-second agency deadline;
-configure Runtime request and poll budgets to `300s`. These limits differ from
-the banking adapter's larger token/read ceilings. Changing either model requires
+contains the remaining endpoint and credential settings. The complete provider
+request has a 60-second deadline with one attempt inside the 70-second agency
+deadline; configure Runtime request and poll budgets to `150s`. The outer
+transport budget does not extend model generation or enable retries. Banking
+and marketing retain independent token ceilings. Changing either model requires
 restarting its service and creating a fresh simulation; it does not change an
 accepted run or rewrite an existing private profile. Immutable published images
 retain their recorded versions; a newly built candidate requires its own SDK
@@ -341,8 +389,9 @@ packages these scripts, scenario and private-network image topology. The
 samples v0.2.0 release plan selects its scheduled variant with explicit platform
 v0.3.0 compatibility and reviewed anonymous images. It is not published yet;
 the separate local-verification mode keeps its local-only markers and does not
-replace this editable source example. Current source uses Java SDK 0.4.3 for the domain provider and Python
-SDK 0.3.3 for native customer launch/inspection/export. Existing starter candidates
-and published artifacts retain their recorded image versions; rebuild and verify
-new images before packaging these strict templates. Public platform/image/archive
+replace this editable source example. Current domain source uses Java SDK 0.4.4.
+The updated customer templates use Python SDK 0.3.4 for the typed capabilities
+described above. Existing tools images and starter artifacts retain their recorded
+versions; rebuild the tools image with that SDK and verify the supporting
+platform before packaging these templates for partners. Public platform/image/archive
 and independent onboarding delivery remain pending.
