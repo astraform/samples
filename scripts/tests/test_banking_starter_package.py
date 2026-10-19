@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -176,6 +177,35 @@ class BankingStarterPackageTest(unittest.TestCase):
                 self.assertEqual("banking-python" if bank == "python" else "banking", configuration["domainId"])
                 self.assertEqual(scenario == "monthly", configuration["nativeDomainEnabled"])
 
+    def test_declared_domain_tracks_selected_bank_variant_in_hash_verified_archive(self):
+        self.scenario['launchRequestTemplate']['domainId'] = 'banking'
+        for scenario_file in ('issued-statement-configuration.json', 'three-month-configuration.json'):
+            (self.root / 'banking-advice-agent' / scenario_file).write_text(json.dumps(self.scenario))
+        with patch.object(packager.subprocess, 'check_output') as docker:
+            with self.assertRaisesRegex(ValueError, 'domainId'):
+                packager.package('v0.1.0', self.images, self.output / 'public',
+                                  False, self.source_revision, platform_release='v0.3.0')
+            docker.assert_not_called()
+        self.assertFalse((self.output / 'public').exists())
+        for bank in ('python', 'java'):
+            with self.subTest(bank=bank), patch.object(packager.subprocess, 'check_output', return_value='sha256:' + 'b' * 64 + '\n'):
+                bundle = packager.package('v0.1.0', self.images, self.output / bank,
+                                          True, self.source_revision, bank, 'monthly')
+            configuration = json.loads((bundle / 'starter-config.json').read_text())
+            scenario = json.loads((bundle / 'scenario.json').read_text())
+            manifest = json.loads((bundle / 'bundle-manifest.json').read_text())
+            self.assertEqual(configuration['domainId'], scenario['launchRequestTemplate']['domainId'])
+            self.assertEqual(configuration['domainId'], manifest['requiredPlatform']['domainId'])
+            self.assertTrue(configuration['requiresUnreleasedPlatform'])
+            self.assertFalse(configuration['requiresUnreleasedCustomerSdk'])
+            self.assertIn('domainId', configuration['requiredPlatformCapabilities'])
+            self.assertIn('domainId', configuration['requiredCustomerSdkCapabilities'])
+            self.assertEqual(packager.file_hash(bundle / 'scenario.json'), manifest['files']['scenario.json']['sha256'])
+            with tarfile.open(self.output / bank / (bundle.name + '.tar.gz')) as archive:
+                self.assertEqual(scenario, json.load(archive.extractfile(bundle.name + '/scenario.json')))
+        # Variant selection must not rewrite the editable source scenario.
+        self.assertEqual(self.scenario, json.loads((self.root / 'banking-advice-agent/three-month-configuration.json').read_text()))
+
     def test_public_variants_require_an_explicit_supporting_platform_release(self):
         with patch.object(packager.subprocess, "check_output") as docker:
             for bank, scenario in (("java", "issued"), ("python", "monthly"), ("java", "monthly")):
@@ -331,22 +361,26 @@ class BankingStarterInitializationTest(unittest.TestCase):
         self.assertEqual(runtime, self.runtime.read_bytes())
         self.assertEqual(before, {path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()})
 
-    def test_ollama_initialization_keeps_partner_call_within_a2a_budget(self):
+    def assert_selected_profile_wiring(self, selected, starter):
+        partner = self.initializer.env(starter / "private/partner.env")
+        bindings = self.initializer.env(starter / "private/runtime-bindings.properties")
+        self.assertEqual(selected, partner)
+        # Both outer deadlines need room for the model, the bounded bank read and the reply.
+        deadlines = {}
+        for key in ("request-timeout", "poll-timeout"):
+            timeout = float(bindings["simulation.event.runtime.a2a." + key].removesuffix("s"))
+            self.assertTrue(math.isfinite(timeout))
+            self.assertGreater(timeout, 10 + float(selected["BANKING_LLM_TIMEOUT_SECONDS"]))
+            deadlines[key] = timeout
+        for key in ("simulation.event.runtime.a2a.targets.banking-advice.binding-revision",
+                    "simulation.event.runtime.mcp.bindings.banking.binding-revision"):
+            self.assertEqual(selected["BANKING_LLM_BINDING_REVISION"], bindings[key])
+        return deadlines
+
+    def test_ollama_profile_is_preserved_and_outer_deadlines_cover_model_call(self):
+        selected = self.initializer.env(self.root / "models/ollama.env.example")
         self.initializer.initialize(self.platform, "ollama")
-        partner = self.initializer.env(self.root / "private/partner.env")
-        bindings = (self.root / "private/runtime-bindings.properties").read_text()
-        timeout = next(line.split("=", 1)[1] for line in bindings.splitlines()
-                       if line.startswith("simulation.event.runtime.a2a.request-timeout="))
-        self.assertEqual("900s", timeout)
-        self.assertIn("simulation.event.runtime.a2a.poll-timeout=900s\n", bindings)
-        self.assertEqual("840", partner["BANKING_LLM_TIMEOUT_SECONDS"])
-        self.assertLess(10 + float(partner["BANKING_LLM_TIMEOUT_SECONDS"]), float(timeout[:-1]))
-        self.assertEqual("banking-starter-qwen35-4b-thinking-v8", partner["BANKING_LLM_BINDING_REVISION"])
-        self.assertEqual("32768", partner["BANKING_LLM_MAX_OUTPUT_TOKENS"])
-        self.assertEqual("high", partner["BANKING_LLM_REASONING_EFFORT"])
-        self.assertEqual("1.0", partner["BANKING_LLM_TEMPERATURE"])
-        self.assertEqual(self.original, (self.root / "private/runtime.properties.before-starter").read_text())
-        self.assertTrue(self.runtime.read_text().startswith(self.original))
+        self.assert_selected_profile_wiring(selected, self.root)
 
     def test_existing_ollama_poll_timeout_is_preserved_before_any_starter_write(self):
         existing = self.original + "simulation.event.runtime.a2a.poll-timeout=90s\n"
@@ -357,20 +391,10 @@ class BankingStarterInitializationTest(unittest.TestCase):
         self.assertFalse((self.root / ".env").exists())
         self.assertFalse((self.root / "private").exists())
 
-    def test_gemini_thinking_profile_sets_matching_revision_and_bounded_request_and_poll(self):
+    def test_gemini_profile_is_preserved_and_outer_deadlines_cover_model_call(self):
+        selected = self.initializer.env(self.root / "models/gemini.env.example")
         self.initializer.initialize(self.platform, "gemini")
-        partner = self.initializer.env(self.root / "private/partner.env")
-        bindings = self.initializer.env(self.root / "private/runtime-bindings.properties")
-        self.assertEqual("900s", bindings["simulation.event.runtime.a2a.request-timeout"])
-        self.assertEqual("900s", bindings["simulation.event.runtime.a2a.poll-timeout"])
-        self.assertEqual("gemini-3.6-flash", partner["BANKING_LLM_MODEL"])
-        self.assertEqual("840", partner["BANKING_LLM_TIMEOUT_SECONDS"])
-        self.assertEqual("32768", partner["BANKING_LLM_MAX_OUTPUT_TOKENS"])
-        self.assertEqual("high", partner["BANKING_LLM_REASONING_EFFORT"])
-        self.assertEqual("1.0", partner["BANKING_LLM_TEMPERATURE"])
-        self.assertEqual(partner["BANKING_LLM_BINDING_REVISION"],
-                         bindings["simulation.event.runtime.a2a.targets.banking-advice.binding-revision"])
-        self.assertEqual(self.original, (self.root / "private/runtime.properties.before-starter").read_text())
+        self.assert_selected_profile_wiring(selected, self.root)
 
     def test_gemini_existing_poll_timeout_is_preserved_before_any_starter_write(self):
         existing = self.original + "simulation.event.runtime.a2a.poll-timeout=90s\n"
@@ -382,17 +406,23 @@ class BankingStarterInitializationTest(unittest.TestCase):
         self.assertFalse((self.root / "private").exists())
 
     def test_a2a_budget_and_binding_revision_follow_selected_profile(self):
-        profile_path = self.root / "models/gemini.env.example"
-        profile_path.write_text(profile_path.read_text().replace("TIMEOUT_SECONDS=840", "TIMEOUT_SECONDS=240")
-                                .replace("banking-starter-gemini36-high-v1", "operator-reviewed-gemini-v2"))
-        self.initializer.initialize(self.platform, "gemini")
-        partner = self.initializer.env(self.root / "private/partner.env")
-        bindings = self.initializer.env(self.root / "private/runtime-bindings.properties")
-        self.assertEqual("300s", bindings["simulation.event.runtime.a2a.request-timeout"])
-        self.assertEqual("300s", bindings["simulation.event.runtime.a2a.poll-timeout"])
-        self.assertEqual("operator-reviewed-gemini-v2", partner["BANKING_LLM_BINDING_REVISION"])
-        self.assertEqual(partner["BANKING_LLM_BINDING_REVISION"],
-                         bindings["simulation.event.runtime.a2a.targets.banking-advice.binding-revision"])
+        observed = []
+        for index, timeout in enumerate(("37.25", "241.25")):
+            with self.subTest(timeout=timeout):
+                starter = self.root.with_name(f"starter-override-{index}")
+                platform = self.platform.with_name(f"platform-override-{index}")
+                shutil.copytree(self.root, starter)
+                shutil.copytree(self.platform, platform)
+                profile_path = starter / "models/gemini.env.example"
+                selected = self.initializer.env(profile_path)
+                selected.update(BANKING_LLM_TIMEOUT_SECONDS=timeout,
+                                BANKING_LLM_BINDING_REVISION="operator-reviewed-profile")
+                profile_path.write_text("".join(f"{key}={value}\n" for key, value in selected.items()))
+                with patch.object(self.initializer, "ROOT", starter):
+                    self.initializer.initialize(platform, "gemini")
+                observed.append(self.assert_selected_profile_wiring(selected, starter))
+        for key in ("request-timeout", "poll-timeout"):
+            self.assertGreater(observed[1][key], observed[0][key])
 
     def test_compose_uses_saved_project_and_images_even_for_down(self):
         self.initializer.initialize(self.platform, "gemini")

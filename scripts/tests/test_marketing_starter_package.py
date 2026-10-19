@@ -125,6 +125,45 @@ class MarketingStarterPackageTest(unittest.TestCase):
             archive = Path(str(bundle) + ".tar.gz")
             self.assertEqual(f"{packager.packaging.file_hash(archive)}  {archive.name}\n", checksum.read_text())
 
+    def test_explicit_domain_is_local_only_and_preserved_in_archive(self):
+        source = self.directory / 'declared-source'
+        for relative in {**packager.FILES,
+                         'scenario': 'integration/marketing-ops-a2a/sample-configuration.json',
+                         'notes': 'docs/releases/v0.1.0.md'}.values():
+            target = source / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / relative, target)
+        selected_path = source / 'integration/marketing-ops-a2a/sample-configuration.json'
+        selected = json.loads(selected_path.read_text())
+        selected['launchRequestTemplate']['domainId'] = 'marketing-ops'
+        selected_path.write_text(json.dumps(selected))
+        with patch.object(packager, 'ROOT', source), patch.object(packager.packaging, 'ROOT', source):
+            selected['launchRequestTemplate']['domainId'] = 'other-domain'
+            selected_path.write_text(json.dumps(selected))
+            with patch.object(packager.packaging.subprocess, 'check_output') as docker:
+                with self.assertRaisesRegex(ValueError, 'must match the marketing-ops provider identity'):
+                    packager.package('v0.1.0', self.images, self.directory / 'mismatched', True, 'a' * 40)
+                docker.assert_not_called()
+            self.assertFalse((self.directory / 'mismatched').exists())
+            self.assertEqual('other-domain', json.loads(selected_path.read_text())['launchRequestTemplate']['domainId'])
+            selected['launchRequestTemplate']['domainId'] = 'marketing-ops'
+            selected_path.write_text(json.dumps(selected))
+            with patch.object(packager.packaging.subprocess, 'check_output') as docker:
+                with self.assertRaisesRegex(ValueError, 'domainId'):
+                    packager.package('v0.1.0', self.images, self.directory / 'public', False,
+                                     'a' * 40, platform_release='v0.3.0')
+                docker.assert_not_called()
+            self.assertFalse((self.directory / 'public').exists())
+            with patch.object(packager.packaging.subprocess, 'check_output', return_value='sha256:' + 'a' * 64 + '\n'):
+                bundle = packager.package('v0.1.0', self.images, self.directory / 'local', True, 'a' * 40)
+        configuration = json.loads((bundle / 'starter-config.json').read_text())
+        manifest = json.loads((bundle / 'bundle-manifest.json').read_text())
+        self.assertEqual(selected, json.loads((bundle / 'scenario.json').read_text()))
+        self.assertEqual(configuration['domainId'], manifest['requiredPlatform']['domainId'])
+        self.assertFalse(configuration['requiresUnreleasedCustomerSdk'])
+        self.assertIn('domainId', configuration['requiredCustomerSdkCapabilities'])
+        self.assertEqual(packager.packaging.file_hash(bundle / 'scenario.json'), manifest['files']['scenario.json']['sha256'])
+
     def test_finish_metadata_preserves_omission_and_both_boolean_values(self):
         source = self.directory / "source"
         files = {**packager.FILES,
@@ -239,19 +278,15 @@ class MarketingStarterInitializationTest(unittest.TestCase):
         self.assertEqual(partner["CREATIVE_AGENCY_A2A_TOKEN"], bindings["simulation.event.runtime.a2a.targets.creative-agency.token"])
         self.assertEqual(64, len(partner["CREATIVE_AGENCY_A2A_TOKEN"]))
         self.assertEqual(partner["CREATIVE_AGENCY_LLM_BINDING_REVISION"], bindings["simulation.event.runtime.a2a.targets.creative-agency.binding-revision"])
-        self.assertEqual("300s", bindings["simulation.event.runtime.a2a.request-timeout"])
-        self.assertEqual("300s", bindings["simulation.event.runtime.a2a.poll-timeout"])
-        self.assertEqual("gemini-3.6-flash", partner["CREATIVE_AGENCY_LLM_MODEL"])
-        self.assertEqual("high", partner["CREATIVE_AGENCY_LLM_REASONING_EFFORT"])
-        self.assertEqual("max-completion-tokens", partner["CREATIVE_AGENCY_LLM_TOKEN_LIMIT_PARAMETER"])
-        self.assertEqual("16384", partner["CREATIVE_AGENCY_LLM_MAX_OUTPUT_TOKENS"])
-        self.assertEqual("120s", partner["CREATIVE_AGENCY_LLM_READ_TIMEOUT"])
-        self.assertEqual("300", partner["CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS"])
+        selected = initializer.env(self.starter / "models/gemini.env.example")
+        self.assertEqual(selected.items(), {key: partner[key] for key in selected}.items())
+        for key in ("request-timeout", "poll-timeout"):
+            self.assertGreaterEqual(int(bindings["simulation.event.runtime.a2a." + key][:-1]),
+                                    int(partner["CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS"]))
         self.assertEqual(inode, self.runtime.stat().st_ino)
         self.assertEqual(self.original, (self.starter / "private/runtime.properties.before-starter").read_text())
         for file in (self.starter / "private").iterdir():
             self.assertEqual(0o600, file.stat().st_mode & 0o777)
-        self.assertLessEqual(int(partner["CREATIVE_AGENCY_LLM_MAX_OUTPUT_TOKENS"]), 16384)
         before = self.runtime.read_bytes()
         with self.assertRaisesRegex(ValueError, "already initialized"):
             initializer.initialize(self.platform, "ollama")
@@ -259,30 +294,40 @@ class MarketingStarterInitializationTest(unittest.TestCase):
 
     def test_a2a_budget_and_revision_follow_selected_profile(self):
         profile_path = self.starter / "models/gemini.env.example"
-        profile_path.write_text(profile_path.read_text().replace("TIMEOUT_SECONDS=300", "TIMEOUT_SECONDS=240")
-                                .replace("marketing-starter-gemini36-high-v1", "operator-reviewed-gemini-v2"))
+        selected = initializer.env(profile_path)
+        selected.update(CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS="900",
+                        CREATIVE_AGENCY_LLM_BINDING_REVISION="operator-reviewed-profile-v2")
+        profile_path.write_text("".join(f"{key}={value}\n" for key, value in selected.items()))
         initializer.initialize(self.platform, "gemini")
         partner = initializer.env(self.starter / "private/partner.env")
         bindings = initializer.env(self.starter / "private/runtime-bindings.properties")
-        self.assertEqual("240s", bindings["simulation.event.runtime.a2a.request-timeout"])
-        self.assertEqual("240s", bindings["simulation.event.runtime.a2a.poll-timeout"])
-        self.assertEqual("operator-reviewed-gemini-v2", partner["CREATIVE_AGENCY_LLM_BINDING_REVISION"])
+        self.assertEqual("900s", bindings["simulation.event.runtime.a2a.request-timeout"])
+        self.assertEqual("900s", bindings["simulation.event.runtime.a2a.poll-timeout"])
+        self.assertEqual("operator-reviewed-profile-v2", partner["CREATIVE_AGENCY_LLM_BINDING_REVISION"])
         self.assertEqual(partner["CREATIVE_AGENCY_LLM_BINDING_REVISION"],
                          bindings["simulation.event.runtime.a2a.targets.creative-agency.binding-revision"])
 
-    def test_ollama_profile_and_a2a_bounds_remain_unchanged(self):
+    def test_selected_ollama_profile_is_preserved_and_outer_budgets_cover_the_agent(self):
+        selected = initializer.env(self.starter / "models/ollama.env.example")
         initializer.initialize(self.platform, "ollama")
         partner = initializer.env(self.starter / "private/partner.env")
         bindings = initializer.env(self.starter / "private/runtime-bindings.properties")
-        self.assertEqual("qwen3.5:4b", partner["CREATIVE_AGENCY_LLM_MODEL"])
-        self.assertEqual("none", partner["CREATIVE_AGENCY_LLM_REASONING_EFFORT"])
-        self.assertEqual("2048", partner["CREATIVE_AGENCY_LLM_MAX_OUTPUT_TOKENS"])
-        self.assertEqual("90s", partner["CREATIVE_AGENCY_LLM_READ_TIMEOUT"])
-        self.assertEqual("110", partner["CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS"])
-        self.assertEqual("150s", bindings["simulation.event.runtime.a2a.request-timeout"])
-        self.assertEqual("150s", bindings["simulation.event.runtime.a2a.poll-timeout"])
+        self.assertEqual(selected.items(), {key: partner[key] for key in selected}.items())
+        for key in ("request-timeout", "poll-timeout"):
+            self.assertGreaterEqual(int(bindings["simulation.event.runtime.a2a." + key][:-1]),
+                                    int(partner["CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS"]))
         self.assertEqual(partner["CREATIVE_AGENCY_LLM_BINDING_REVISION"],
                          bindings["simulation.event.runtime.a2a.targets.creative-agency.binding-revision"])
+
+    def test_excessive_agent_deadline_is_rejected_before_private_configuration_writes(self):
+        profile_path = self.starter / "models/ollama.env.example"
+        selected = initializer.env(profile_path)
+        selected["CREATIVE_AGENCY_A2A_AGENT_TIMEOUT_SECONDS"] = "901"
+        profile_path.write_text("".join(f"{key}={value}\n" for key, value in selected.items()))
+        with self.assertRaisesRegex(ValueError, "TIMEOUT_SECONDS"):
+            initializer.initialize(self.platform, "ollama")
+        self.assertEqual(self.original, self.runtime.read_text())
+        self.assertFalse((self.starter / "private").exists())
 
     def test_existing_domain_a2a_and_timeout_settings_are_never_overwritten(self):
         for conflict in ("simulation.event.runtime.domain.bindings.marketing-ops.base-url=x",

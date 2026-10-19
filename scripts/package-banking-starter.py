@@ -22,8 +22,8 @@ FILES = {
     "bank-backend.input.schema.json": "banking-advice-agent/bank-backend.input.schema.json",
     "scenario.json": "banking-advice-agent/issued-statement-configuration.json",
 }
-COMPATIBILITY = {"pythonSdk": "0.3.3", "contracts": "1.2.1"}
-LOCAL_COMPATIBILITY = {"platform": "0.2.0", "pythonSdk": "0.3.3", "contracts": "1.2.1"}
+COMPATIBILITY = {"pythonSdk": "0.3.4", "contracts": "1.2.2"}
+LOCAL_COMPATIBILITY = {"platform": "0.2.0", "pythonSdk": "0.3.4", "contracts": "1.2.2"}
 IMAGE_VARIABLES = {"banking": "BANKING_IMAGE", "advice": "ADVICE_IMAGE", "postgres": "POSTGRES_IMAGE"}
 DIGEST_IMAGE = re.compile(r"[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}")
 TAGGED_IMAGE = re.compile(r"[a-z0-9][a-z0-9._:/-]*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}")
@@ -154,6 +154,14 @@ def package_bundle(version, images, output, source_revision, files, bundle_name,
             target = bundle / filename
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / relative, target)
+            if (filename == "scenario.json" and configuration is not None
+                    and schema_version == "astraform.banking-starter.bundle.v1"):
+                scenario = json.loads(target.read_text())
+                launch = scenario.get("launchRequestTemplate", {})
+                if "domainId" in launch:
+                    # The starter explicitly declares its provider variant; this is not tool-name inference.
+                    launch["domainId"] = configuration["domainId"]
+                    write_json(target, scenario)
         write_json(bundle / "image-lock.json", images)
         variables = {name: name.upper() + "_IMAGE" for name in images}
         if schema_version == "astraform.banking-starter.bundle.v1":
@@ -213,30 +221,39 @@ def package(version, images, output, local_verification=False, source_revision=N
     source = ROOT / files["scenario.json"]
     require(source.is_file() and not source.is_symlink(), f"Missing or unsafe starter source: {files['scenario.json']}")
     selected = json.loads(source.read_text())
+    launch = selected.get("launchRequestTemplate", {})
+    domain_present = "domainId" in launch
+    require(not domain_present or type(launch["domainId"]) is str and
+            re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,127}", launch["domainId"]) is not None,
+            "launch.domainId must be a lowercase domain identifier when present")
     policy = selected.get("launchRequestTemplate", {}).get("completionPolicy", {})
     finish_present = "requireCustomerFinish" in policy
     finish = policy.get("requireCustomerFinish")
     require(not finish_present or type(finish) is bool,
             "completionPolicy.requireCustomerFinish must be a Boolean when present")
     platform_release = declared_platform_release(local_verification, platform_release)
+    require(local_verification or not domain_present,
+            "Explicit launch.domainId requires a supporting platform release; use local verification until that capability is published, or a compatible scenario omitting it")
     configuration = {
         "schemaVersion": "astraform.banking-starter.configuration.v1",
         "bankImplementation": bank, "scenario": scenario,
         "bankPort": 8092 if bank == "python" else 8094,
         "domainId": "banking-python" if bank == "python" else "banking",
         "nativeDomainEnabled": scenario == "monthly",
-        "requiresUnreleasedPlatform": local_verification and finish_present,
+        "requiresUnreleasedPlatform": domain_present or local_verification and finish_present,
         "requiredPlatformCapabilities": (["retainedParticipationSupported"] if scenario == "monthly" else [])
-            + (["completionPolicy.requireCustomerFinish"] if finish_present else []),
+            + (["completionPolicy.requireCustomerFinish"] if finish_present else []) + (["domainId"] if domain_present else []),
         "requiresUnreleasedCustomerSdk": False,
-        "requiredCustomerSdkCapabilities": ["completionPolicy.requireCustomerFinish"] if finish_present else [],
+        "requiredCustomerSdkCapabilities": (["completionPolicy.requireCustomerFinish"] if finish_present else []) + (["domainId"] if domain_present else []),
     }
     compatibility = {**(LOCAL_COMPATIBILITY if local_verification else {
                          **COMPATIBILITY, "platform": platform_release.removeprefix("v")}),
-                     **({"javaSdk": "0.4.3"} if bank == "java" else {})}
+                     **({"javaSdk": "0.4.4"} if bank == "java" else {})}
     if local_verification and finish_present:
         compatibility["platform"] = "unreleased-local-customer-finish"
     required_platform = {"completionPolicy.requireCustomerFinish": finish} if finish_present else {}
+    if domain_present:
+        required_platform["domainId"] = configuration["domainId"]
     if scenario == "monthly":
         required_platform["retainedParticipationSupported"] = True
     if platform_release:
@@ -246,10 +263,10 @@ def package(version, images, output, local_verification=False, source_revision=N
     return package_bundle(version, images, output, source_revision, files, bundle_name,
                           compatibility, "astraform.banking-starter.bundle.v1", local_verification,
                           configuration, required_platform or None,
-                          "Local compatibility records current source dependency targets: Python SDK 0.3.3, contracts 1.2.1 and Java SDK 0.4.3 when selected. Actual image contents require separate installed-package verification against the recorded image IDs. Native customer completion is available in published Python SDK 0.3.3; a supporting local platform is still required when completionPolicy.requireCustomerFinish is present. See starter-config.json requiredCustomerSdkCapabilities."
+                          "Local compatibility records current source dependency targets: Python SDK 0.3.4, contracts 1.2.2 and Java SDK 0.4.4 when selected. Actual image contents require separate installed-package verification against the recorded image IDs. Published Python SDK 0.3.4 preserves explicit launch.domainId and native customer completion. The selected platform must implement each declared capability; publishing an SDK does not add platform behavior. See starter-config.json requiredCustomerSdkCapabilities."
                           if local_verification else
-                          f"Declared compatibility requires Astraform Platform {platform_release}, Python SDK 0.3.3, contracts 1.2.1"
-                          + (" and Java SDK 0.4.3" if bank == "java" else "")
+                          f"Declared compatibility requires Astraform Platform {platform_release}, Python SDK 0.3.4, contracts 1.2.2"
+                          + (" and Java SDK 0.4.4" if bank == "java" else "")
                           + ". This dependency declaration is not proof of platform publication or availability. Verify the selected public platform release and the installed SDK packages in the pinned images before publication.")
 
 def main():

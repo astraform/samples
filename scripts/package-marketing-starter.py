@@ -3,6 +3,7 @@
 import argparse
 import importlib.util
 import json
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -34,35 +35,46 @@ def package(version, images, output, local_verification=False, source_revision=N
     packaging.require(source.is_file() and not source.is_symlink(),
                       f"Missing or unsafe starter source: {files['scenario.json']}")
     selected = json.loads(source.read_text())
+    launch = selected.get("launchRequestTemplate", {})
+    domain_present = "domainId" in launch
+    packaging.require(not domain_present or type(launch["domainId"]) is str and
+            re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,127}", launch["domainId"]) is not None,
+            "launch.domainId must be a lowercase domain identifier when present")
+    packaging.require(not domain_present or launch["domainId"] == "marketing-ops",
+                      "launch.domainId must match the marketing-ops provider identity")
     policy = selected.get("launchRequestTemplate", {}).get("completionPolicy", {})
     finish_present = "requireCustomerFinish" in policy
     finish = policy.get("requireCustomerFinish")
     packaging.require(not finish_present or type(finish) is bool,
                       "completionPolicy.requireCustomerFinish must be a Boolean when present")
     platform_release = packaging.declared_platform_release(local_verification, platform_release)
+    packaging.require(local_verification or not domain_present,
+            "Explicit launch.domainId requires a supporting platform release; use local verification until that capability is published, or a compatible scenario omitting it")
     configuration = {"schemaVersion": "astraform.marketing-starter.configuration.v1",
                      "scenario": scenario, "domainId": "marketing-ops",
                      "domainPort": 8090, "agencyPort": 8091,
-                     "requiresUnreleasedPlatform": local_verification and finish_present,
-                     "requiredPlatformCapabilities": ["completionPolicy.requireCustomerFinish"] if finish_present else [],
+                     "requiresUnreleasedPlatform": domain_present or local_verification and finish_present,
+                     "requiredPlatformCapabilities": (["completionPolicy.requireCustomerFinish"] if finish_present else []) + (["domainId"] if domain_present else []),
                      "requiresUnreleasedCustomerSdk": False,
-                     "requiredCustomerSdkCapabilities": ["completionPolicy.requireCustomerFinish"] if finish_present else [],
+                     "requiredCustomerSdkCapabilities": (["completionPolicy.requireCustomerFinish"] if finish_present else []) + (["domainId"] if domain_present else []),
                      "customerEvidenceHelper": "customer-run-evidence.py"}
     compatibility = {**(packaging.LOCAL_COMPATIBILITY if local_verification else {
                          **packaging.COMPATIBILITY, "platform": platform_release.removeprefix("v")}),
-                     "javaSdk": "0.4.3"}
+                     "javaSdk": "0.4.4"}
     if local_verification and finish_present:
         compatibility["platform"] = "unreleased-local-customer-finish"
     required_platform = {"completionPolicy.requireCustomerFinish": finish} if finish_present else {}
+    if domain_present:
+        required_platform["domainId"] = configuration["domainId"]
     if platform_release:
         required_platform["release"] = platform_release
     return packaging.package_bundle(version, images, output, source_revision, files,
         f"astraform-marketing-{scenario}-starter-{version}",
         compatibility, "astraform.marketing-starter.bundle.v1", local_verification, configuration,
         required_platform or None,
-        "Local compatibility records current source dependency targets: Java SDK 0.4.3, Python SDK 0.3.3 and contracts 1.2.1. Actual image contents require separate installed-package verification against the recorded image IDs. Native customer completion is available in published Python SDK 0.3.3; a supporting local platform is still required when completionPolicy.requireCustomerFinish is present."
+        "Local compatibility records current source dependency targets: Java SDK 0.4.4, Python SDK 0.3.4 and contracts 1.2.2. Actual image contents require separate installed-package verification against the recorded image IDs. Published Python SDK 0.3.4 preserves explicit launch.domainId and native customer completion. The selected platform must implement each declared capability; publishing an SDK does not add platform behavior."
         if local_verification else
-        f"Declared compatibility requires Astraform Platform {platform_release}, Java SDK 0.4.3, Python SDK 0.3.3 and contracts 1.2.1. This dependency declaration is not proof of platform publication or availability. Verify the selected public platform release and the installed SDK packages in the pinned images before publication.")
+        f"Declared compatibility requires Astraform Platform {platform_release}, Java SDK 0.4.4, Python SDK 0.3.4 and contracts 1.2.2. This dependency declaration is not proof of platform publication or availability. Verify the selected public platform release and the installed SDK packages in the pinned images before publication.")
 
 
 def main():
