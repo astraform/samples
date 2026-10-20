@@ -3,7 +3,20 @@
 All examples share one samples repository version. Platform and SDK releases are
 versioned separately. Detailed notes live under [docs/releases](docs/releases).
 
-## v0.2.0 (unreleased)
+## Unreleased
+
+- Move the generic Java/Spring provider starter into `starter-java-spring`, with
+  a standalone Spring Boot build, lifecycle/catalog conformance and work replay
+  checks. Distribute it as sample source instead of an SDK Maven artifact.
+- Rename the source SDK dependencies to `ai.astraform:sdk-java:0.4.5` and
+  `astraform-sdk==0.3.5`, retaining imports and public APIs. Source builds require
+  the new SDK releases and regenerated Python registry locks.
+- Use published contracts 1.2.3 and `ai.astraform:conformance-java:0.4.5` for Java
+  provider tests. Python provider checks use `astraform-conformance==0.3.5`,
+  preserving imports and the `remote-domain-conformance` command.
+- Preserve the published v0.2.0 images, archives, checksums and release selection.
+
+## v0.2.0
 
 - Prepare Python-issued, Java-issued, Java-monthly and scheduled-marketing
   archives under one samples release, targeting platform v0.4.0 and published
@@ -15,8 +28,8 @@ versioned separately. Detailed notes live under [docs/releases](docs/releases).
   request-fact binding requirements; reject unsupported platform versions before
   image access or archive output without removing scenario fields.
 - Preserve explicitly marked local rehearsals and historical v0.1.0 bytes.
-  The draft release selection remains unready until real revisions, image
-  digests and archive checksums are reviewed.
+  The published v0.2.0 selection records its source revisions, image digests
+  and archive checksums; future releases must use a new reviewed selection.
 
 See [v0.2.0 preparation notes](docs/releases/v0.2.0.md).
 

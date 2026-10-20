@@ -1,16 +1,15 @@
 # Astraform Samples
 
 Build and adapt partner services that Astraform customer agents can exercise.
-Platform operations use the published Java/Python SDKs directly; partner
-services expose A2A, MCP and domain APIs. The next samples release, **v0.2.0**,
-is being prepared for **platform v0.4.0**, Java **0.4.4**, Python
-**0.3.4** and contracts **1.2.2**. The new sample images and starter archives are
-not yet published.
-Strict issued banking requires the supporting platform as well as the native
-typed SDK. The current banking domain label and marketing trusted-fact binding
-also require a platform implementing those capabilities; SDK publication does
-not add them to an existing platform bundle. The immutable public baseline remains samples v0.1.0
-with platform v0.2.0 and its original dependency versions.
+Platform operations use the native Java/Python SDKs directly; partner services
+expose A2A, MCP and domain APIs. The published **samples v0.2.0** images and
+starter archives target **platform v0.4.0**, Java **0.4.4**, Python **0.3.4**
+and contracts **1.2.2**. Their dependency names and bytes remain unchanged.
+
+This source checkout targets the next SDK releases: **`ai.astraform:sdk-java:0.4.5`**
+and **`astraform-sdk==0.3.5`**, built against published **contracts 1.2.3**.
+Registry-only source builds require those SDK releases to be published first.
+See [SDK development](#sdk-development) before building this checkout.
 
 Clone the examples to build and adapt them:
 
@@ -23,15 +22,15 @@ cd samples
 
 | Start here | What it runs |
 | --- | --- |
-| [Python banking starter](deploy/banking-starter/README.md) | An image-only deployment with a separate bank database, an LLM banking partner and one customer asking about an issued statement. Available as a starter archive in the published repository release v0.1.0. That archive retains its original scenario and completion behavior. |
+| [Python banking starter](deploy/banking-starter/README.md) | An image-only deployment with a separate bank database, an LLM banking partner and one customer asking about an issued statement. Available in the published samples v0.2.0 release. Follow its bundled dependency requirements. |
 | [Banking from sample source](banking-advice-agent/README.md) | Build either bank and configure the shared LLM partner. The default and monthly cases use the published customer SDK; strict issued-statement completion and the declared domain label use the published native SDK and require the supporting platform capabilities described in the guide. |
 | [Marketing from sample source](integration/marketing-ops-a2a/README.md#native-customer-simulation) | Build the Marketing Ops provider and LLM Creative Agency, configure their connections and launch a customer seeking campaign advice. |
 
 For the historical starter v0.1.0 and compatible non-strict source scenarios,
 the public baseline is [Astraform Platform v0.2.0](https://github.com/astraform/releases/releases/tag/v0.2.0).
-The current source scenarios and next starter release target platform **v0.4.0**
+The current source scenarios and published v0.2.0 starters target platform **v0.4.0**
 for explicit banking domain identity and marketing trusted request-fact binding.
-Obtain its archive/checksum from the platform releases only after publication.
+Obtain its archive/checksum from the public platform releases.
 Platform v0.3.0 supplies strict customer-FINISH behavior but does not supply
 these additional capabilities. Verify the selected server and image versions
 before launching.
@@ -84,6 +83,7 @@ completed execution does not by itself mean the customer achieved its goal.
 
 | Component | Role |
 | --- | --- |
+| [Java provider starter](starter-java-spring/README.md) | Minimal Java/Spring domain lifecycle and file-backed population catalog for a new provider |
 | [Java banking](java-spring-banking/README.md) | Java/Spring bank, customer-scoped MCP access and optional monthly statement work |
 | [Python banking](python-fastapi-banking/README.md) | Python/FastAPI bank using the same public contracts and shared banking scenarios |
 | [Banking Advice](banking-advice-agent/README.md) | LLM partner agent that answers using the selected bank's records over A2A |
@@ -99,27 +99,42 @@ The banking and marketing guides describe those bindings and their limitations.
 
 ## SDK development
 
-Each author kit includes both integration directions: domain interfaces for
-Astraform to call your provider, and a platform client for configuring customers,
-launching simulations and retrieving results. Use:
+Each SDK includes both integration directions: domain interfaces for Astraform
+to call your provider, and a platform client for configuring customers, launching
+simulations and retrieving results. Current source dependencies are:
 
-- Java: [`ai.astraform:remote-domain-author-kit-java:0.4.4`](https://central.sonatype.com/artifact/ai.astraform/remote-domain-author-kit-java/0.4.4), with Java 21 and Maven 3.9+ for these samples.
-- Python: [`astraform-remote-domain-author-kit==0.3.4`](https://pypi.org/project/astraform-remote-domain-author-kit/0.3.4/), with Python 3.12+ and the module's committed `uv.lock`.
-- Public [contracts 1.2.2](https://github.com/astraform/remote-domain-contracts/releases/tag/v1.2.2), covering both platform and domain-provider APIs.
+- [Astraform SDK for Java](https://github.com/astraform/sdk-java): `ai.astraform:sdk-java:0.4.5`, with Java 21 and Maven 3.9+.
+- [Astraform SDK for Python](https://github.com/astraform/sdk-python): `astraform-sdk==0.3.5`, with Python 3.12+.
+- Published [contracts 1.2.3](https://github.com/astraform/remote-domain-contracts/releases/tag/v1.2.3).
 
-The Java modules resolve the SDK from Maven Central; Python resolves it from
-PyPI. Conformance packages remain separate validation tools. Those released
-dependencies need no SDK checkout, private build parent or standalone
-platform-client package. See each module README for its build and test commands.
+These SDK names are prepared for the next SDK releases. Wait for their Maven
+Central/PyPI publication before a registry-only source build. The two Python
+modules retain their last genuine registry locks until then; regenerate and
+review both `uv.lock` files after publication before using `uv sync --locked`
+or building images. Do not replace registry hashes with guessed download URLs.
+Java provider tests use `ai.astraform:conformance-java:0.4.5`; Python conformance
+uses `astraform-conformance==0.3.5`. Replace the old conformance distribution
+rather than installing both, because they provide the same imports and command.
+Java source providers use
+Spring Boot's parent and do not inherit the SDK's `ai.astraform:sdk-java-parent`.
 
-Published Java 0.4.4 and Python 0.3.4 preserve `domainId`,
+The published v0.2.0 starters continue to use
+[`ai.astraform:remote-domain-author-kit-java:0.4.4`](https://central.sonatype.com/artifact/ai.astraform/remote-domain-author-kit-java/0.4.4)
+and [`astraform-remote-domain-author-kit==0.3.4`](https://pypi.org/project/astraform-remote-domain-author-kit/0.3.4/).
+The new names preserve Java/Python imports and public APIs. Replace the old
+Python distribution rather than installing both: they provide the same import
+packages. No separate platform-client package is required.
+
+Domain providers implement the versioned `remote-domain.v1` protocol. Its
+protocol IDs, routes, profile names and SDK imports retain their existing names;
+the SDK package rename does not change the provider integration contract.
+
+The native generated clients preserve `domainId`,
 `completionPolicy.requestFactBindingMode` and an explicit
-`completionPolicy.requireCustomerFinish` Boolean through their native generated
-clients. The launchers retain their preflight guard for older unsupported SDKs;
-they never drop or manually insert the field. Current bank/advice source locks
-install Python 0.3.4. Strict completion also requires the supporting platform
-implementation; the published platform v0.2.0 and samples v0.1.0 images/archives
-retain their original behavior. New source pins do not upgrade existing images.
+`completionPolicy.requireCustomerFinish` Boolean. The launchers reject older
+unsupported SDKs before writes; they never drop or manually insert fields.
+Strict completion and trusted bindings also require the supporting platform
+implementation. New source pins do not upgrade existing images or archives.
 
 The root `compose.yaml` builds sample services from this repository; it does not
 start Astraform. New installations use the Compose project `astraform-samples`;
@@ -163,26 +178,33 @@ All examples share one repository release version, such as **v0.1.0**. Each
 all examples and any prepared starter archives. Choose the domain/language you
 need; you do not need to install all samples.
 
-The published **v0.1.0** release includes the Python banking starter archive and
-checksum. Java, marketing and the other examples are available as source; they
-do not yet have published starter archives. The released banking starter targets
-platform **v0.2.0**, Python SDK **0.3.2** and contracts **1.2.0**.
+The published **v0.2.0** release provides Python-issued, Java-issued and
+Java-monthly [banking starters](deploy/banking-starter/README.md#java-and-monthly-banking)
+and a [scheduled marketing starter](deploy/marketing-starter/README.md), targeting
+platform **v0.4.0**. Their manifests retain Java SDK **0.4.4**, Python SDK
+**0.3.4** and contracts **1.2.2**. `release.json` records the published revisions,
+image digests and archive checksums; preserve that immutable release selection.
+The historical **v0.1.0** Python banking starter retains platform **v0.2.0**,
+Python SDK **0.3.2** and contracts **1.2.0**.
 
-The **v0.2.0 preparation** selects Python-issued, Java-issued, Java-monthly
-[banking starters](deploy/banking-starter/README.md#java-and-monthly-banking)
-and a [scheduled marketing starter](deploy/marketing-starter/README.md), requiring
-platform **v0.4.0**. The existing packagers accept an explicit supporting platform
-release for public-mode candidates and retain a separate `localVerificationOnly`
-mode for installed-image rehearsals. Neither mode publishes artifacts.
-`release.json` stays `publicationReady:false` with unset artifact identities until
-the actual images and archives pass review. Do not use the old v0.2.0 platform
-download for strict templates or treat this source plan as a published release.
+The next source release uses the renamed SDK packages described in
+[SDK development](#sdk-development). Publish those SDKs and regenerate the Python
+registry locks before building new images. Select a new samples version and
+review its actual source/image revisions, digests and archive checksums before
+preparing a new release manifest. Do not reuse v0.2.0 artifact identities.
+The generic [Java provider starter](starter-java-spring/README.md) is source-only
+in this checkout. Build or copy it from samples; it is no longer a Maven Central
+template artifact in the Java SDK release. It does not add a new image or starter
+archive to the published v0.2.0 selection.
+The existing packagers accept an explicit supporting platform release for
+public-mode candidates and retain a separate `localVerificationOnly` mode for
+installed-image rehearsals. Neither mode publishes artifacts.
 
 Platform deployment bundles remain in [astraform/releases](https://github.com/astraform/releases/releases).
 Platform and SDK versions are independent of the samples version. Only download
 assets after their release is published; passing CI is not publication.
 
-See the [changelog](CHANGELOG.md), [v0.2.0 preparation notes](docs/releases/v0.2.0.md), [historical v0.1.0 notes](docs/releases/v0.1.0.md)
+See the [changelog](CHANGELOG.md), [v0.2.0 release notes](docs/releases/v0.2.0.md), [historical v0.1.0 notes](docs/releases/v0.1.0.md)
 and [maintainer publication instructions](docs/PUBLICATION_CHECKLIST.md). One
 **Publish Samples Release** workflow prepares or publishes the repository release.
 Image publication is separate and is needed only when images change.
