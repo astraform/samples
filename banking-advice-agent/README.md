@@ -1,19 +1,24 @@
 # Banking advice agent and customer simulation
 
+This source checkout targets the next SDK releases: `ai.astraform:sdk-java:0.4.5`
+and `astraform-sdk==0.3.5`, using published contracts 1.2.3. These SDK releases
+must be published before registry-only builds work. Existing samples v0.2.0
+images and archives retain Java 0.4.4/Python 0.3.4 and their original package names.
+
 The image-only Python banking starter is prepared under
 [`deploy/banking-starter`](../deploy/banking-starter/README.md). It reuses this agent
-and the Python bank. Published Python SDK 0.3.4 supports launch, inspection and
+and the Python bank. Python SDK 0.3.5 supports launch, inspection and
 evidence export, including native `completionPolicy.requireCustomerFinish`.
 The strict issued-statement scenario also requires the published platform v0.3.0 implementation;
 the published platform v0.2.0 does not provide that stopping behavior.
 The published samples v0.1.0 Python banking starter retains its original scenario,
 SDK versions and completion behavior. The monthly source workflow below omits
 that field and remains compatible with the public platform bundle. Current source
-locks install Python SDK 0.3.4; rebuild images to consume those source changes.
+targets Python SDK 0.3.5; refresh registry locks after SDK publication and rebuild images to consume those source changes.
 
 The issued-statement scenario additionally declares
 `launchRequestTemplate.domainId: "banking"`. This labels the run; it does not grant access or establish tenant
-ownership. Published Python 0.3.4 and Java 0.4.4 preserve this field in their
+ownership. Python 0.3.5 and Java 0.4.5 preserve this field in their
 native typed clients. It also requires platform v0.4.0 or later for explicit
 domain identity; publishing the SDK does not upgrade the platform v0.3.0 bundle.
 Verify that server capability before launching this scenario. The launcher checks declared values before bank seeding, including
@@ -116,13 +121,19 @@ database. It starts before the first statement exists. This is a bounded monthly
 not evidence of years of simulation or 1,000-customer capacity. The older
 snapshot-based provider profile remains separate.
 
-The Java bank provider uses published [Java SDK 0.4.4 from Maven Central](https://central.sonatype.com/artifact/ai.astraform/remote-domain-author-kit-java/0.4.4).
-The Python bank provider and this monthly scenario's launch helper use published
-[Python author kit 0.3.4](https://pypi.org/project/astraform-remote-domain-author-kit/0.3.4/).
-Both SDKs use [shared contract 1.2.2](https://github.com/astraform/remote-domain-contracts/releases/tag/v1.2.2)
+The Java bank provider uses `ai.astraform:sdk-java:0.4.5` (next release).
+The Python bank provider and this monthly scenario's launch helper use
+`astraform-sdk==0.3.5` (next release).
+Both SDKs use [shared contract 1.2.3](https://github.com/astraform/remote-domain-contracts/releases/tag/v1.2.3)
 and include domain helpers plus the platform client. Customer account reads use
 the bank's MCP endpoint; this separately running partner agent uses A2A plus
 the banking HTTP API.
+
+Before using the source checkout’s `uv sync --locked` commands, regenerate the
+affected module’s `uv.lock` after `astraform-sdk==0.3.5` is published. The current
+lock still records the previous published dependency; do not install both SDK
+distributions together because they provide the same import packages. See
+[SDK dependency setup](../README.md#sdk-development).
 
 ## Start the bank and partner
 
@@ -459,14 +470,14 @@ The model may finish early or exhaust a limit; the sample does not force waiting
 or guarantee that it reaches February.
 
 With the bank, partner and platform running, `run-customer.py` uses the platform
-client included in the **existing Astraform author kit** for tool discovery,
-customer creation/publication and simulation launch. The same author-kit package
+client included in the **existing Astraform SDK** for tool discovery,
+customer creation/publication and simulation launch. The same SDK package
 provides domain authoring; the bank seed still uses the partner's own HTTP API.
 
-Install the published author kit in the launcher's Python 3.12+ virtual environment:
+After publication, install the SDK in the launcher's Python 3.12+ virtual environment:
 
 ```bash
-python3 -m pip install 'astraform-remote-domain-author-kit==0.3.4'
+python3 -m pip install 'astraform-sdk==0.3.5'
 ```
 
 No SDK source checkout or locally built wheel is needed for the customer
@@ -486,7 +497,7 @@ launcher supports `--prepare-only --output /fresh/empty/prepared-output`.
 It seeds and discovers capabilities but makes no Catalog create/publish or
 Journey launch writes. Its `prepared-scenario.json` has `catalog` and `launch`
 objects for the existing downloaded `FirstSimulation` client. A declaring
-scenario uses published Java SDK 0.4.4 and typed validation before Catalog
+scenario uses Java SDK 0.4.5 and typed validation before Catalog
 writes; the selected platform must also support its declared `domainId`.
 See the [extracted starter Java preparation route](../deploy/banking-starter/README.md#prepare-for-the-existing-java-customer-sdk-client)
 for paths and the launch-once/inspect-same-run boundary. No extra runtime layer
@@ -591,14 +602,14 @@ Omitted or false values preserve the earlier receipt-only stopping behavior.
 
 This optional field targets the platform v0.3.0 Experiment service and a native
 customer SDK whose generated completion-policy model preserves the supplied
-Boolean. Published Python SDK 0.3.4 supplies this native client support;
+Boolean. Python SDK 0.3.5 supplies this native client support;
 published platform v0.2.0 still lacks the required stopping behavior.
 The launcher checks raw type and typed round-trip fidelity before bank seeding or
 create/publish/launch writes, then uses the normal generated Agent Journey API.
 It never manually inserts a JSON extension, drops the value, retries a failed
 launch or chooses customer behavior. Both explicit true and explicit false fail
 with older SDK 0.3.2; omission remains compatible. Current source pins select
-0.3.4, while existing published images and archives retain their recorded versions.
+0.3.5, while existing published images and archives retain their recorded versions.
 
 The receipt conditions still verify statement records, not understanding. They
 match schema, payment status, customer, account, bill, statement end, minimum,
