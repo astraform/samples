@@ -70,7 +70,7 @@ def package(version, images, output, local_verification=False, source_revision=N
                      "customerEvidenceHelper": "customer-run-evidence.py"}
     compatibility = {**(packaging.LOCAL_COMPATIBILITY if local_verification else {
                          **packaging.COMPATIBILITY, "platform": platform_release.removeprefix("v")}),
-                     "javaSdk": "0.4.4"}
+                     "javaSdk": "0.4.5", "javaSdkArtifact": "ai.astraform:sdk-java"}
     if local_verification and capabilities:
         compatibility["platform"] = "unreleased-local-capabilities"
     required_platform = {"completionPolicy.requireCustomerFinish": finish} if finish_present else {}
@@ -85,9 +85,9 @@ def package(version, images, output, local_verification=False, source_revision=N
         f"astraform-marketing-{case_prefix}{scenario}-starter-{version}",
         compatibility, "astraform.marketing-starter.bundle.v1", local_verification, configuration,
         required_platform or None,
-        "Local compatibility records current source dependency targets: Java SDK 0.4.4, Python SDK 0.3.4 and contracts 1.2.2. Actual image contents require separate installed-package verification against the recorded image IDs. Published Python SDK 0.3.4 preserves explicit launch.domainId and native customer completion. The selected platform must implement each declared capability; publishing an SDK does not add platform behavior."
+        "Local compatibility records current source dependency targets: Java SDK 0.4.5, Python SDK 0.3.5 and contracts 1.2.3. Actual image contents require separate installed-package verification against the recorded image IDs. Python SDK 0.3.5 preserves explicit launch.domainId and native customer completion. The selected platform must implement each declared capability; publishing an SDK does not add platform behavior."
         if local_verification else
-        f"Declared compatibility requires Astraform Platform {platform_release}, Java SDK 0.4.4, Python SDK 0.3.4 and contracts 1.2.2. This dependency declaration is not proof of platform publication or availability. Verify the selected public platform release and the installed SDK packages in the pinned images before publication.")
+        f"Declared compatibility requires Astraform Platform {platform_release}, Java SDK 0.4.5, Python SDK 0.3.5 and contracts 1.2.3. This dependency declaration is not proof of platform publication or availability. Verify the selected public platform release and the installed SDK packages in the pinned images before publication.")
 
 
 def main():
