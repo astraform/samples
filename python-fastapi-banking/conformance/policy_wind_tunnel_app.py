@@ -41,7 +41,7 @@ class LegacyBaselinePolicyWindTunnelService(PythonBankingPolicyWindTunnelService
 app = create_fastapi_app(
     service=PythonBankingRemoteDomainService(),
     policy_wind_tunnel_service=LegacyBaselinePolicyWindTunnelService(),
-    title="Python Banking Remote Domain Conformance Fixture",
+    title="Python Banking Provider Conformance Fixture",
     version="0.1.0",
     description="Contract-only fixture for the SDK legacy Policy Wind Tunnel baseline.",
     media_type=service.MEDIA_TYPE,

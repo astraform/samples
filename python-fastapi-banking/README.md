@@ -1,8 +1,13 @@
-# Python FastAPI Banking Remote Domain
+# Python FastAPI Banking Domain Provider
 
-Python banking reference implementation for `remote-domain.v1`, using published
-Python author kit `0.3.4` and shared contract bundle `1.2.2`. The locked SDK comes from
-PyPI; this sample does not require an editable checkout of the SDK or access
+This source checkout targets the next SDK releases: `ai.astraform:sdk-java:0.4.5`
+and `astraform-sdk==0.3.5`, using published contracts 1.2.3. These SDK releases
+must be published before registry-only builds work. Existing samples v0.2.0
+images and archives retain Java 0.4.4/Python 0.3.4 and their original package names.
+
+Python banking reference implementation for `remote-domain.v1`, targeting
+Python SDK `0.3.5` and shared contract bundle `1.2.3`. After SDK publication and
+lock regeneration, the SDK resolves from PyPI; this sample does not require an editable checkout of the SDK or access
 to Astraform's platform source. Select a platform matching the scenario's
 capabilities as described in the [shared banking guide](../banking-advice-agent/README.md).
 The historical
@@ -19,10 +24,16 @@ stores the customer persona, goals, permitted tools, references and run evidence
 The customer calls the scoped MCP tool; the LLM banking partner reads the same
 bank through its HTTP API.
 
-The existing snapshot-based remote-domain, product catalog, decision-trigger and
+The existing snapshot-based provider, product catalog, decision-trigger and
 Policy Wind Tunnel contracts remain available. Native parity is scoped to
 prepopulated accounts and monthly credit-card statements; it does not imply all
 Java banking behavior or shared-run population capacity is implemented.
+
+Before using the source checkout’s `uv sync --locked` commands, regenerate the
+affected module’s `uv.lock` after `astraform-sdk==0.3.5` is published. The current
+lock still records the previous published dependency; do not install both SDK
+distributions together because they provide the same import packages. See
+[SDK dependency setup](../README.md#sdk-development).
 
 ## Native customer simulation with a separate bank database
 
@@ -36,7 +47,7 @@ work finishes. Database pool size is separate from SDK callback capacity.
 
 The sample uses pooled database connections acquired within each operation.
 Its existing sequential customer scenarios and bounded dispatch checks do not
-establish general concurrent-load capacity. See [SDK 0.2.1 release notes](https://github.com/astraform/remote-domain-sdk-python/releases/tag/v0.2.1)
+establish general concurrent-load capacity. See [SDK 0.2.1 release notes](https://github.com/astraform/sdk-python/releases/tag/v0.2.1)
 for the adapter's concurrency and timeout boundaries.
 
 From this directory, start the Python sample's own database and provider:
@@ -92,9 +103,7 @@ for both providers. Keep personas, goals, seed records and limits the same; chan
 the bank URL and the deployment's MCP/domain/A2A bindings. The
 [Python endpoint setup](../banking-advice-agent/README.md#python-banking-endpoint-bindings)
 provides the complete binding properties and matching partner startup command.
-The setup helper uses the platform client included in the existing Astraform author
-kit, alongside domain authoring. Both are included in the published `0.3.4` author kit used by
-this sample's registry-resolved lock. Conformance remains separate validation
+The setup helper uses the platform client included in the Astraform SDK, alongside domain authoring. Both are included in `astraform-sdk==0.3.5`. Conformance remains separate validation
 tooling. See [SDK dependency setup](../README.md#sdk-development).
 
 These bindings go in the extracted platform bundle's `private/runtime.properties`;
@@ -190,7 +199,7 @@ the bank's manifest/prepare/work-window operations and Astraform-owned durable
 execution. Its issued/monthly capability requirements are described in the
 [shared banking guide](../banking-advice-agent/README.md); removing obsolete
 requests does not change those flows. Immutable released images and archives
-retain their recorded dependencies; rebuild from current source to use SDK 0.3.4.
+retain their recorded dependencies; rebuild from current source to use SDK 0.3.5.
 
 ## Domain Shape
 
@@ -273,10 +282,10 @@ skipped. CI supplies its own PostgreSQL service and runs these checks.
 
 Schema-backed conformance run:
 
-The author kit and conformance SDK `0.3.4` packages are published on PyPI.
-The source installation below uses those versions. Prebuilt images and starter
+The source installation below requires the SDK and conformance `0.3.5` releases
+to be published on PyPI. Prebuilt images and starter
 archives retain the SDK versions recorded in their image and release metadata;
-a new image must be built from updated source to include SDK `0.3.4`. Record the
+a new image must be built from updated source to include SDK `0.3.5`. Record the
 running provider's source revision or image digest separately from the
 conformance tool version.
 
@@ -285,7 +294,7 @@ cd python-fastapi-banking
 python3 -m venv .venv-conformance
 . .venv-conformance/bin/activate
 pip install -e '.[test]'
-pip install 'astraform-remote-domain-conformance==0.3.4'
+pip install 'astraform-conformance==0.3.5'
 # Start the selected provider image by its actual digest on localhost:8092.
 mkdir -p build
 remote-domain-conformance \

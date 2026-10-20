@@ -108,9 +108,9 @@ class PythonBankingPolicyWindTunnelService:
 app = create_fastapi_app(
     service=PythonBankingRemoteDomainService(),
     policy_wind_tunnel_service=PythonBankingPolicyWindTunnelService(),
-    title="Python Banking Remote Domain",
+    title="Python Banking Domain Provider",
     version="0.1.0",
-    description="Python banking reference implementation for remote-domain.v1 and remote Policy Wind Tunnel.",
+    description="Python banking domain provider implementing remote-domain.v1 and Policy Wind Tunnel.",
     media_type=MEDIA_TYPE,
 )
 

@@ -156,7 +156,7 @@ def local_provider_build_revision(
 
 PROTOCOL_VERSION = "remote-domain.v1"
 DOMAIN_ID = "banking-python"
-DISPLAY_NAME = "Python Banking Reference Domain"
+DISPLAY_NAME = "Python Banking Reference Provider"
 SCHEMA_VERSION = "banking-python.state.v1"
 MEDIA_TYPE = "application/vnd.astraform.remote-domain.v1+json"
 WIND_TUNNEL_PACK_ID = "banking-python-policy-pack"
@@ -1028,7 +1028,7 @@ def manifest() -> dict[str, Any]:
         "domain": {
             "domainId": DOMAIN_ID,
             "displayName": DISPLAY_NAME,
-            "description": "Python banking reference provider used to prove remote-domain parity without Java internals.",
+            "description": "Python banking domain provider implementing remote-domain.v1.",
             "schemaVersion": SCHEMA_VERSION,
         },
         "transport": {
