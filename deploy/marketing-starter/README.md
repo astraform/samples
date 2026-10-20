@@ -1,15 +1,23 @@
 # Marketing starter
 
-Run the Marketing Ops domain and its LLM Creative Agency from matching images,
+The published samples v0.2.0 archives retain Java SDK 0.4.4/Python SDK 0.3.4.
+When packaging from newer source, use the generated manifest’s compatibility
+section: the next SDK packages are `ai.astraform:sdk-java:0.4.5` and
+`astraform-sdk==0.3.5` with contracts 1.2.3. New packages and rebuilt images are
+required before distributing a starter using those dependencies.
+
+Run the Marketing Ops domain provider and its LLM Creative Agency from matching images,
 then launch a customer through the native Python SDK. The platform is a separate
-image bundle; customer and partner models are configured independently.
+image bundle; customer and partner models are configured independently. The provider implements the versioned `remote-domain.v1` protocol; the SDK package rename does not change its protocol or profile identifiers.
 
 The authored templates require a platform implementing both
 `completionPolicy.requireCustomerFinish` and
-`completionPolicy.requestFactBindingMode: "RESOLVE_TRUSTED"`. Python SDK **0.3.4**
-preserves both fields. The domain image must implement
-`marketing-ops.native-events.v4`; its source uses Java SDK **0.4.4** and public
-contracts **1.2.2**. Use matching domain/tools images and a supporting platform
+`completionPolicy.requestFactBindingMode: "RESOLVE_TRUSTED"`. The current source
+tools image targets **`astraform-sdk==0.3.5`**, which preserves both fields. The
+domain image must implement `marketing-ops.native-events.v4`; current provider
+source targets **`ai.astraform:sdk-java:0.4.5`** and published contracts **1.2.3**.
+Build these images only after the renamed SDK releases are published and the
+Python registry lock has been regenerated. Use matching domain/tools images and a supporting platform
 release, targeting v0.4.0 or later. Download the selected platform only after
 publication and verification. SDK publication does not add server behavior, and platform v0.3.0's
 strict FINISH support does not establish trusted-binding support. Source updates
@@ -26,8 +34,8 @@ launcher and its shared SDK evidence observer through read-only mounts.
 The provider supplies the run's marketing identity. A custom scenario may also
 set `launchRequestTemplate.domainId: "marketing-ops"`, which must match the
 provider and requires explicit domain-identity support in the selected platform.
-The value classifies the run; it does not grant access. Python SDK 0.3.4 preserves
-it. Invalid or unsupported typed fields are rejected before Catalog or launch
+The value classifies the run; it does not grant access. The native Python SDK
+preserves it. Invalid or unsupported typed fields are rejected before Catalog or launch
 writes rather than silently removed. Omitting domainId retains provider-derived
 identity.
 
