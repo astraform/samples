@@ -1,9 +1,9 @@
 # Marketing customer simulation and A2A integration
 
-This source checkout targets the next SDK releases: `ai.astraform:sdk-java:0.4.5`
-and `astraform-sdk==0.3.5`, using published contracts 1.2.3. These SDK releases
-must be published before registry-only builds work. Existing samples v0.2.0
-images and archives retain Java 0.4.4/Python 0.3.4 and their original package names.
+This source checkout uses published `ai.astraform:sdk-java:0.4.5` from Maven
+Central and `astraform-sdk==0.3.5` from PyPI, with published contracts 1.2.3.
+Existing samples v0.2.0 images and archives retain Java 0.4.4/Python 0.3.4 and
+their original package names.
 
 
 Connect the marketing domain provider and its LLM creative agency to a matching
@@ -21,8 +21,8 @@ matching platform/sample candidate with the published SDK before launch;
 publication and rebuilt image/archive delivery remain separate requirements.
 The creative agency exposes A2A 1.0 JSON-RPC through the A2A Java SDK.
 
-The source checkout’s Python launch tools require `astraform-sdk==0.3.5` after
-publication. Do not install it alongside `astraform-remote-domain-author-kit`;
+The source checkout’s Python launch tools use published `astraform-sdk==0.3.5`
+from PyPI. Do not install it alongside `astraform-remote-domain-author-kit`;
 both distributions provide the same import packages. See the
 [SDK dependency setup](../../README.md#sdk-development).
 
@@ -271,7 +271,7 @@ new runs; existing runs retain their accepted binding revisions and configuratio
 The marketing templates require `completionPolicy.requireCustomerFinish:true`
 and `completionPolicy.requestFactBindingMode: "RESOLVE_TRUSTED"`. **Astraform Python SDK 0.3.5** preserves both fields. Use it with a
 platform candidate implementing the mode; the SDK cannot supply coordinator
-behavior. From the sample repository root, install the package after publication in
+behavior. From the sample repository root, install the published package in
 Python 3.12+:
 
 ```bash

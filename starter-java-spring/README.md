@@ -11,9 +11,8 @@ uses Java 21+, Maven 3.9+, Spring Boot 4.1.1 and these dependencies:
 - `ai.astraform:sdk-java:0.4.5` at runtime, including the generated platform client.
 - `ai.astraform:conformance-java:0.4.5` in test scope.
 
-Both SDK packages target published contracts 1.2.3. They must be available in
-Maven Central or installed in your local Maven repository before this sample can
-build. The renamed 0.4.5 packages are prepared for publication; see
+Both SDK packages are published on Maven Central and target published contracts
+1.2.3. No SDK source checkout or local SDK build is required; see
 [source dependency setup](../README.md#sdk-development). Published SDK 0.4.4
 retains its original coordinates and contracts 1.2.2.
 

@@ -1,13 +1,13 @@
 # Java Spring Banking Domain Provider
 
-This source checkout targets the next SDK releases: `ai.astraform:sdk-java:0.4.5`
-and `astraform-sdk==0.3.5`, using published contracts 1.2.3. These SDK releases
-must be published before registry-only builds work. Existing samples v0.2.0
-images and archives retain Java 0.4.4/Python 0.3.4 and their original package names.
+This source checkout uses published `ai.astraform:sdk-java:0.4.5` from Maven
+Central and `astraform-sdk==0.3.5` from PyPI, with published contracts 1.2.3.
+Existing samples v0.2.0 images and archives retain Java 0.4.4/Python 0.3.4 and
+their original package names.
 
 Standalone Java/Spring reference provider for `remote-domain.v1`.
 
-The provider uses `ai.astraform:sdk-java:0.4.5` (next release)
+The provider uses published `ai.astraform:sdk-java:0.4.5`
 and [contract bundle 1.2.3](https://github.com/astraform/remote-domain-contracts/releases/tag/v1.2.3).
 Its existing SDK controller delegates banking operations to
 `BankingRemoteDomainService`; the SDK supplies the protocol models, manifest
@@ -275,8 +275,8 @@ this policy alone does not make the customer act.
 - `ai.astraform:sdk-java:0.4.5`
 - `ai.astraform:conformance-java:0.4.5` (test dependency)
 
-Both SDK dependencies share `remote-domain.sdk.version` in `pom.xml`. After
-publication, they resolve from Maven Central. Building the SDK from a sibling checkout is unnecessary.
+Both SDK dependencies share `remote-domain.sdk.version` in `pom.xml` and
+resolve from Maven Central. Building the SDK from a sibling checkout is unnecessary.
 
 ## Run
 

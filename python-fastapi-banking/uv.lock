@@ -40,8 +40,8 @@ wheels = [
 ]
 
 [[package]]
-name = "astraform-remote-domain-author-kit"
-version = "0.3.4"
+name = "astraform-sdk"
+version = "0.3.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jsonschema" },
@@ -50,9 +50,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/67/a2/52ca51618f802e4bd0bd5619e3750b7cea373714d517922b916140ad43a0/astraform_remote_domain_author_kit-0.3.4.tar.gz", hash = "sha256:a8117b5255bb13bacc470b8b018aee8ece133a9c9e428c456de1fd81ab7dcebf", size = 182879, upload-time = "2026-10-18T23:39:58.548Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/11/6d/97d56fdca203ac75c6bb8c0dbed13b100d787b86bf3bd82c067b6e304f1b/astraform_sdk-0.3.5.tar.gz", hash = "sha256:7bd8b8495bef63e424458691bebf1714cb4639613af3f12ff1286d6ecce577d1", size = 195209, upload-time = "2026-10-20T23:23:00.221Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/29/48/2206e02db10668b0b6ec72f3b5ae1ed8ca867452e8345a1ead69151cef33/astraform_remote_domain_author_kit-0.3.4-py3-none-any.whl", hash = "sha256:fb3c50cc551c6483112b9f96929d5f145795039c4ad164e73292e79234942cd7", size = 354107, upload-time = "2026-10-18T23:39:56.91Z" },
+    { url = "https://files.pythonhosted.org/packages/0d/6e/904fef1ef4ee01d993da566154330e5c5668ea09c128165ed45985a2765a/astraform_sdk-0.3.5-py3-none-any.whl", hash = "sha256:e314c39c8864bd896dd37efda37592bc99faf327011d273b74dd3dba8ab3f91f", size = 382699, upload-time = "2026-10-20T23:22:58.704Z" },
 ]
 
 [package.optional-dependencies]
@@ -76,7 +76,7 @@ name = "banking-remote-domain-python"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "astraform-remote-domain-author-kit", extra = ["fastapi"] },
+    { name = "astraform-sdk", extra = ["fastapi"] },
     { name = "fastapi" },
     { name = "mcp" },
     { name = "psycopg", extra = ["binary", "pool"] },
@@ -100,7 +100,7 @@ release = [
 
 [package.metadata]
 requires-dist = [
-    { name = "astraform-remote-domain-author-kit", extras = ["fastapi"], specifier = "==0.3.4" },
+    { name = "astraform-sdk", extras = ["fastapi"], specifier = "==0.3.5" },
     { name = "fastapi", specifier = ">=0.115,<1.0" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.28,<1.0" },
     { name = "mcp", specifier = ">=1.26,<2" },

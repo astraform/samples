@@ -2,9 +2,9 @@
 
 The published samples v0.2.0 archives retain Java SDK 0.4.4/Python SDK 0.3.4.
 When packaging from newer source, use the generated manifest’s compatibility
-section: the next SDK packages are `ai.astraform:sdk-java:0.4.5` and
-`astraform-sdk==0.3.5` with contracts 1.2.3. New packages and rebuilt images are
-required before distributing a starter using those dependencies.
+section: current source uses published `ai.astraform:sdk-java:0.4.5` and
+`astraform-sdk==0.3.5` with contracts 1.2.3. Build and verify new images before
+distributing a starter using those dependencies.
 
 Run a model-backed banking customer against a banking advice agent over A2A 1.0 JSON-RPC. The customer can read its own account through MCP; the advice agent reads the same partner-owned records through the banking API. Bank data lives in the starter's PostgreSQL database. Astraform stores simulation state and evidence separately. The bank is a domain provider; `remote-domain.v1` and its profile names identify its supported provider protocol.
 

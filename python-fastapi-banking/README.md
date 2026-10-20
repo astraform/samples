@@ -1,13 +1,13 @@
 # Python FastAPI Banking Domain Provider
 
-This source checkout targets the next SDK releases: `ai.astraform:sdk-java:0.4.5`
-and `astraform-sdk==0.3.5`, using published contracts 1.2.3. These SDK releases
-must be published before registry-only builds work. Existing samples v0.2.0
-images and archives retain Java 0.4.4/Python 0.3.4 and their original package names.
+This source checkout uses published `ai.astraform:sdk-java:0.4.5` from Maven
+Central and `astraform-sdk==0.3.5` from PyPI, with published contracts 1.2.3.
+Existing samples v0.2.0 images and archives retain Java 0.4.4/Python 0.3.4 and
+their original package names.
 
 Python banking reference implementation for `remote-domain.v1`, targeting
-Python SDK `0.3.5` and shared contract bundle `1.2.3`. After SDK publication and
-lock regeneration, the SDK resolves from PyPI; this sample does not require an editable checkout of the SDK or access
+Python SDK `0.3.5` and shared contract bundle `1.2.3`. The SDK resolves from
+PyPI; this sample does not require an editable checkout of the SDK or access
 to Astraform's platform source. Select a platform matching the scenario's
 capabilities as described in the [shared banking guide](../banking-advice-agent/README.md).
 The historical
@@ -29,10 +29,9 @@ Policy Wind Tunnel contracts remain available. Native parity is scoped to
 prepopulated accounts and monthly credit-card statements; it does not imply all
 Java banking behavior or shared-run population capacity is implemented.
 
-Before using the source checkout’s `uv sync --locked` commands, regenerate the
-affected module’s `uv.lock` after `astraform-sdk==0.3.5` is published. The current
-lock still records the previous published dependency; do not install both SDK
-distributions together because they provide the same import packages. See
+Use the checked-in registry lock with `uv sync --locked` to install
+`astraform-sdk==0.3.5`. Do not install it alongside the old SDK distribution;
+they provide the same import packages. See
 [SDK dependency setup](../README.md#sdk-development).
 
 ## Native customer simulation with a separate bank database
@@ -282,8 +281,8 @@ skipped. CI supplies its own PostgreSQL service and runs these checks.
 
 Schema-backed conformance run:
 
-The source installation below requires the SDK and conformance `0.3.5` releases
-to be published on PyPI. Prebuilt images and starter
+The source installation below uses the published SDK and conformance `0.3.5`
+releases from PyPI. Prebuilt images and starter
 archives retain the SDK versions recorded in their image and release metadata;
 a new image must be built from updated source to include SDK `0.3.5`. Record the
 running provider's source revision or image digest separately from the

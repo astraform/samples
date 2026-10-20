@@ -1,9 +1,9 @@
 # Banking advice agent and customer simulation
 
-This source checkout targets the next SDK releases: `ai.astraform:sdk-java:0.4.5`
-and `astraform-sdk==0.3.5`, using published contracts 1.2.3. These SDK releases
-must be published before registry-only builds work. Existing samples v0.2.0
-images and archives retain Java 0.4.4/Python 0.3.4 and their original package names.
+This source checkout uses published `ai.astraform:sdk-java:0.4.5` from Maven
+Central and `astraform-sdk==0.3.5` from PyPI, with published contracts 1.2.3.
+Existing samples v0.2.0 images and archives retain Java 0.4.4/Python 0.3.4 and
+their original package names.
 
 The image-only Python banking starter is prepared under
 [`deploy/banking-starter`](../deploy/banking-starter/README.md). It reuses this agent
@@ -14,7 +14,7 @@ the published platform v0.2.0 does not provide that stopping behavior.
 The published samples v0.1.0 Python banking starter retains its original scenario,
 SDK versions and completion behavior. The monthly source workflow below omits
 that field and remains compatible with the public platform bundle. Current source
-targets Python SDK 0.3.5; refresh registry locks after SDK publication and rebuild images to consume those source changes.
+uses published Python SDK 0.3.5; rebuild images to consume those source changes.
 
 The issued-statement scenario additionally declares
 `launchRequestTemplate.domainId: "banking"`. This labels the run; it does not grant access or establish tenant
@@ -121,18 +121,17 @@ database. It starts before the first statement exists. This is a bounded monthly
 not evidence of years of simulation or 1,000-customer capacity. The older
 snapshot-based provider profile remains separate.
 
-The Java bank provider uses `ai.astraform:sdk-java:0.4.5` (next release).
+The Java bank provider uses published `ai.astraform:sdk-java:0.4.5`.
 The Python bank provider and this monthly scenario's launch helper use
-`astraform-sdk==0.3.5` (next release).
+published `astraform-sdk==0.3.5`.
 Both SDKs use [shared contract 1.2.3](https://github.com/astraform/remote-domain-contracts/releases/tag/v1.2.3)
 and include domain helpers plus the platform client. Customer account reads use
 the bank's MCP endpoint; this separately running partner agent uses A2A plus
 the banking HTTP API.
 
-Before using the source checkout’s `uv sync --locked` commands, regenerate the
-affected module’s `uv.lock` after `astraform-sdk==0.3.5` is published. The current
-lock still records the previous published dependency; do not install both SDK
-distributions together because they provide the same import packages. See
+Use the checked-in registry lock with `uv sync --locked` to install
+`astraform-sdk==0.3.5`. Do not install it alongside the old SDK distribution;
+they provide the same import packages. See
 [SDK dependency setup](../README.md#sdk-development).
 
 ## Start the bank and partner
@@ -474,7 +473,7 @@ client included in the **existing Astraform SDK** for tool discovery,
 customer creation/publication and simulation launch. The same SDK package
 provides domain authoring; the bank seed still uses the partner's own HTTP API.
 
-After publication, install the SDK in the launcher's Python 3.12+ virtual environment:
+Install the SDK in the launcher's Python 3.12+ virtual environment:
 
 ```bash
 python3 -m pip install 'astraform-sdk==0.3.5'

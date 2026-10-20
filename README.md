@@ -6,9 +6,9 @@ expose A2A, MCP and domain APIs. The published **samples v0.2.0** images and
 starter archives target **platform v0.4.0**, Java **0.4.4**, Python **0.3.4**
 and contracts **1.2.2**. Their dependency names and bytes remain unchanged.
 
-This source checkout targets the next SDK releases: **`ai.astraform:sdk-java:0.4.5`**
-and **`astraform-sdk==0.3.5`**, built against published **contracts 1.2.3**.
-Registry-only source builds require those SDK releases to be published first.
+This source checkout uses published **`ai.astraform:sdk-java:0.4.5`** from Maven
+Central and **`astraform-sdk==0.3.5`** from PyPI, built against published
+**contracts 1.2.3**. No SDK source checkout is required.
 See [SDK development](#sdk-development) before building this checkout.
 
 Clone the examples to build and adapt them:
@@ -107,11 +107,9 @@ simulations and retrieving results. Current source dependencies are:
 - [Astraform SDK for Python](https://github.com/astraform/sdk-python): `astraform-sdk==0.3.5`, with Python 3.12+.
 - Published [contracts 1.2.3](https://github.com/astraform/remote-domain-contracts/releases/tag/v1.2.3).
 
-These SDK names are prepared for the next SDK releases. Wait for their Maven
-Central/PyPI publication before a registry-only source build. The two Python
-modules retain their last genuine registry locks until then; regenerate and
-review both `uv.lock` files after publication before using `uv sync --locked`
-or building images. Do not replace registry hashes with guessed download URLs.
+Java source builds resolve their dependencies from Maven Central. The two Python
+modules use checked-in PyPI registry locks with `uv sync --locked`; no editable
+SDK installation or local wheel is required.
 Java provider tests use `ai.astraform:conformance-java:0.4.5`; Python conformance
 uses `astraform-conformance==0.3.5`. Replace the old conformance distribution
 rather than installing both, because they provide the same imports and command.
@@ -187,9 +185,9 @@ image digests and archive checksums; preserve that immutable release selection.
 The historical **v0.1.0** Python banking starter retains platform **v0.2.0**,
 Python SDK **0.3.2** and contracts **1.2.0**.
 
-The next source release uses the renamed SDK packages described in
-[SDK development](#sdk-development). Publish those SDKs and regenerate the Python
-registry locks before building new images. Select a new samples version and
+The next source release uses the published SDK packages described in
+[SDK development](#sdk-development). Build and verify new images from the updated
+source before packaging them. Select a new samples version and
 review its actual source/image revisions, digests and archive checksums before
 preparing a new release manifest. Do not reuse v0.2.0 artifact identities.
 The generic [Java provider starter](starter-java-spring/README.md) is source-only

@@ -55,9 +55,9 @@ per-user authentication, high availability or a production certification.
   your scenario needs them.
 
 Current Java provider source targets `ai.astraform:sdk-java:0.4.5`; Python
-bank/advice source targets `astraform-sdk==0.3.5`. Both use published contracts
-**1.2.3**. The renamed SDK releases must be published, then both Python registry
-locks must be regenerated before registry-only source builds or image packaging.
+bank/advice source targets `astraform-sdk==0.3.5`. Both are published on Maven
+Central/PyPI and use published contracts **1.2.3**. Source builds use those
+registry packages; Python installs use the checked-in registry locks.
 Each SDK includes its generated platform client and domain authoring interfaces;
 no second platform-client package is needed. Customer launch/export uses that
 generated client. Monthly banking omits `completionPolicy.requireCustomerFinish`;
@@ -197,7 +197,7 @@ records `localVerificationOnly`, installed image IDs and payload hashes, and
 cannot be relabelled as a public package. Historical published bytes are unchanged. The historical v0.2.0 public-mode candidates use **platform v0.4.0**,
 Java 0.4.4/Python 0.3.4/contracts 1.2.2. New source packagers declare Java
 0.4.5/Python 0.3.5/contracts 1.2.3 and the new SDK installation names; use them
-only with new images containing those dependencies after SDK publication. Current source
+only with new images containing those dependencies. Current source
 uses its domain-identity/trusted-binding server capabilities described
 in the selected guide. The existing packagers reject earlier releases when the
 selected scenario requires either new field, preserve completion/native-domain requirements and verify
@@ -205,7 +205,7 @@ anonymous digest/architecture/source metadata. Public platform v0.2.0 does not
 supply strict stopping. Platform v0.3.0 is publicly available; samples v0.2.0
 is published with its recorded image digests and checksums. The committed
 `release.json` reproduces that immutable selection; prepare a new release
-selection after publishing renamed SDKs and rebuilding sample images.
+selection after rebuilding and verifying sample images with the published SDKs.
 See the [banking guide](../deploy/banking-starter/README.md#java-and-monthly-banking)
 and [marketing guide](../deploy/marketing-starter/README.md). Provider callbacks
 and Python customer launch/export are distinct verification paths. Older 0.3.2

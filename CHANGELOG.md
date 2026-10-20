@@ -8,9 +8,9 @@ versioned separately. Detailed notes live under [docs/releases](docs/releases).
 - Move the generic Java/Spring provider starter into `starter-java-spring`, with
   a standalone Spring Boot build, lifecycle/catalog conformance and work replay
   checks. Distribute it as sample source instead of an SDK Maven artifact.
-- Rename the source SDK dependencies to `ai.astraform:sdk-java:0.4.5` and
-  `astraform-sdk==0.3.5`, retaining imports and public APIs. Source builds require
-  the new SDK releases and regenerated Python registry locks.
+- Use published `ai.astraform:sdk-java:0.4.5` and `astraform-sdk==0.3.5` from
+  Maven Central and PyPI, retaining imports and public APIs. Refresh the Python
+  registry locks for the renamed SDK distribution.
 - Use published contracts 1.2.3 and `ai.astraform:conformance-java:0.4.5` for Java
   provider tests. Python provider checks use `astraform-conformance==0.3.5`,
   preserving imports and the `remote-domain-conformance` command.

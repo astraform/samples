@@ -1,9 +1,9 @@
 # Marketing Operations Domain Provider
 
-This source checkout targets the next SDK releases: `ai.astraform:sdk-java:0.4.5`
-and `astraform-sdk==0.3.5`, using published contracts 1.2.3. These SDK releases
-must be published before registry-only builds work. Existing samples v0.2.0
-images and archives retain Java 0.4.4/Python 0.3.4 and their original package names.
+This source checkout uses published `ai.astraform:sdk-java:0.4.5` from Maven
+Central and `astraform-sdk==0.3.5` from PyPI, with published contracts 1.2.3.
+Existing samples v0.2.0 images and archives retain Java 0.4.4/Python 0.3.4 and
+their original package names.
 
 This sample is a standalone Java/Spring marketing-ops domain provider.
 
@@ -24,7 +24,7 @@ its A2A endpoint and collaboration behavior. In LLM mode, that model chooses
 both the advice and its disposition; neither performs the provider's business work.
 
 It uses public Java SDK and conformance artifacts **0.4.5** plus ordinary
-Spring dependencies. After the SDK releases are published, both artifacts resolve from Maven Central.
+Spring dependencies. Both artifacts resolve from Maven Central.
 They use published shared contract release **1.2.3**. Building a sibling SDK checkout is
 unnecessary. The native capability uses the SDK-generated typed profile. Host
 SPI classes are not required in the provider.

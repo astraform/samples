@@ -8,13 +8,14 @@ remain independent. Do not create per-language or per-starter tags.
 
 Before preparing new images or starter archives from this checkout:
 
-1. Publish `ai.astraform:sdk-java:0.4.5` and `astraform-sdk==0.3.5`, plus their
-   separate conformance packages at the matching versions. They use published
-   contracts 1.2.3 and preserve existing imports and APIs.
-2. Regenerate and review `python-fastapi-banking/uv.lock` and
-   `banking-advice-agent/uv.lock` from the actual PyPI releases, then verify
-   registry-only locked installs. Do not commit local wheel paths or guessed
-   registry URLs/hashes. Replace the old Python SDK distribution rather than
+1. Resolve published `ai.astraform:sdk-java:0.4.5` and `astraform-sdk==0.3.5`
+   from Maven Central/PyPI, plus their separate conformance packages at the
+   matching versions. They use published contracts 1.2.3 and preserve existing
+   imports and APIs.
+2. Review `python-fastapi-banking/uv.lock` and `banking-advice-agent/uv.lock`
+   and verify registry-only locked installs. Regenerate locks from PyPI when
+   changing dependencies; do not commit local wheel paths or guessed registry
+   URLs/hashes. Replace the old Python SDK distribution rather than
    installing both distributions into one environment.
 3. Build and verify new sample images, then select a new samples release version
    and capture its real revisions, digests and checksums. The published v0.2.0
