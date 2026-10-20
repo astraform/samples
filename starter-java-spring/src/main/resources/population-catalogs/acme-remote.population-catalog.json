@@ -1,0 +1,69 @@
+{
+  "schemaVersion": "domain_population_catalog.v1",
+  "domainId": "acme-remote",
+  "domainFamily": "acme-remote",
+  "label": "Acme Remote Domain",
+  "description": "Starter provider-owned archetypes and deterministic population recipes.",
+  "catalogVersion": "acme-remote.population-catalog.v1",
+  "archetypeCatalog": {
+    "schemaVersion": "domain_archetype_catalog.v1",
+    "domainId": "acme-remote",
+    "archetypes": [
+      {
+        "archetypeId": "case-reviewer",
+        "title": "Case Reviewer",
+        "narrative": "Operator who reviews domain work against a simple readiness checklist.",
+        "segmentIds": ["starter-review"],
+        "traits": ["review-driven", "starter"]
+      }
+    ]
+  },
+  "populationRecipes": {
+    "schemaVersion": "synthetic_cohort_recipe.v1",
+    "domainId": "acme-remote",
+    "recipes": [
+      {
+        "recipeId": "starter-review-100",
+        "title": "Starter Review 100",
+        "description": "A deterministic starter population for validating remote-domain prepare flows.",
+        "defaultTargetSize": 100,
+        "segmentMix": [
+          {
+            "segmentId": "starter-review",
+            "label": "Starter review",
+            "weight": 100,
+            "archetypeIds": ["case-reviewer"],
+            "memberTemplate": {
+              "domainConfig": {
+                "queueKey": "starter-{cohortId}-{customerIndex}"
+              },
+              "scheduledWork": [
+                {
+                  "kind": "task",
+                  "description": "Starter review task"
+                }
+              ]
+            }
+          }
+        ],
+        "memberValidation": {
+          "requiredDomainConfigFields": ["queueKey"],
+          "scheduledWorkRequired": true
+        },
+        "tags": ["starter", "population-builder"]
+      }
+    ]
+  },
+  "runPathEligibility": {
+    "schemaVersion": "synthetic_population_run_path_eligibility.v1",
+    "status": "EXPORT_ONLY",
+    "prepareValid": true,
+    "windTunnelReady": false,
+    "packDebugReady": false,
+    "windTunnelConsumesPopulation": false,
+    "windTunnelReadyMaxTargetSize": 0,
+    "packDebugReadyMaxTargetSize": 0,
+    "exportOnlyAboveTargetSize": 0,
+    "message": "Starter populations are prepare-valid and export-only until this provider consumes them in Wind Tunnel."
+  }
+}
