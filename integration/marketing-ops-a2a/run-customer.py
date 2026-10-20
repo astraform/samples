@@ -52,7 +52,7 @@ def launch(client, api, output, case="advice"):
         if client.sanitize_for_serialization(probe).get("domainId") != domain_id:
             raise ValueError(
                 "The selected Python SDK cannot preserve launch.domainId. "
-                "Install astraform-remote-domain-author-kit==0.3.4 or a newer compatible release, "
+                "Install astraform-sdk==0.3.5 or a newer compatible release, "
                 "or deliberately omit domainId in a custom scenario; this launcher "
                 "refuses to remove or manually reinsert the configured value.")
     policy = sample["launchRequestTemplate"].get("completionPolicy", {})
@@ -67,12 +67,12 @@ def launch(client, api, output, case="advice"):
         if "requireCustomerFinish" in policy and serialized.get("requireCustomerFinish") is not policy["requireCustomerFinish"]:
             raise ValueError(
                 "The selected Python SDK cannot preserve completionPolicy.requireCustomerFinish. "
-                "Install astraform-remote-domain-author-kit==0.3.4 or a newer compatible release; "
+                "Install astraform-sdk==0.3.5 or a newer compatible release; "
                 "this launcher refuses to remove or change the configured value.")
         if "requestFactBindingMode" in policy and serialized.get("requestFactBindingMode") != policy["requestFactBindingMode"]:
             raise ValueError(
                 "The selected Python SDK cannot preserve completionPolicy.requestFactBindingMode. "
-                "Install astraform-remote-domain-author-kit==0.3.4 or a newer compatible release; "
+                "Install astraform-sdk==0.3.5 or a newer compatible release; "
                 "this launcher refuses to remove or change the configured mode.")
     catalog = sample["catalogDraftRequest"]
     catalog["requestId"] = str(uuid4())

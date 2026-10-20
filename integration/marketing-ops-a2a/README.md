@@ -1,13 +1,18 @@
 # Marketing customer simulation and A2A integration
 
+This source checkout targets the next SDK releases: `ai.astraform:sdk-java:0.4.5`
+and `astraform-sdk==0.3.5`, using published contracts 1.2.3. These SDK releases
+must be published before registry-only builds work. Existing samples v0.2.0
+images and archives retain Java 0.4.4/Python 0.3.4 and their original package names.
+
 
 Connect the marketing domain provider and its LLM creative agency to a matching
 Astraform platform, targeting v0.4.0 or later. Download a compatible bundle only
 after publication and verification. The updated source templates opt in to
 `completionPolicy.requestFactBindingMode: "RESOLVE_TRUSTED"`; this requires the
 coordinator implementation and a native typed customer SDK that preserves
-that field. Published Python SDK 0.3.4 and Java SDK 0.4.4 provide the client
-capability through contracts 1.2.2. The matching server capability still requires
+that field. Python SDK 0.3.5 and Java SDK 0.4.5 provide the client
+capability through contracts 1.2.3. The matching server capability still requires
 a supporting platform; SDK publication does not establish that delivery.
 Do not use the released [platform v0.3.0 bundle](https://github.com/astraform/releases/releases/tag/v0.3.0)
 as evidence that trusted binding is supported. Its existing strict FINISH support
@@ -15,6 +20,11 @@ and the new trusted-binding mode are separate capabilities. Build and verify the
 matching platform/sample candidate with the published SDK before launch;
 publication and rebuilt image/archive delivery remain separate requirements.
 The creative agency exposes A2A 1.0 JSON-RPC through the A2A Java SDK.
+
+The source checkout’s Python launch tools require `astraform-sdk==0.3.5` after
+publication. Do not install it alongside `astraform-remote-domain-author-kit`;
+both distributions provide the same import packages. See the
+[SDK dependency setup](../../README.md#sdk-development).
 
 ## Native customer simulation
 
@@ -259,16 +269,15 @@ new runs; existing runs retain their accepted binding revisions and configuratio
 ### Launch and inspect
 
 The marketing templates require `completionPolicy.requireCustomerFinish:true`
-and `completionPolicy.requestFactBindingMode: "RESOLVE_TRUSTED"`. Published
-**Astraform Python author kit 0.3.4** preserves both fields. Use it with a
+and `completionPolicy.requestFactBindingMode: "RESOLVE_TRUSTED"`. **Astraform Python SDK 0.3.5** preserves both fields. Use it with a
 platform candidate implementing the mode; the SDK cannot supply coordinator
-behavior. From the sample repository root, install the published package in
+behavior. From the sample repository root, install the package after publication in
 Python 3.12+:
 
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-python3 -m pip install 'astraform-remote-domain-author-kit==0.3.4'
+python3 -m pip install 'astraform-sdk==0.3.5'
 ASTRAFORM_API_BASE=http://localhost:8084 \
   python3 integration/marketing-ops-a2a/run-customer.py \
   --case advice --output /tmp/marketing-advice --wait
@@ -291,8 +300,8 @@ current boundary rather than start before the review. To author a current-bounda
 proposal case, copy the proposal configuration and set both logical timestamps to
 that review boundary; the goal and the boundary are independent settings.
 
-The current provider source uses Java author-kit/conformance **0.4.4** from Maven
-Central with shared contract **1.2.2**. These domain callbacks do not provide the
+The current provider source uses Java SDK/conformance **0.4.5** from Maven
+Central with shared contract **1.2.3**. These domain callbacks do not provide the
 customer-launch behavior in the server. The new mode requires both the
 published typed client and a supporting platform implementation. Source pins
 do not update existing images or archives; see the
@@ -301,7 +310,7 @@ do not update existing images or archives; see the
 The native provider supplies the marketing run identity. A custom scenario can
 also declare `launchRequestTemplate.domainId: "marketing-ops"`, which must match
 that provider. It is run classification, not an access grant or tenant boundary.
-Published Python 0.3.4 preserves this optional field. The selected platform
+Python 0.3.5 preserves this optional field. The selected platform
 candidate must also implement explicit domain identity. The launcher rejects an
 invalid or unsupported declaration before output or Catalog writes. Omitting it
 retains existing provider-derived identity and compatibility; it is never
@@ -316,16 +325,16 @@ launcher. A standalone marketing archive includes that utility beside
 For the authored templates and a custom `MARKETING_SAMPLE_FILE` supplying
 `completionPolicy.requireCustomerFinish` as either `true` or `false`, the launcher
 checks the raw Boolean and native typed SDK serialization before writing output
-or creating, publishing or launching a Catalog definition. With published Python
+or creating, publishing or launching a Catalog definition. With Python
 SDK 0.3.2, this launcher rejects either explicit value. A custom scenario that omits the field
 retains the existing receipt-only behavior; omission does not satisfy these
 strict customer-completion requirements. The selected SDK must preserve the
 configured value. Any explicit `requestFactBindingMode` must be `VALIDATE` or
-`RESOLVE_TRUSTED` and survive native typed serialization; published 0.3.4
+`RESOLVE_TRUSTED` and survive native typed serialization; 0.3.5
 preserves both explicit modes. Older 0.3.3 clients cannot preserve them.
 Omission retains legacy validation. These checks
 run before output or Catalog/launch writes. There is no transport bridge, manual
-field insertion or silent mode removal. The SDK support is published; matching
+field insertion or silent mode removal. The SDK supports these fields; matching
 platform behavior and rebuilt image/archive delivery require separate verification.
 
 The helper prints a JSON document containing the actual launch request,
@@ -434,6 +443,6 @@ executable or start another coordinator.
 packages the launcher, selected scenario and private-network image topology. Use images
 and a platform with the capabilities required by the selected configuration;
 the source templates do not update existing published images or archives.
-Current domain source uses Java SDK 0.4.4, and the customer templates use Python
-SDK 0.3.4. Rebuild the tools image with that SDK and verify the supporting platform
+Current domain source uses Java SDK 0.4.5, and the customer templates use Python
+SDK 0.3.5. Rebuild the tools image with that SDK and verify the supporting platform
 before packaging updated templates for partners.
