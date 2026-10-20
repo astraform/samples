@@ -139,7 +139,7 @@ public class BankingRemoteDomainService implements RemoteDomainService {
                 "Apply a launch-pinned one-time credit-card rate change at its scheduled simulation time.");
 
         RemoteDomainManifestBuilder manifest = RemoteDomainManifestBuilder.remoteDomain()
-                .domain(DOMAIN_ID, "Banking Remote Domain", "Transitional Java proof for banking over remote-domain.v1.",
+                .domain(DOMAIN_ID, "Banking Domain Provider", "Java banking domain provider implementing remote-domain.v1.",
                         BankingRemoteDomainState.SCHEMA_VERSION)
                 .supportedAgentTypes(List.of("Customer", "Policy"))
                 .supportedInteractionModes(List.of("SIMULATION", "HYBRID"))

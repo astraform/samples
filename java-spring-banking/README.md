@@ -1,9 +1,14 @@
-# Java Spring Banking Remote Domain
+# Java Spring Banking Domain Provider
+
+This source checkout targets the next SDK releases: `ai.astraform:sdk-java:0.4.5`
+and `astraform-sdk==0.3.5`, using published contracts 1.2.3. These SDK releases
+must be published before registry-only builds work. Existing samples v0.2.0
+images and archives retain Java 0.4.4/Python 0.3.4 and their original package names.
 
 Standalone Java/Spring reference provider for `remote-domain.v1`.
 
-The provider uses published [Java SDK 0.4.4](https://central.sonatype.com/artifact/ai.astraform/remote-domain-author-kit-java/0.4.4)
-and [contract bundle 1.2.2](https://github.com/astraform/remote-domain-contracts/releases/tag/v1.2.2).
+The provider uses `ai.astraform:sdk-java:0.4.5` (next release)
+and [contract bundle 1.2.3](https://github.com/astraform/remote-domain-contracts/releases/tag/v1.2.3).
 Its existing SDK controller delegates banking operations to
 `BankingRemoteDomainService`; the SDK supplies the protocol models, manifest
 builder and conformance validation. The banking database, statement calculations
@@ -18,7 +23,7 @@ requires a private platform checkout.
 
 This sample proves a banking domain can run outside the Astraform core process
 while still exposing runtime state, product metadata, domain tools, Policy Wind
-Tunnel metadata, bundles, artifacts, and scorecards through public remote-domain
+Tunnel metadata, bundles, artifacts, and scorecards through public domain-provider
 contracts.
 
 ## Scope
@@ -74,7 +79,7 @@ The local example database uses `banking` for database/user/password and a named
 volume. `BANKING_DB_USERNAME`, `BANKING_DB_PASSWORD`, and `BANKING_DB_POOL_SIZE`
 override those settings. Stopping/restarting the service or database preserves
 records. The backend is opt-in (`BANKING_BACKEND_ENABLED=false` by default), so
-existing remote-domain protocol consumers remain compatible.
+existing provider-protocol consumers remain compatible.
 
 Populate two distinct customers before creating their Astraform agents:
 
@@ -148,7 +153,7 @@ schemas. The provider advertises and validates the MCP output schema.
 
 ### Native monthly events against the bank database
 
-The `remote-domain.native-reference-state.v1` profile in contract bundle 1.2.2
+The `remote-domain.native-reference-state.v1` profile in contract bundle 1.2.3
 connects monthly statement events to these authoritative records. Enable it
 explicitly after building the service with `mvn -B -ntp package -DskipTests`:
 
@@ -163,7 +168,7 @@ java -jar target/java-spring-banking.jar --server.port=8098
 The profile property defaults to `remote-domain.native-state-transform.v1`, preserving
 the earlier checkpoint-only deployment. These are distinct manifest profiles.
 Prepare and `domain-system-work-window` retain their existing SDK endpoints. The
-[released reference profile](https://github.com/astraform/remote-domain-contracts/blob/v1.2.2/remote-domain/v1/profiles/native-reference-state/README.md)
+[released reference profile](https://github.com/astraform/remote-domain-contracts/blob/v1.2.3/remote-domain/v1/profiles/native-reference-state/README.md)
 defines the contract, declared through the SDK's `nativeReferenceState(...)`
 manifest builder. Customer account reads use the bank's `/mcp` endpoint; this
 profile does not advertise the checkpoint-only account tool described below.
@@ -267,11 +272,11 @@ this policy alone does not make the customer act.
 - Maven 3.9+
 - Spring Boot `4.1.0`
 - Native Jackson 3
-- `ai.astraform:remote-domain-author-kit-java:0.4.4`
-- `ai.astraform:remote-domain-conformance-java:0.4.4` (test dependency)
+- `ai.astraform:sdk-java:0.4.5`
+- `ai.astraform:conformance-java:0.4.5` (test dependency)
 
-Both SDK dependencies share `remote-domain.sdk.version` in `pom.xml` and resolve
-from Maven Central. Building the SDK from a sibling checkout is unnecessary.
+Both SDK dependencies share `remote-domain.sdk.version` in `pom.xml`. After
+publication, they resolve from Maven Central. Building the SDK from a sibling checkout is unnecessary.
 
 ## Run
 
@@ -433,8 +438,8 @@ is not a provider-hosted receipt service or an exactly-once promise for remote
 banking actions. Native calls pin `X-Astraform-Expected-Provider-Revision` and
 verify the echoed `X-Astraform-Provider-Revision` as well as manifest identity.
 
-The [released checkpoint profile](https://github.com/astraform/remote-domain-contracts/blob/v1.2.2/remote-domain/v1/profiles/native-state-transform/README.md)
-and its tool schema are included in Java SDK 0.4.4. The sample uses the SDK's
+The [released checkpoint profile](https://github.com/astraform/remote-domain-contracts/blob/v1.2.3/remote-domain/v1/profiles/native-state-transform/README.md)
+and its tool schema are included in Java SDK 0.4.5. The sample uses the SDK's
 `nativeStateTransform(...)` and `readOnlyCustomerTool(...)` builders through the
 SDK controller.
 The existing conformance test covers the default legacy configuration. Validate
