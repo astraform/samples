@@ -75,7 +75,7 @@ public class MarketingOpsRemoteDomainService {
     private static final List<String> NATIVE_WORK_KINDS = List.of("task", "action");
     private static final String PROTOCOL_VERSION = "remote-domain.v1";
     private static final String DOMAIN_ID = "marketing-ops";
-    private static final String DISPLAY_NAME = "Marketing Operations Remote Domain";
+    private static final String DISPLAY_NAME = "Marketing Operations Domain Provider";
     private static final String SCHEMA_VERSION = "marketing-ops.state.v1";
     private static final String TRANSPORT_CONTENT_TYPE = "application/vnd.astraform.remote-domain.v1+json";
     private static final int MAX_OPAQUE_STATE_BYTES = 262_144;

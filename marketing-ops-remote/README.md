@@ -1,12 +1,17 @@
-# marketing-ops-remote
+# Marketing Operations Domain Provider
 
-This sample is a standalone Java/Spring marketing-ops remote domain provider.
+This source checkout targets the next SDK releases: `ai.astraform:sdk-java:0.4.5`
+and `astraform-sdk==0.3.5`, using published contracts 1.2.3. These SDK releases
+must be published before registry-only builds work. Existing samples v0.2.0
+images and archives retain Java 0.4.4/Python 0.3.4 and their original package names.
+
+This sample is a standalone Java/Spring marketing-ops domain provider.
 
 The service implements `remote-domain.v1`, owns opaque marketing-ops state,
 projects status and inspection fragments, and acknowledges host-driven shutdown
 over HTTP/JSON.
 
-It also implements `PolicyWindTunnelService` from the Java author kit, which
+It also implements `PolicyWindTunnelService` from the Java SDK, which
 exposes the Marketing Ops Policy Wind Tunnel provider over
 `/policy-wind-tunnel/...`. Marketing Ops does not need
 `experiment-service` to discover an in-process pack or carry a Marketing Ops
@@ -18,9 +23,9 @@ policies, population catalogs and Scenario Lab evidence. The companion owns
 its A2A endpoint and collaboration behavior. In LLM mode, that model chooses
 both the advice and its disposition; neither performs the provider's business work.
 
-It uses public Java author-kit and conformance artifacts **0.4.4** plus ordinary
-Spring dependencies. Both artifacts resolve from Maven Central and use the
-published shared contract release **1.2.2**. Building a sibling SDK checkout is
+It uses public Java SDK and conformance artifacts **0.4.5** plus ordinary
+Spring dependencies. After the SDK releases are published, both artifacts resolve from Maven Central.
+They use published shared contract release **1.2.3**. Building a sibling SDK checkout is
 unnecessary. The native capability uses the SDK-generated typed profile. Host
 SPI classes are not required in the provider.
 
@@ -31,13 +36,13 @@ SPI classes are not required in the provider.
 - Spring Boot `4.1.0`
 - Native Jackson 3
 
-## What It Proves
+## Capabilities
 
-- the remote-domain contract can be generated into a real Spring server
+- the provider contract supplies generated Spring server interfaces
 - the service can accept the vendor media type
 - prepare, execute-work, status, inspection, and shutdown are all implemented
 - Policy Wind Tunnel pack metadata, presets, runs, bundles, artifacts, and
-  evidence packs are exposed from the remote domain service
+  evidence packs are exposed from the domain provider
 - domain-owned scorecard metadata is published for generic dashboard rendering
 - domain-owned Population Builder archetypes and recipes are published through
   `/api/remote-domain/v1/population/catalog`
@@ -46,14 +51,14 @@ SPI classes are not required in the provider.
 - domain state stays opaque to the host and is versioned with `marketing-ops.state.v1`
 - no in-process Scenario Lab pack is loaded into `experiment-service`
 
-## What It Does Not Prove Yet
+## Deployment limits
 
-- non-JVM/polyglot implementations beyond the JVM
-- production auth and ingress policy for remote domains
+- this reference implementation targets Java/Spring
+- production authentication and ingress policy require deployment-specific configuration
 - full multi-tenant operational guarantees
 
 The provider exposes registration, manifest discovery and population metadata
-through the remote-domain contract. For native customer simulations, use the
+through the provider contract. For native customer simulations, use the
 launch instructions below. Historical Scenario Lab registration through
 `scenario.lab.remote.providers` is not a native customer launch path.
 
@@ -147,6 +152,6 @@ copied into this sample.
 
 Use the [native launch-once instructions](../integration/marketing-ops-a2a/README.md)
 to publish a real-model customer, observe a scheduled review and receive an
-actual Creative Agency response. The launcher uses the published SDK to create,
+actual Creative Agency response. The launcher uses the native SDK to create,
 publish and launch the customer; Astraform owns subsequent execution and stopping. The per-persona sample does
 not establish multi-customer or multi-year capacity.
