@@ -4,17 +4,41 @@ All examples share one repository-wide `vX.Y.Z` release in `astraform/samples`.
 The platform is released independently in `astraform/releases`; SDK versions
 remain independent. Do not create per-language or per-starter tags.
 
-## Prepare v0.2.0
+## Source SDK rename prerequisites
 
-The next samples release targets **platform v0.4.0**,
-**Java SDK 0.4.4**, **Python SDK 0.3.4** and **contracts 1.2.2**. Samples v0.2.0
-is not published yet. The historical samples v0.1.0/platform v0.2.0 pairing
+Before preparing new images or starter archives from this checkout:
+
+1. Publish `ai.astraform:sdk-java:0.4.5` and `astraform-sdk==0.3.5`, plus their
+   separate conformance packages at the matching versions. They use published
+   contracts 1.2.3 and preserve existing imports and APIs.
+2. Regenerate and review `python-fastapi-banking/uv.lock` and
+   `banking-advice-agent/uv.lock` from the actual PyPI releases, then verify
+   registry-only locked installs. Do not commit local wheel paths or guessed
+   registry URLs/hashes. Replace the old Python SDK distribution rather than
+   installing both distributions into one environment.
+3. Build and verify new sample images, then select a new samples release version
+   and capture its real revisions, digests and checksums. The published v0.2.0
+   `release.json`, images and archives must remain unchanged.
+
+The source packagers now declare the renamed SDKs. Reproducing published v0.2.0
+uses the source revisions recorded in its manifest, rather than current source.
+
+The generic `starter-java-spring` provider is part of samples source. Its
+standalone Maven build runs in the existing Java CI job; it does not introduce
+another image selector or deployment archive. The Java SDK release publishes
+its parent, SDK and conformance artifacts separately from this sample.
+
+## Historical v0.2.0 preparation
+
+The published samples v0.2.0 release targets **platform v0.4.0**,
+**Java SDK 0.4.4**, **Python SDK 0.3.4** and **contracts 1.2.2**. Its archives and images are immutable. The historical samples v0.1.0/platform v0.2.0 pairing
 retains its original bytes and compatibility. Do not overwrite that samples tag,
 its images or its assets.
 
-`release.json` selects four archives and stays **`publicationReady:false`**.
-Null revision, image and checksum fields are intentionally unknown until actual
-artifacts are reviewed; they must never be copied from the previous release.
+`release.json` selects the four published archives with reviewed revisions,
+image digests and archive checksums. For a future release, start a new unready
+selection rather than reusing these identities; unknown fields remain null until
+actual artifacts are reviewed.
 Preparation rejects an unready manifest before fetching source, running a
 packager or creating output.
 

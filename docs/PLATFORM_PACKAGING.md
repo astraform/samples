@@ -54,13 +54,19 @@ per-user authentication, high availability or a production certification.
   through the SDK. Add customer MCP tools or a native domain provider only when
   your scenario needs them.
 
-Current Java provider source pins published author kit **0.4.4**; Python
-bank/advice source locks select published **0.3.4**. Both consume public contracts
-**1.2.2**. Each author kit includes its generated platform client and domain
-authoring interfaces; no second platform-client package is needed. Customer
-launch/export uses that generated client. Monthly banking omits
-`completionPolicy.requireCustomerFinish`; issued banking and both current marketing
-templates explicitly require it.
+Current Java provider source targets `ai.astraform:sdk-java:0.4.5`; Python
+bank/advice source targets `astraform-sdk==0.3.5`. Both use published contracts
+**1.2.3**. The renamed SDK releases must be published, then both Python registry
+locks must be regenerated before registry-only source builds or image packaging.
+Each SDK includes its generated platform client and domain authoring interfaces;
+no second platform-client package is needed. Customer launch/export uses that
+generated client. Monthly banking omits `completionPolicy.requireCustomerFinish`;
+issued banking and both current marketing templates explicitly require it.
+
+The published samples v0.2.0 archives retain Java 0.4.4/Python 0.3.4 and the old
+package identities. New package names preserve imports and APIs. Replace the old
+Python SDK distribution instead of installing both because they supply the same
+import packages. See [source dependency setup](../README.md#sdk-development).
 
 Java 0.4.4/Python 0.3.4 preserve the native Boolean, including `false`, as well
 as `domainId` and `completionPolicy.requestFactBindingMode`; launchers
@@ -169,6 +175,12 @@ it does not import your provider code or access its storage directly.
 
 ## Distribution and licenses
 
+The source-only [Java provider starter](../starter-java-spring/README.md) is the
+minimal starting point for a new native domain provider. It builds independently
+against the Java SDK and conformance packages and does not require an SDK source
+checkout. It is distributed with samples source, without an additional Docker
+image, deployment archive or Maven Central template artifact.
+
 All samples use one repository release version. A shared release contains the
 source for every example and separate starter archives for the examples packaged
 for deployment. Adding a language or framework does not create another release
@@ -177,20 +189,23 @@ stream, and downloading one starter does not install the others.
 The published first samples release, **v0.1.0**, includes a Python banking starter targeting
 platform **v0.2.0**, Python SDK **0.3.2** and contracts **1.2.0**. Java and marketing
 remain source examples in that release; they do not yet have starter archives.
-The v0.2.0 release plan covers Python-issued, Java-issued, Java-monthly and
+Published v0.2.0 covers Python-issued, Java-issued, Java-monthly and
 scheduled-marketing archives through the existing deterministic packagers.
 Their public mode takes `--platform-release v0.4.0`; the separate local mode
 still covers Java/Python issued/monthly and scheduled/current marketing,
 records `localVerificationOnly`, installed image IDs and payload hashes, and
-cannot be relabelled as a public package. Historical published bytes are unchanged. The next public-mode candidates require an explicit **platform v0.4.0**
-selection and published Java 0.4.4/Python 0.3.4/contracts 1.2.2. Current source
+cannot be relabelled as a public package. Historical published bytes are unchanged. The historical v0.2.0 public-mode candidates use **platform v0.4.0**,
+Java 0.4.4/Python 0.3.4/contracts 1.2.2. New source packagers declare Java
+0.4.5/Python 0.3.5/contracts 1.2.3 and the new SDK installation names; use them
+only with new images containing those dependencies after SDK publication. Current source
 uses its domain-identity/trusted-binding server capabilities described
 in the selected guide. The existing packagers reject earlier releases when the
 selected scenario requires either new field, preserve completion/native-domain requirements and verify
 anonymous digest/architecture/source metadata. Public platform v0.2.0 does not
 supply strict stopping. Platform v0.3.0 is publicly available; samples v0.2.0
-remains in preparation. Its release selection stays unready until actual sample
-images, revisions and archive checksums are reviewed.
+is published with its recorded image digests and checksums. The committed
+`release.json` reproduces that immutable selection; prepare a new release
+selection after publishing renamed SDKs and rebuilding sample images.
 See the [banking guide](../deploy/banking-starter/README.md#java-and-monthly-banking)
 and [marketing guide](../deploy/marketing-starter/README.md). Provider callbacks
 and Python customer launch/export are distinct verification paths. Older 0.3.2
