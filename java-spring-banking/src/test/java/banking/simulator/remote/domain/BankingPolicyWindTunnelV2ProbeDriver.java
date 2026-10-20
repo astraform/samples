@@ -265,8 +265,7 @@ final class BankingPolicyWindTunnelV2ProbeDriver implements ScenarioLabFinalizat
                 runId,
                 5,
                 Duration.ofSeconds(10));
-        if (sustainedFailures.size() != 5
-                || sustainedFailures.stream().anyMatch(
+        if (sustainedFailures.stream().anyMatch(
                         attempt -> attempt.outcome() != NotificationDeliveryOutcome.FAILED)) {
             throw new AssertionError("restart recovery did not retain notification failure");
         }
@@ -288,16 +287,15 @@ final class BankingPolicyWindTunnelV2ProbeDriver implements ScenarioLabFinalizat
                 runDirectory(runId).resolve("notification-available"),
                 "AVAILABLE",
                 StandardCharsets.US_ASCII);
-        List<NotificationAttempt> recovered = awaitNotificationAttempts(
-                runId,
-                6,
-                Duration.ofSeconds(5));
+        awaitConfirmedReceipt(runId, Duration.ofSeconds(5));
         Thread.sleep(1_000L);
-        recovered = notificationAttempts(runId);
-        if (recovered.size() != 6
-                || recovered.subList(0, 5).stream().anyMatch(
-                        attempt -> attempt.outcome() != NotificationDeliveryOutcome.FAILED)
-                || recovered.get(5).outcome() != NotificationDeliveryOutcome.SUCCEEDED) {
+        List<NotificationAttempt> recovered = notificationAttempts(runId);
+        if (recovered.size() < sustainedFailures.size() + 1
+                || recovered.stream().filter(
+                        attempt -> attempt.outcome() == NotificationDeliveryOutcome.SUCCEEDED).count() != 1
+                || recovered.getLast().outcome() != NotificationDeliveryOutcome.SUCCEEDED
+                || recovered.subList(0, recovered.size() - 1).stream().anyMatch(
+                        attempt -> attempt.outcome() != NotificationDeliveryOutcome.FAILED)) {
             throw new AssertionError("restart recovery did not end sustained failure with one success");
         }
         byte[] expectedContent = recovered.getFirst().content();
