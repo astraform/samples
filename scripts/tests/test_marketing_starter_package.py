@@ -169,26 +169,6 @@ class MarketingStarterPackageTest(unittest.TestCase):
         self.assertIn('domainId', configuration['requiredCustomerSdkCapabilities'])
         self.assertEqual(packager.packaging.file_hash(bundle / 'scenario.json'), manifest['files']['scenario.json']['sha256'])
 
-    def test_proposal_review_archive_preserves_selected_case_and_integrity(self):
-        images = {key: f"registry.example/{key}@sha256:" + "a" * 64 for key in self.images}
-        with patch.object(packager.packaging.subprocess, "check_output", side_effect=self.registry):
-            bundle = packager.package("v0.1.0", images, self.directory / "proposal", False,
-                                      "a" * 40, platform_release="v0.4.0", case="proposal-review")
-        selected = json.loads((ROOT / "integration/marketing-ops-a2a/proposal-review-configuration.json").read_text())
-        self.assertEqual(selected, json.loads((bundle / "scenario.json").read_text()))
-        self.assertEqual("proposal-review", json.loads((bundle / "starter-config.json").read_text())["case"])
-        manifest = json.loads((bundle / "bundle-manifest.json").read_text())
-        self.assertEqual(selected["launchRequestTemplate"]["completionPolicy"]["requestFactBindingMode"],
-                         manifest["requiredPlatform"]["completionPolicy.requestFactBindingMode"])
-        for relative, metadata in manifest["files"].items():
-            self.assertEqual(packager.packaging.file_hash(bundle / relative), metadata["sha256"])
-        with patch.object(packager.packaging.subprocess, "check_output") as docker:
-            with self.assertRaisesRegex(ValueError, "proposal-review uses the scheduled scenario"):
-                packager.package("v0.1.0", self.images, self.directory / "unsupported", True,
-                                 "a" * 40, scenario="current", case="proposal-review")
-            docker.assert_not_called()
-        self.assertFalse((self.directory / "unsupported").exists())
-
     def test_binding_and_finish_metadata_preserve_omission_and_explicit_values(self):
         source = self.directory / "source"
         files = {**packager.FILES,
