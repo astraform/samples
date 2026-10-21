@@ -1,10 +1,13 @@
 # Marketing starter
 
-The published samples v0.2.0 archives retain Java SDK 0.4.4/Python SDK 0.3.4.
-When packaging from newer source, use the generated manifest’s compatibility
-section: current source uses published `ai.astraform:sdk-java:0.4.5` and
-`astraform-sdk==0.3.5` with contracts 1.2.3. Build and verify new images before
-distributing a starter using those dependencies.
+These instructions describe the samples **v0.2.1** scheduled-marketing starter,
+using published **`ai.astraform:sdk-java:0.4.5`**, **`astraform-sdk==0.3.5`** and
+**contracts 1.2.3**. Use the selected archive's compatibility manifest and pinned
+images. Download v0.2.1 only after its release assets are published; a source
+version or successful build does not establish availability.
+
+The historical published samples v0.2.0 archives retain Java SDK 0.4.4,
+Python SDK 0.3.4 and contracts 1.2.2. Their images and archives remain unchanged.
 
 Run the Marketing Ops domain provider and its LLM Creative Agency from matching images,
 then launch a customer through the native Python SDK. The platform is a separate
@@ -100,28 +103,25 @@ well as successful ones. The observer defaults to1,500 seconds for the scenario'
 
 ## Scenario and provider configuration
 
-Choose the customer case when preparing an archive: the marketing packager's
-`--case advice` is the default, and `--case proposal-review` selects the separate
-proposal-assessment goal. Advice asks for an actionable recommendation; proposal
-review asks the customer to develop its own handoff and seek the agency's
-assessment of its coverage and remaining gaps. The models choose the messages
-and actions. Neither case scripts follow-up turns or performs an external handoff.
-Proposal-review packaging uses the scheduled boundary. The existing advice case
-also supports `--scenario current`.
+The marketing example has one customer goal: understand the actual readiness
+finding and get practical agency advice. The customer can clarify an answer or
+propose a handoff for agency feedback within that conversation. The models choose
+their messages and actions; the example does not prescribe follow-up turns,
+require a proposal, force success or perform an external handoff.
 
-The selected case is stored in `starter-config.json` and its complete template is
-shipped as `scenario.json`. Compose explicitly selects that file through
-`MARKETING_SAMPLE_FILE`; it takes precedence over the source launcher's `--case`
-flag. To change a packaged case, prepare another archive or edit its complete
-scenario before launching. The source launcher can select either authored case
-directly when that environment variable is unset.
-
-The `scheduled` scenario starts at 2026-01-15 08:30 UTC; the domain's 09:00 review
-publishes its own finding, and the customer chooses its actions. The `current`
-variant starts at09:00 with the review admitted at the current boundary. Both
-reuse the existing marketing scenarios and native domain provider. The scheduled
-horizon extends to 2026-01-16 10:00 UTC, while the current variant has a fixed
+The packager's `--scenario scheduled` selection starts at 2026-01-15 08:30 UTC;
+the domain's 09:00 review publishes its own finding, and the customer chooses its
+actions. `--scenario current` starts at 09:00 with the review admitted at the
+current boundary. Both timing variants use the same customer goal and native
+domain provider. The scheduled horizon extends to 2026-01-16 10:00 UTC, while the current variant has a fixed
 boundary. These are evaluation bounds, not month/year capacity claims.
+
+The selected timing variant is recorded in `starter-config.json`, and its complete
+configuration is shipped as `scenario.json`. Compose selects that file through
+`MARKETING_SAMPLE_FILE`. Edit the complete scenario before a fresh launch to
+change its customer, facts or limits; existing runs retain their accepted
+configuration. The source launcher also accepts a complete configuration through
+`MARKETING_SAMPLE_FILE`.
 
 All authored scenarios require a qualifying partner receipt **and a later
 accepted customer FINISH** through `completionPolicy.requireCustomerFinish:true`.

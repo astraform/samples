@@ -1,22 +1,25 @@
 # Banking starter
 
-The published samples v0.2.0 archives retain Java SDK 0.4.4/Python SDK 0.3.4.
-When packaging from newer source, use the generated manifest’s compatibility
-section: current source uses published `ai.astraform:sdk-java:0.4.5` and
-`astraform-sdk==0.3.5` with contracts 1.2.3. Build and verify new images before
-distributing a starter using those dependencies.
+These instructions describe samples **v0.2.1**, targeting **Platform v0.4.0**,
+published **`ai.astraform:sdk-java:0.4.5`**, **`astraform-sdk==0.3.5`** and
+**contracts 1.2.3** where applicable. Use the selected archive's manifest and
+pinned images; source version changes do not publish or update those artifacts.
+
+The historical published samples v0.2.0 archives retain Java SDK 0.4.4,
+Python SDK 0.3.4 and contracts 1.2.2. Follow their bundled instructions when
+using those unchanged images and archives.
 
 Run a model-backed banking customer against a banking advice agent over A2A 1.0 JSON-RPC. The customer can read its own account through MCP; the advice agent reads the same partner-owned records through the banking API. Bank data lives in the starter's PostgreSQL database. Astraform stores simulation state and evidence separately. The bank is a domain provider; `remote-domain.v1` and its profile names identify its supported provider protocol.
 
-The published samples **v0.2.0** downloads target **Platform v0.4.0**, with **Java SDK 0.4.4**, **Python SDK 0.3.4** and **contracts 1.2.2** where applicable. Download the platform and one starter archive, verify their checksums, and configure your models. The supplied images include the SDKs and launch tools; no private source checkout, image build or host SDK installation is required for the container workflow.
+Once the selected samples release is published, download the platform and one starter archive, verify their checksums, and configure your models. The supplied images include the SDKs and launch tools; no private source checkout, image build or host SDK installation is required for the container workflow.
 
 ## Choose a banking scenario
 
 | Variant | Archive | Behavior |
 | --- | --- | --- |
-| Python issued | `astraform-banking-starter-v0.2.0.tar.gz` | Explain an existing January statement using the Python bank. |
-| Java issued | `astraform-java-banking-issued-starter-v0.2.0.tar.gz` | The same enquiry using the Java bank. |
-| Java monthly | `astraform-java-banking-monthly-starter-v0.2.0.tar.gz` | Generate January–March statements through the Java native provider. |
+| Python issued | `astraform-banking-starter-v0.2.1.tar.gz` | Explain an existing January statement using the Python bank. |
+| Java issued | `astraform-java-banking-issued-starter-v0.2.1.tar.gz` | The same enquiry using the Java bank. |
+| Java monthly | `astraform-java-banking-monthly-starter-v0.2.1.tar.gz` | Generate January–March statements through the Java native provider. |
 
 The issued customer, Avery, has AUD 100 available and wants to understand the bank's explanation of the AUD 48 minimum, AUD 1,200 full balance and due date. Reading account records can inform the customer's questions; a lookup alone does not satisfy this request for advice. The model chooses its questions, lookups and clarifications. This enquiry does not make or schedule a payment, monitor a due date or generate another statement.
 
@@ -26,12 +29,12 @@ The monthly scenario starts on 15 January and retains participation through 2 Ap
 
 ## Download and extract
 
-Download your selected archive and matching checksum from [Samples v0.2.0](https://github.com/astraform/samples/releases/tag/v0.2.0). Keep them beside the separately extracted [Platform v0.4.0 bundle](https://github.com/astraform/releases/releases/tag/v0.4.0).
+When v0.2.1 appears in the [published samples releases](https://github.com/astraform/samples/releases), download your selected archive and matching checksum. Keep them beside the separately extracted [Platform v0.4.0 bundle](https://github.com/astraform/releases/releases/tag/v0.4.0).
 
 Set `archive` to the exact file you downloaded:
 
 ```sh
-archive=astraform-banking-starter-v0.2.0.tar.gz
+archive=astraform-banking-starter-v0.2.1.tar.gz
 shasum -a 256 -c "$archive.sha256"
 tar -xzf "$archive"
 cd "${archive%.tar.gz}"
@@ -118,7 +121,7 @@ The launcher creates a fresh bank context, discovers the actual MCP descriptor a
 
 ### Compatibility
 
-Use the releases recorded by the selected archive. Issued banking's strict-FINISH behavior requires Platform v0.3.0 or later, and its explicit `domainId` raises the requirement to v0.4.0. The monthly scenario requires retained-participation support. Published Python 0.3.4 and Java 0.4.4 preserve the fields used by these archives. Publishing or installing an SDK does not upgrade platform images.
+Use the releases recorded by the selected archive. Issued banking's strict-FINISH behavior requires Platform v0.3.0 or later, and its explicit `domainId` raises the requirement to v0.4.0. The monthly scenario requires retained-participation support. Published Python 0.3.5 and Java 0.4.5 preserve the fields used by these starters. Publishing or installing an SDK does not upgrade platform images.
 
 Older Python SDK 0.3.2 cannot preserve an explicit `requireCustomerFinish` field; do not substitute it for the issued launcher. The historical Samples v0.1.0 archive targets Platform v0.2.0 and Python 0.3.2 instead; follow that archive's own guide and manifest. Initialization never upgrades platform images or silently removes a completion criterion.
 
@@ -152,7 +155,7 @@ The container launcher uses Python even when the bank provider is Java. To let J
 
 This seeds one bank context and discovers the scoped MCP descriptor. It writes `runs/java-prepared/prepared-scenario.json` with top-level `catalog` and `launch` objects, plus setup receipts. Preparation writes partner-bank data but makes no Catalog create/publish or Journey launch request and invokes no customer model. Use a new empty directory for each intentional preparation.
 
-Use the [Java client and SDK setup guide](https://astraform.ai/docs/starters/java-banking/#java-sdk-client) with published Java SDK 0.4.4. Pass the prepared banking JSON to `FirstSimulation launch SCENARIO OUTPUT`; do not replace it with the generic returns scenario. The scenario path is its absolute host path, such as `/absolute/path/to/starter/runs/java-prepared/prepared-scenario.json`, rather than the container path `/runs/java-prepared`.
+Use the [Java client and SDK setup guide](https://astraform.ai/docs/starters/java-banking/#java-sdk-client) with published `ai.astraform:sdk-java:0.4.5`; check that the client POM uses this coordinate instead of the older SDK artifact name. Pass the prepared banking JSON to `FirstSimulation launch SCENARIO OUTPUT`; do not replace it with the generic returns scenario. The scenario path is its absolute host path, such as `/absolute/path/to/starter/runs/java-prepared/prepared-scenario.json`, rather than the container path `/runs/java-prepared`.
 
 Set `ASTRAFORM_API_BASE` to the platform's deployment origin without `/api`. Choose a separate Java output directory that does not yet exist, such as `first-run`; do not create it in advance. The Java client validates typed field preservation before Catalog writes. Use its inspect/resume commands with the original saved directory and identities after an uncertain response; do not prepare or launch a replacement. The downloadable Java client is separate from the starter archive and requires JDK 21+ and Maven on the host.
 
