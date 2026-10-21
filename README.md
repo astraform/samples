@@ -8,7 +8,8 @@ and contracts **1.2.2**. Their dependency names and bytes remain unchanged.
 
 This source checkout uses published **`ai.astraform:sdk-java:0.4.5`** from Maven
 Central and **`astraform-sdk==0.3.5`** from PyPI, built against published
-**contracts 1.2.3**. No SDK source checkout is required.
+**contracts 1.2.3**, for the **samples v0.2.1** release candidate. Continue using
+published v0.2.0 downloads until v0.2.1 is available. No SDK source checkout is required.
 See [SDK development](#sdk-development) before building this checkout.
 
 Clone the examples to build and adapt them:
@@ -24,7 +25,14 @@ cd samples
 | --- | --- |
 | [Python banking starter](deploy/banking-starter/README.md) | An image-only deployment with a separate bank database, an LLM banking partner and one customer asking about an issued statement. Available in the published samples v0.2.0 release. Follow its bundled dependency requirements. |
 | [Banking from sample source](banking-advice-agent/README.md) | Build either bank and configure the shared LLM partner. The default and monthly cases use the published customer SDK; strict issued-statement completion and the declared domain label use the published native SDK and require the supporting platform capabilities described in the guide. |
-| [Marketing from sample source](integration/marketing-ops-a2a/README.md#native-customer-simulation) | Build the Marketing Ops provider and LLM Creative Agency, configure their connections and launch a customer seeking campaign advice. |
+| [Marketing from sample source](integration/marketing-ops-a2a/README.md#native-customer-simulation) | Build the Marketing Ops provider and LLM Creative Agency, then launch a customer seeking to understand a readiness finding and get practical advice. |
+
+The marketing example uses one conversation. The customer can clarify the
+agency's advice or propose a handoff for feedback as part of resolving the same
+goal. Scheduled and current-boundary configurations start before the readiness
+review or at its due boundary; the customer chooses its own messages and
+stopping decision.
+Agency feedback does not execute a handoff or clear a campaign for launch.
 
 For the historical starter v0.1.0 and compatible non-strict source scenarios,
 the public baseline is [Astraform Platform v0.2.0](https://github.com/astraform/releases/releases/tag/v0.2.0).
@@ -177,23 +185,24 @@ all examples and any prepared starter archives. Choose the domain/language you
 need; you do not need to install all samples.
 
 The published **v0.2.0** release provides Python-issued, Java-issued and
-Java-monthly [banking starters](deploy/banking-starter/README.md#java-and-monthly-banking)
+Java-monthly [banking starters](deploy/banking-starter/README.md#choose-a-banking-scenario)
 and a [scheduled marketing starter](deploy/marketing-starter/README.md), targeting
 platform **v0.4.0**. Their manifests retain Java SDK **0.4.4**, Python SDK
-**0.3.4** and contracts **1.2.2**. `release.json` records the published revisions,
-image digests and archive checksums; preserve that immutable release selection.
+**0.3.4** and contracts **1.2.2**. Its published manifests, image digests and
+archive checksums remain unchanged.
 The historical **v0.1.0** Python banking starter retains platform **v0.2.0**,
 Python SDK **0.3.2** and contracts **1.2.0**.
 
-The next source release uses the published SDK packages described in
-[SDK development](#sdk-development). Build and verify new images from the updated
-source before packaging them. Select a new samples version and
-review its actual source/image revisions, digests and archive checksums before
-preparing a new release manifest. Do not reuse v0.2.0 artifact identities.
+The **v0.2.1** candidate keeps the same four starter selections and platform
+**v0.4.0** target, using the published SDK packages described in
+[SDK development](#sdk-development). `release.json` prepares this new selection;
+it remains unready until new images, source revisions, digests and archive
+checksums have been reviewed. Do not reuse v0.2.0 artifact identities or treat
+the candidate as an available download.
 The generic [Java provider starter](starter-java-spring/README.md) is source-only
 in this checkout. Build or copy it from samples; it is no longer a Maven Central
 template artifact in the Java SDK release. It does not add a new image or starter
-archive to the published v0.2.0 selection.
+archive to the four deployment starters.
 The existing packagers accept an explicit supporting platform release for
 public-mode candidates and retain a separate `localVerificationOnly` mode for
 installed-image rehearsals. Neither mode publishes artifacts.
@@ -202,7 +211,8 @@ Platform deployment bundles remain in [astraform/releases](https://github.com/as
 Platform and SDK versions are independent of the samples version. Only download
 assets after their release is published; passing CI is not publication.
 
-See the [changelog](CHANGELOG.md), [v0.2.0 release notes](docs/releases/v0.2.0.md), [historical v0.1.0 notes](docs/releases/v0.1.0.md)
+See the [changelog](CHANGELOG.md), [v0.2.1 candidate notes](docs/releases/v0.2.1.md),
+[v0.2.0 release notes](docs/releases/v0.2.0.md) and [historical v0.1.0 notes](docs/releases/v0.1.0.md)
 and [maintainer publication instructions](docs/PUBLICATION_CHECKLIST.md). One
 **Publish Samples Release** workflow prepares or publishes the repository release.
 Image publication is separate and is needed only when images change.

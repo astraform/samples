@@ -17,9 +17,10 @@ Before preparing new images or starter archives from this checkout:
    changing dependencies; do not commit local wheel paths or guessed registry
    URLs/hashes. Replace the old Python SDK distribution rather than
    installing both distributions into one environment.
-3. Build and verify new sample images, then select a new samples release version
-   and capture its real revisions, digests and checksums. The published v0.2.0
-   `release.json`, images and archives must remain unchanged.
+3. Prepare the v0.2.1 selection as unready, then build and verify new sample
+   images and capture their real revisions, digests and archive checksums.
+   Preserve the published v0.2.0 manifests, images and archives; replacing the
+   current candidate selection does not replace those historical artifacts.
 
 The source packagers now declare the renamed SDKs. Reproducing published v0.2.0
 uses the source revisions recorded in its manifest, rather than current source.
@@ -29,26 +30,32 @@ standalone Maven build runs in the existing Java CI job; it does not introduce
 another image selector or deployment archive. The Java SDK release publishes
 its parent, SDK and conformance artifacts separately from this sample.
 
-## Historical v0.2.0 preparation
+## Historical releases
 
 The published samples v0.2.0 release targets **platform v0.4.0**,
 **Java SDK 0.4.4**, **Python SDK 0.3.4** and **contracts 1.2.2**. Its archives and images are immutable. The historical samples v0.1.0/platform v0.2.0 pairing
 retains its original bytes and compatibility. Do not overwrite that samples tag,
 its images or its assets.
 
-`release.json` selects the four published archives with reviewed revisions,
-image digests and archive checksums. For a future release, start a new unready
-selection rather than reusing these identities; unknown fields remain null until
-actual artifacts are reviewed.
+Their original manifests and source revisions reproduce those published bytes;
+do not run current packagers against old image identities and call the result a
+historical release.
+
+## Prepare v0.2.1
+
+`release.json` prepares the new v0.2.1 candidate with `publicationReady:false`.
+Unknown revisions, image digests and archive checksums remain null until actual
+artifacts are reviewed. Do not reuse v0.2.0 identities or mark the candidate ready
+merely because its dependencies are published.
 Preparation rejects an unready manifest before fetching source, running a
 packager or creating output.
 
-| Starter | Packager | Explicit selectors | Archive for v0.2.0 |
+| Starter | Packager | Explicit selectors | Archive for v0.2.1 |
 | --- | --- | --- | --- |
-| Python issued banking | `scripts/package-banking-starter.py` | `bank: python`, `scenario: issued` | `astraform-banking-starter-v0.2.0.tar.gz` |
-| Java issued banking | `scripts/package-banking-starter.py` | `bank: java`, `scenario: issued` | `astraform-java-banking-issued-starter-v0.2.0.tar.gz` |
-| Java monthly banking | `scripts/package-banking-starter.py` | `bank: java`, `scenario: monthly` | `astraform-java-banking-monthly-starter-v0.2.0.tar.gz` |
-| Scheduled marketing | `scripts/package-marketing-starter.py` | `scenario: scheduled`, no `bank` | `astraform-marketing-scheduled-starter-v0.2.0.tar.gz` |
+| Python issued banking | `scripts/package-banking-starter.py` | `bank: python`, `scenario: issued` | `astraform-banking-starter-v0.2.1.tar.gz` |
+| Java issued banking | `scripts/package-banking-starter.py` | `bank: java`, `scenario: issued` | `astraform-java-banking-issued-starter-v0.2.1.tar.gz` |
+| Java monthly banking | `scripts/package-banking-starter.py` | `bank: java`, `scenario: monthly` | `astraform-java-banking-monthly-starter-v0.2.1.tar.gz` |
+| Scheduled marketing | `scripts/package-marketing-starter.py` | `scenario: scheduled`, no `bank` | `astraform-marketing-scheduled-starter-v0.2.1.tar.gz` |
 
 The common top-level `platformRelease` is `v0.4.0`. The release driver validates
 all four selections, known packager paths, immutable revisions, digest pins,
@@ -57,18 +64,25 @@ It passes only the supported selectors and `--platform-release`; arbitrary
 packager arguments are not accepted. Historical v0.1.0 reproduction uses its
 original committed manifest/packager and omits these newer arguments.
 
+The shared release retains these four archives and the five sample images below.
+Marketing uses one customer workflow: readiness advice, clarification and any
+customer-proposed handoff feedback belong to the same conversation. Its
+scheduled/current selectors choose the simulation start boundary; the scheduled
+variant remains the release archive. The generic Java provider starter remains
+source-only, without another image or deployment archive.
+
 ## Source, images and reviewed archives
 
-1. Obtain and verify the new public platform v0.4.0 bundle and exact image digests
-   after its publication in [platform releases](https://github.com/astraform/releases/releases).
+1. Obtain and verify the published platform v0.4.0 bundle and exact image digests
+   from [platform releases](https://github.com/astraform/releases/releases).
    A version declaration does not establish publication, strict-completion
    behavior or native retained-participation support. The old platform v0.2.0
    does not supply strict customer-FINISH behavior. Current banking domain labels
    and marketing `RESOLVE_TRUSTED` binding require v0.4.0 or later.
-   Java 0.4.4/Python 0.3.4 preserve these fields but do not add that behavior to a
+   Java 0.4.5/Python 0.3.5 preserve these fields but do not add that behavior to a
    platform image; do not publish a starter against an unsupported platform.
 2. Review and merge sample source, packaging support and
-   [versioned notes](releases/v0.2.0.md) to `main`. Record its full commit as **S**;
+   [versioned notes](releases/v0.2.1.md) to `main`. Record its full commit as **S**;
    require **Astraform Samples CI** on S. Keep `release.json` unready at this step.
 3. Dispatch that existing CI workflow from S with **Publish sample images to
    GHCR** and all five image selectors enabled. Publish `java-spring-banking`,
@@ -91,11 +105,11 @@ For example, save the selected Java bank/advice/PostgreSQL digest references as
 
 ```sh
 python3 scripts/package-banking-starter.py \
-  --version v0.2.0 --platform-release v0.4.0 \
+  --version v0.2.1 --platform-release v0.4.0 \
   --bank java --scenario issued \
   --source-revision FULL_IMAGE_BUILD_COMMIT \
   --image-lock java-banking-images.json \
-  --output /tmp/astraform-java-issued-v0.2.0-review
+  --output /tmp/astraform-java-issued-v0.2.1-review
 ```
 
 Use `--bank python --scenario issued` for Python banking and
@@ -104,10 +118,10 @@ maps. For marketing, save `domain`, `agency` and `tools` digests and run:
 
 ```sh
 python3 scripts/package-marketing-starter.py \
-  --version v0.2.0 --platform-release v0.4.0 --scenario scheduled \
+  --version v0.2.1 --platform-release v0.4.0 --scenario scheduled \
   --source-revision FULL_IMAGE_BUILD_COMMIT \
   --image-lock marketing-images.json \
-  --output /tmp/astraform-marketing-v0.2.0-review
+  --output /tmp/astraform-marketing-v0.2.1-review
 ```
 
 Public-mode preparation verifies digest, architecture and source metadata
@@ -140,7 +154,7 @@ Architecture descriptors alone are not runtime verification on each architecture
    verifies anonymous images and reproduces the approved bytes. It publishes
    neither images nor tags/releases.
 4. Run the same workflow from the same reviewed R with **publish checked**.
-   It creates the repository-wide v0.2.0 draft, uploads all assets, reads them back
+   It creates the repository-wide v0.2.1 draft, uploads all assets, reads them back
    and compares their bytes before publishing. Do not precreate the samples tag:
    the publisher refuses existing tags and releases. If main changes, repeat
    review for the selected revision; never silently replace an existing asset.

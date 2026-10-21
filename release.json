@@ -1,62 +1,62 @@
 {
-  "version": "v0.2.0",
-  "publicationReady": true,
+  "version": "v0.2.1",
+  "publicationReady": false,
   "platformRelease": "v0.4.0",
   "starters": [
     {
       "name": "python-banking",
-      "packagingRevision": "33b20177956d813f2da5b74c7d8ac7a4279c2a01",
-      "sourceRevision": "33b20177956d813f2da5b74c7d8ac7a4279c2a01",
+      "packagingRevision": null,
+      "sourceRevision": null,
       "packager": "scripts/package-banking-starter.py",
       "scenario": "issued",
       "images": {
-        "banking": "ghcr.io/astraform/samples-banking-starter-bank@sha256:a9011154c32d7b5f2ee10b3655484f62a3f9e0211b7282dd07cf9cbb3105e3b5",
-        "advice": "ghcr.io/astraform/samples-banking-starter-advice@sha256:dac4701ca1c221a83ad2af16d5f15f9c490a6e55d54326df9c0f36305aad38b9",
-        "postgres": "postgres@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d"
+        "banking": null,
+        "advice": null,
+        "postgres": null
       },
-      "archiveSha256": "653faceac4a8eab5a2366a8882aba58fe64ac3b7a4daf33b4d82129df033c501",
+      "archiveSha256": null,
       "bank": "python"
     },
     {
       "name": "java-banking",
-      "packagingRevision": "33b20177956d813f2da5b74c7d8ac7a4279c2a01",
-      "sourceRevision": "33b20177956d813f2da5b74c7d8ac7a4279c2a01",
+      "packagingRevision": null,
+      "sourceRevision": null,
       "packager": "scripts/package-banking-starter.py",
       "scenario": "issued",
       "images": {
-        "banking": "ghcr.io/astraform/samples-java-spring-banking@sha256:b030493501ff23b6be005ddb6d8495d78d8a82c901921ce55d85b6aa851a0838",
-        "advice": "ghcr.io/astraform/samples-banking-starter-advice@sha256:dac4701ca1c221a83ad2af16d5f15f9c490a6e55d54326df9c0f36305aad38b9",
-        "postgres": "postgres@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d"
+        "banking": null,
+        "advice": null,
+        "postgres": null
       },
-      "archiveSha256": "fe00b4a87f1ab1ccde84a4fbb72b9ddbf6a9c681a7cda4cf8936732c970cc059",
+      "archiveSha256": null,
       "bank": "java"
     },
     {
       "name": "java-monthly-banking",
-      "packagingRevision": "33b20177956d813f2da5b74c7d8ac7a4279c2a01",
-      "sourceRevision": "33b20177956d813f2da5b74c7d8ac7a4279c2a01",
+      "packagingRevision": null,
+      "sourceRevision": null,
       "packager": "scripts/package-banking-starter.py",
       "scenario": "monthly",
       "images": {
-        "banking": "ghcr.io/astraform/samples-java-spring-banking@sha256:b030493501ff23b6be005ddb6d8495d78d8a82c901921ce55d85b6aa851a0838",
-        "advice": "ghcr.io/astraform/samples-banking-starter-advice@sha256:dac4701ca1c221a83ad2af16d5f15f9c490a6e55d54326df9c0f36305aad38b9",
-        "postgres": "postgres@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d"
+        "banking": null,
+        "advice": null,
+        "postgres": null
       },
-      "archiveSha256": "edfe43f19e13c1a97052f1656af784a212fe34853a44c32af94663644bcac659",
+      "archiveSha256": null,
       "bank": "java"
     },
     {
       "name": "scheduled-marketing",
-      "packagingRevision": "33b20177956d813f2da5b74c7d8ac7a4279c2a01",
-      "sourceRevision": "33b20177956d813f2da5b74c7d8ac7a4279c2a01",
+      "packagingRevision": null,
+      "sourceRevision": null,
       "packager": "scripts/package-marketing-starter.py",
       "scenario": "scheduled",
       "images": {
-        "domain": "ghcr.io/astraform/samples-marketing-ops-remote@sha256:acb7305ab6509e37db7bf5e9c2e11bd59ede00fd3665767651b9b761f1ed921b",
-        "agency": "ghcr.io/astraform/samples-marketing-ops-creative-agency@sha256:0ea06a0ce7250b1c70c06a9262f2c6d504db2a55213abe4162d39fe1db8fda85",
-        "tools": "ghcr.io/astraform/samples-banking-starter-advice@sha256:dac4701ca1c221a83ad2af16d5f15f9c490a6e55d54326df9c0f36305aad38b9"
+        "domain": null,
+        "agency": null,
+        "tools": null
       },
-      "archiveSha256": "100e89f92f286e00a3c2a1eeede02175043c781236c98f7bae9dd40300ac102b"
+      "archiveSha256": null
     }
   ]
 }

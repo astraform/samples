@@ -3,7 +3,7 @@
 All examples share one samples repository version. Platform and SDK releases are
 versioned separately. Detailed notes live under [docs/releases](docs/releases).
 
-## Unreleased
+## v0.2.1
 
 - Move the generic Java/Spring provider starter into `starter-java-spring`, with
   a standalone Spring Boot build, lifecycle/catalog conformance and work replay
@@ -14,7 +14,17 @@ versioned separately. Detailed notes live under [docs/releases](docs/releases).
 - Use published contracts 1.2.3 and `ai.astraform:conformance-java:0.4.5` for Java
   provider tests. Python provider checks use `astraform-conformance==0.3.5`,
   preserving imports and the `remote-domain-conformance` command.
-- Preserve the published v0.2.0 images, archives, checksums and release selection.
+- Retain the four starter variants and platform v0.4.0 compatibility. Use new
+  image digests and archive identities for this release; published v0.2.0
+  artifacts retain their original dependencies and bytes.
+- Refresh bundled download, compatibility and Java customer-client instructions
+  for the renamed SDK packages.
+- Unify marketing readiness advice and feedback on a customer-proposed handoff
+  in one conversation. Retain scheduled/current timing variants and the existing
+  receipt and customer-FINISH requirements; follow-up remains the customer's
+  choice rather than a scripted sequence.
+
+See [v0.2.1 release notes](docs/releases/v0.2.1.md).
 
 ## v0.2.0
 
