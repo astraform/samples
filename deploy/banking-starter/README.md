@@ -1,9 +1,11 @@
 # Banking starter
 
-These instructions describe samples **v0.2.1**, targeting **Platform v0.4.0**,
+These instructions describe samples **v0.2.2**, targeting **Platform v0.4.0**,
 published **`ai.astraform:sdk-java:0.4.5`**, **`astraform-sdk==0.3.5`** and
 **contracts 1.2.3** where applicable. Use the selected archive's manifest and
 pinned images; source version changes do not publish or update those artifacts.
+
+Published v0.2.1 archives retain the same SDKs, contracts and image digests; v0.2.2 updates packaged instructions without changing their scenarios or services. The original v0.2.1 archive bytes remain unchanged.
 
 The historical published samples v0.2.0 archives retain Java SDK 0.4.4,
 Python SDK 0.3.4 and contracts 1.2.2. Follow their bundled instructions when
@@ -17,9 +19,9 @@ Download the platform and one published starter archive, verify their checksums,
 
 | Variant | Archive | Behavior |
 | --- | --- | --- |
-| Python issued | `astraform-banking-starter-v0.2.1.tar.gz` | Explain an existing January statement using the Python bank. |
-| Java issued | `astraform-java-banking-issued-starter-v0.2.1.tar.gz` | The same enquiry using the Java bank. |
-| Java monthly | `astraform-java-banking-monthly-starter-v0.2.1.tar.gz` | Generate January–March statements through the Java native provider. |
+| Python issued | `astraform-banking-starter-v0.2.2.tar.gz` | Explain an existing January statement using the Python bank. |
+| Java issued | `astraform-java-banking-issued-starter-v0.2.2.tar.gz` | The same enquiry using the Java bank. |
+| Java monthly | `astraform-java-banking-monthly-starter-v0.2.2.tar.gz` | Generate January–March statements through the Java native provider. |
 
 The issued customer, Avery, has AUD 100 available and wants to understand the bank's explanation of the AUD 48 minimum, AUD 1,200 full balance and due date. Reading account records can inform the customer's questions; a lookup alone does not satisfy this request for advice. The model chooses its questions, lookups and clarifications. This enquiry does not make or schedule a payment, monitor a due date or generate another statement.
 
@@ -29,12 +31,12 @@ The monthly scenario starts on 15 January and retains participation through 2 Ap
 
 ## Download and extract
 
-From the [published samples v0.2.1 release](https://github.com/astraform/samples/releases/tag/v0.2.1), download your selected archive and matching checksum. Keep them beside the separately extracted [Platform v0.4.0 bundle](https://github.com/astraform/releases/releases/tag/v0.4.0).
+Download your selected archive and matching checksum from the [samples v0.2.2 release](https://github.com/astraform/samples/releases/tag/v0.2.2). Check that the version and its assets are available before following these version-specific instructions; changing source files does not publish them. Keep them beside the separately extracted [Platform v0.4.0 bundle](https://github.com/astraform/releases/releases/tag/v0.4.0).
 
 Set `archive` to the exact file you downloaded:
 
 ```sh
-archive=astraform-banking-starter-v0.2.1.tar.gz
+archive=astraform-banking-starter-v0.2.2.tar.gz
 shasum -a 256 -c "$archive.sha256"
 tar -xzf "$archive"
 cd "${archive%.tar.gz}"
@@ -99,7 +101,7 @@ The advice agent bounds the full upstream response, including reasoning, to 1 Mi
 
 ## Add Java monthly banking to an existing marketing installation
 
-This route supports the **Java monthly v0.2.1 archive** on a Platform v0.4.0 installation that already runs the marketing starter. Extract a new monthly-banking archive beside that platform and work from the new starter directory. Do not rerun either initializer, reinitialize the platform or reuse an already configured banking starter. The fixed `banking`, `banking-advice` and `banking-reference` binding names must not already be in use.
+This route supports the **Java monthly v0.2.2 archive** and the unchanged published **v0.2.1 archive** on a Platform v0.4.0 installation that already runs the marketing starter. Extract a new monthly-banking archive beside that platform and work from the new starter directory. Do not rerun either initializer, reinitialize the platform or reuse an already configured banking starter. The fixed `banking`, `banking-advice` and `banking-reference` binding names must not already be in use.
 
 Finish active simulations before changing Runtime connections. Keep the existing platform project, model files, marketing credentials, database/evidence volumes and saved run IDs. Adding these static connections requires one Runtime recreation; it is not live domain registration. After setup, both configured domains use the same platform SDK endpoint and dashboard.
 

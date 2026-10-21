@@ -3,6 +3,20 @@
 All examples share one samples repository version. Platform and SDK releases are
 versioned separately. Detailed notes live under [docs/releases](docs/releases).
 
+## v0.2.2 — Unreleased
+
+- Separate fresh-platform initialization from adding Java monthly banking to an
+  existing marketing installation. Include the complete second-domain setup in
+  the banking archive and link it from the marketing guide.
+- Preserve existing bindings, credentials, deployment/network identity, shared
+  A2A budgets and saved runs; document the required initial Runtime recreation
+  for static connections and read-only native SDK checks before launch.
+- Refresh archive names and download instructions while retaining platform
+  v0.4.0 compatibility, Java SDK 0.4.5, Python SDK 0.3.5, contracts 1.2.3 and
+  the existing image digests. Scenarios, services and model profiles are unchanged.
+
+See [v0.2.2 release notes](docs/releases/v0.2.2.md).
+
 ## v0.2.1
 
 - Move the generic Java/Spring provider starter into `starter-java-spring`, with

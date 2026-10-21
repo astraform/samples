@@ -1,10 +1,14 @@
 # Marketing starter
 
-These instructions describe the samples **v0.2.1** scheduled-marketing starter,
+These instructions describe the samples **v0.2.2** scheduled-marketing starter,
 using published **`ai.astraform:sdk-java:0.4.5`**, **`astraform-sdk==0.3.5`** and
 **contracts 1.2.3**. Use the selected archive's compatibility manifest and pinned
-images. Download the matching archives from the [published samples v0.2.1 release](https://github.com/astraform/samples/releases/tag/v0.2.1); a source
-version or successful build does not update those artifacts.
+images. Download matching archives from the [samples v0.2.2 release](https://github.com/astraform/samples/releases/tag/v0.2.2) only after its assets are available; a source
+version or successful build does not publish or update those artifacts.
+
+Published v0.2.1 archives retain the same SDKs, contracts and image digests.
+v0.2.2 updates packaged instructions without changing scenarios or services;
+the original v0.2.1 archive bytes remain unchanged.
 
 The historical published samples v0.2.0 archives retain Java SDK 0.4.4,
 Python SDK 0.3.4 and contracts 1.2.2. Their images and archives remain unchanged.
@@ -73,7 +77,8 @@ No service or simulation starts during initialization.
 
 For a shared installation, initialize marketing first, then follow the
 [Java monthly banking second-domain procedure](https://astraform.ai/docs/starters/monthly-banking/#existing-platform).
-Use the online procedure with unchanged v0.2.1 downloads; their original
+The v0.2.2 monthly-banking archive includes the complete procedure in its
+README. For unchanged v0.2.1 downloads, use the online procedure; their original
 README files are not updated retroactively. The procedure preserves this
 starter's bindings, agency token, shared timeout budgets and saved platform runs.
 Do not rerun this initializer over an existing banking installation or delete

@@ -1,11 +1,11 @@
 {
-  "version": "v0.2.1",
-  "publicationReady": true,
+  "version": "v0.2.2",
+  "publicationReady": false,
   "platformRelease": "v0.4.0",
   "starters": [
     {
       "name": "python-banking",
-      "packagingRevision": "c0fb962bf31a025abc63afc02bc5cca087324ea1",
+      "packagingRevision": null,
       "sourceRevision": "c0fb962bf31a025abc63afc02bc5cca087324ea1",
       "packager": "scripts/package-banking-starter.py",
       "scenario": "issued",
@@ -14,12 +14,12 @@
         "advice": "ghcr.io/astraform/samples-banking-starter-advice@sha256:4e2c204082d12c9a4a6c8dc20630b5132e022791e42b0a18ead3cfada15891ce",
         "postgres": "postgres@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d"
       },
-      "archiveSha256": "e75ec16b7611d37194b7b48b7a8a66cbeaa524ae1a08babe71830c73edbc1641",
+      "archiveSha256": null,
       "bank": "python"
     },
     {
       "name": "java-banking",
-      "packagingRevision": "c0fb962bf31a025abc63afc02bc5cca087324ea1",
+      "packagingRevision": null,
       "sourceRevision": "c0fb962bf31a025abc63afc02bc5cca087324ea1",
       "packager": "scripts/package-banking-starter.py",
       "scenario": "issued",
@@ -28,12 +28,12 @@
         "advice": "ghcr.io/astraform/samples-banking-starter-advice@sha256:4e2c204082d12c9a4a6c8dc20630b5132e022791e42b0a18ead3cfada15891ce",
         "postgres": "postgres@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d"
       },
-      "archiveSha256": "d10d9653f6a461f685fb05d4f93401bad6d47cca1c1943137ac3044d2cf89fd1",
+      "archiveSha256": null,
       "bank": "java"
     },
     {
       "name": "java-monthly-banking",
-      "packagingRevision": "c0fb962bf31a025abc63afc02bc5cca087324ea1",
+      "packagingRevision": null,
       "sourceRevision": "c0fb962bf31a025abc63afc02bc5cca087324ea1",
       "packager": "scripts/package-banking-starter.py",
       "scenario": "monthly",
@@ -42,12 +42,12 @@
         "advice": "ghcr.io/astraform/samples-banking-starter-advice@sha256:4e2c204082d12c9a4a6c8dc20630b5132e022791e42b0a18ead3cfada15891ce",
         "postgres": "postgres@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d"
       },
-      "archiveSha256": "37ade41eed4c9722498a48b2dce5cd65ed952d68abe1140729df3cba30fd0fea",
+      "archiveSha256": null,
       "bank": "java"
     },
     {
       "name": "scheduled-marketing",
-      "packagingRevision": "c0fb962bf31a025abc63afc02bc5cca087324ea1",
+      "packagingRevision": null,
       "sourceRevision": "c0fb962bf31a025abc63afc02bc5cca087324ea1",
       "packager": "scripts/package-marketing-starter.py",
       "scenario": "scheduled",
@@ -56,7 +56,7 @@
         "agency": "ghcr.io/astraform/samples-marketing-ops-creative-agency@sha256:255693f43c8cb7c5b51f93c5d440462c9bd6819df71f7d972b3b66b81bfbea1b",
         "tools": "ghcr.io/astraform/samples-banking-starter-advice@sha256:4e2c204082d12c9a4a6c8dc20630b5132e022791e42b0a18ead3cfada15891ce"
       },
-      "archiveSha256": "00f7565e1fe39dd76d2d2ff67c894fa646c09d1214bcc274f21293971307bae2"
+      "archiveSha256": null
     }
   ]
 }
