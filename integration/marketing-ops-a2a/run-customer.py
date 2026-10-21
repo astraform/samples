@@ -31,13 +31,10 @@ evidence = importlib.util.module_from_spec(_evidence_spec)
 _evidence_spec.loader.exec_module(evidence)
 
 
-def launch(client, api, output, case="advice"):
+def launch(client, api, output):
     directory = Path(__file__).resolve().parent
     catalog_api = AgentCatalogApi(client)
-    if case not in ("advice", "proposal-review"):
-        raise ValueError("Marketing case must be advice or proposal-review")
-    scenario_name = "sample-configuration.json" if case == "advice" else "proposal-review-configuration.json"
-    sample_path = Path(os.environ.get("MARKETING_SAMPLE_FILE", directory / scenario_name))
+    sample_path = Path(os.environ.get("MARKETING_SAMPLE_FILE", directory / "sample-configuration.json"))
     sample = json.loads(sample_path.read_text())
     template = sample["launchRequestTemplate"]
     if "domainId" in template:
@@ -121,8 +118,6 @@ def launch(client, api, output, case="advice"):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", choices=("advice", "proposal-review"), default="advice",
-                        help="Authored customer goal (default: advice); MARKETING_SAMPLE_FILE overrides the template")
     parser.add_argument("--output", type=Path, help="Save requests and evidence; a new launch requires an empty directory")
     parser.add_argument("--wait", action="store_true", help="Wait for this run and its terminal evidence export")
     parser.add_argument("--inspect", metavar="RUN_ID", help="Read an existing run; never create, publish or launch")
@@ -140,7 +135,7 @@ def main(argv=None):
     with ApiClient(Configuration(host=api, retries=0)) as client:
         run_id = arguments.inspect
         if run_id is None:
-            accepted = launch(client, api, arguments.output, case=arguments.case)
+            accepted = launch(client, api, arguments.output)
             run_id = accepted["runId"] if arguments.wait else None
         if run_id is not None:
             try:

@@ -28,15 +28,13 @@ both distributions provide the same import packages. See the
 
 ## Native customer simulation
 
-Choose an authored customer case using [`run-customer.py`](run-customer.py):
+Run the marketing example using [`run-customer.py`](run-customer.py) and its
+default [`sample-configuration.json`](sample-configuration.json). One real-model
+customer, Quinn, seeks to understand the actual readiness finding and get
+practical advice from the Creative Agency. Clarifying that advice or proposing
+a handoff for agency feedback belongs to the same conversation and customer goal.
 
-| Case | Customer goal | Configuration |
-| --- | --- | --- |
-| `advice` (default) | Obtain an actionable recommendation for the observed launch dependency. One adequate agency reply may be sufficient. | [`sample-configuration.json`](sample-configuration.json) |
-| `proposal-review` | Obtain advice, develop a proposed handoff, and ask the agency to assess what it addresses and what remains unverified. Initial advice alone does not meet this goal. | [`proposal-review-configuration.json`](proposal-review-configuration.json) |
-
-Both cases use one real-model customer, Quinn, with the existing marketing
-provider and Creative Agency. The launcher creates a Catalog draft, publishes
+The launcher creates a Catalog draft, publishes
 it and launches it once with generated `AgentJourneysApi.launch_agent_journey`.
 It neither sends follow-up
 turns nor advances simulated time. Astraform owns subsequent execution and simulated-time progression after
@@ -50,20 +48,20 @@ observation to Quinn. No global clock or elapsed real-time delay drives the
 review. The customer chooses its messages and actions using its persona and
 goal; its outcome is not guaranteed.
 
-The advice case seeks an **actionable recommendation** for the observed external
+Quinn seeks an **actionable recommendation** for the observed external
 launch dependency: who should take the next step, what they should do and how
 that addresses the dependency. A generic instruction to monitor or wait without
-those details does not give Quinn a practical next step. Quinn can ask for
-clarification, wait or decide to stop; neither model is forced to select a
-particular action or success label. The proposal-review case adds a distinct
-customer-authored proposal and an assessment of that proposal. The customer
-chooses the proposal and messages; the sample does not script a handoff, force
-a FINISH decision or enforce a minimum number of turns.
+those details does not give Quinn a practical next step. Quinn can ask for material
+clarification or propose a handoff and ask the agency what it addresses and what
+remains unverified. One adequate reply may resolve the enquiry; further feedback
+can help when a useful question remains. The customer chooses its proposals,
+messages, waits and stopping decision. The sample does not script follow-up,
+force a FINISH decision or enforce a minimum number of turns.
 
-The Creative Agency provides advice only; a request to it does not contact the
-production studio, assign work, obtain a licence or clear the launch. Quinn's
-goal concerns advice or proposal assessment, not execution. If an escalation
-coordinator is unknown, a useful clarification distinguishes an established
+The Creative Agency provides advice and proposal feedback; a request does not
+contact the production studio, assign work, obtain a licence or clear the launch.
+Quinn's goal concerns understanding the finding and getting practical advice.
+If an escalation coordinator is unknown, a useful clarification distinguishes an established
 responsibility from a recommendation about which person or role should coordinate
 the next step or contact the studio. Repeating a request for execution through an
 advice-only service is not progress, and model summaries cannot establish work
@@ -127,9 +125,10 @@ advice and the customer's own later FINISH decision within the existing limits.
 The customer remains free to ask for clarification, wait or stop; no fixed turn
 sequence or answer is prescribed. Receipt matching and FINISH do not establish
 advice quality, assessment of a specific proposal, an executed escalation or a
-resolved campaign blocker. Evaluate the original conversation against the chosen
-case goal as well as checking its execution status. Invalid
-or unhelpful model behavior and unmet completion requirements remain observable.
+resolved campaign blocker. Evaluate the original conversation against Quinn's
+goal, including any clarification or proposal feedback requested, as well as its
+execution status. Invalid or unhelpful model behavior and unmet completion
+requirements remain observable.
 
 ### Start the two sample services
 
@@ -280,25 +279,16 @@ python3 -m venv .venv
 python3 -m pip install 'astraform-sdk==0.3.5'
 ASTRAFORM_API_BASE=http://localhost:8084 \
   python3 integration/marketing-ops-a2a/run-customer.py \
-  --case advice --output /tmp/marketing-advice --wait
+  --output /tmp/marketing-advice --wait
 ```
 
-For proposal review, use a fresh output directory:
-
-```bash
-ASTRAFORM_API_BASE=http://localhost:8084 \
-  python3 integration/marketing-ops-a2a/run-customer.py \
-  --case proposal-review --output /tmp/marketing-proposal --wait
-```
-
-`MARKETING_SAMPLE_FILE` explicitly overrides either named case with your own
-complete configuration. Unset it when selecting an authored case with `--case`.
-The existing [`current-state-configuration.json`](current-state-configuration.json)
-is an advice variant whose start and horizon are both the scheduled 09:00 review
-boundary. Select it through `MARKETING_SAMPLE_FILE` to inspect due work at the
-current boundary rather than start before the review. To author a current-boundary
-proposal case, copy the proposal configuration and set both logical timestamps to
-that review boundary; the goal and the boundary are independent settings.
+`MARKETING_SAMPLE_FILE` overrides the default with a complete configuration.
+Set it to `integration/marketing-ops-a2a/current-state-configuration.json` to use
+the existing [current-boundary variant](current-state-configuration.json), whose
+start and horizon are both the 09:00 review boundary. It keeps the same customer
+goal while admitting due work at the current boundary instead of starting before
+the review. Use a fresh output directory for each intentional launch. You can
+also supply an edited complete configuration through the same override.
 
 The current provider source uses Java SDK/conformance **0.4.5** from Maven
 Central with shared contract **1.2.3**. These domain callbacks do not provide the
@@ -360,10 +350,10 @@ helper does not repair it or retry with scripted behavior.
 The configuration caps the run at **10 customer decisions, 4 partner
 interactions, 8 domain operations, 20 real minutes**, and a simulated horizon
 of **2026-01-16 10:00 UTC**. These are scenario limits, not platform claims about
-months, years or population capacity. No tools are granted in this slice;
-existing marketing tools remain in the provider, with native MCP integration
-tracked separately. The provider checkpoint is per customer, and this sample
-does not establish a shared marketing database.
+months, years or population capacity. No customer tools are granted by this
+scenario; marketing state is supplied through native domain observations.
+The provider checkpoint is per customer, and this sample does not establish a
+shared marketing database.
 
 ### Gemini model selection
 

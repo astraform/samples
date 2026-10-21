@@ -149,7 +149,7 @@ class MarketingCustomerLauncherTest(unittest.TestCase):
         with patch.dict(os.environ, {"MARKETING_SAMPLE_FILE": str(self.output.parent / "not-needed.json")}), \
                 patch.object(self.evidence, "SimulationRunsApi", return_value=reads), \
                 patch.object(launcher, "launch") as launch, patch.object(self.evidence.time, "sleep"):
-            self.assertEqual(0, launcher.main(["--case", "proposal-review", "--inspect", "run-1", "--output", str(self.output)]))
+            self.assertEqual(0, launcher.main(["--inspect", "run-1", "--output", str(self.output)]))
         launch.assert_not_called()
         self.assertEqual(run, json.loads((self.output / "run.json").read_text()))
         self.assertEqual(b"actual-failed-goal-export", (self.output / "evidence.zip").read_bytes())
@@ -233,11 +233,10 @@ class MarketingCustomerLauncherTest(unittest.TestCase):
                         self.assertFalse(output.exists())
                         self.assertEqual([], requests)
 
-    def test_case_selection_and_current_state_override_use_native_sdk_or_reject_before_writes(self):
-        for name, case, custom in (("sample-configuration.json", "advice", False),
-                                  ("proposal-review-configuration.json", "proposal-review", False),
-                                  ("current-state-configuration.json", "proposal-review", True)):
-            with self.subTest(case=case, custom=custom):
+    def test_default_and_custom_scenario_use_native_sdk_or_reject_before_writes(self):
+        for name, custom in (("sample-configuration.json", False),
+                             ("current-state-configuration.json", True)):
+            with self.subTest(custom=custom):
                 selected = DIRECTORY / name
                 scenario = json.loads(selected.read_text())
                 policy = scenario["launchRequestTemplate"]["completionPolicy"]
@@ -253,7 +252,7 @@ class MarketingCustomerLauncherTest(unittest.TestCase):
                     else:
                         os.environ.pop("MARKETING_SAMPLE_FILE", None)
                     if self.supports_finish_policy() and self.supports_binding_mode(policy["requestFactBindingMode"]):
-                        self.assertEqual(0, launcher.main(["--case", case, "--output", str(output)]))
+                        self.assertEqual(0, launcher.main(["--output", str(output)]))
                         result = json.loads((output / "launch.json").read_text())
                         self.assert_native_launch_body(client, requests, output, result)
                         created_draft = client.sanitize_for_serialization(
@@ -264,7 +263,7 @@ class MarketingCustomerLauncherTest(unittest.TestCase):
                         self.assertEqual(policy["requestFactBindingMode"], requests[0]["body"]["completionPolicy"]["requestFactBindingMode"])
                     else:
                         with self.assertRaisesRegex(ValueError, "requireCustomerFinish|requestFactBindingMode"):
-                            launcher.main(["--case", case, "--output", str(output)])
+                            launcher.main(["--output", str(output)])
                         catalog.create_agent_definition.assert_not_called()
                         catalog.publish_agent_definition.assert_not_called()
                         self.assertFalse(output.exists())
