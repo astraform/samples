@@ -210,7 +210,7 @@ def publish(directory):
             "Tag already exists; never move or replace a release tag")
     files.append(manifest_path)
     run("gh", "release", "create", version, "--repo", REPOSITORY, "--draft",
-        "--target", manifest["releaseCommit"], "--title", f"Astraform Samples {version}",
+        "--target", manifest["releaseCommit"], "--title", version,
         "--notes-file", str(notes), *(str(path) for path in files))
     # Verify the actual uploaded bytes before making the draft public.
     with tempfile.TemporaryDirectory(prefix="astraform-release-readback-") as temporary:
