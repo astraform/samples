@@ -11,7 +11,7 @@ using those unchanged images and archives.
 
 Run a model-backed banking customer against a banking advice agent over A2A 1.0 JSON-RPC. The customer can read its own account through MCP; the advice agent reads the same partner-owned records through the banking API. Bank data lives in the starter's PostgreSQL database. Astraform stores simulation state and evidence separately. The bank is a domain provider; `remote-domain.v1` and its profile names identify its supported provider protocol.
 
-Once the selected samples release is published, download the platform and one starter archive, verify their checksums, and configure your models. The supplied images include the SDKs and launch tools; no private source checkout, image build or host SDK installation is required for the container workflow.
+Download the platform and one published starter archive, verify their checksums, and configure your models. The supplied images include the SDKs and launch tools; no private source checkout, image build or host SDK installation is required for the container workflow.
 
 ## Choose a banking scenario
 
@@ -29,7 +29,7 @@ The monthly scenario starts on 15 January and retains participation through 2 Ap
 
 ## Download and extract
 
-When v0.2.1 appears in the [published samples releases](https://github.com/astraform/samples/releases), download your selected archive and matching checksum. Keep them beside the separately extracted [Platform v0.4.0 bundle](https://github.com/astraform/releases/releases/tag/v0.4.0).
+From the [published samples v0.2.1 release](https://github.com/astraform/samples/releases/tag/v0.2.1), download your selected archive and matching checksum. Keep them beside the separately extracted [Platform v0.4.0 bundle](https://github.com/astraform/releases/releases/tag/v0.4.0).
 
 Set `archive` to the exact file you downloaded:
 
@@ -52,13 +52,13 @@ The starter publishes no host ports. Partner services connect to the platform's 
 
 ## Connect and start
 
-From the extracted starter directory, initialize against a fresh, initialized platform bundle:
+For a fresh platform connection map, initialize from the extracted starter directory. To add Java monthly banking to an existing marketing installation, skip this initializer and use [the complete second-domain procedure below](#add-java-monthly-banking-to-an-existing-marketing-installation).
 
 ```sh
 python3 init.py --platform ../astraform-platform-v0.4.0 --model gemini
 ```
 
-Use the actual platform folder name. `--model ollama` selects the partner's local-model template instead. Initialization writes `.env` and `private/partner.env`, creates `runs/`, backs up the platform Runtime connection file and appends the starter's MCP/A2A bindings and, for monthly banking, its native-domain binding. It starts no services or simulations. Existing banking bindings, request/poll timeouts or an already initialized starter are refused; preserve existing configuration and connect manually instead of overwriting it.
+Use the actual platform folder name. `--model ollama` selects the partner's local-model template instead. Initialization writes `.env` and `private/partner.env`, creates `runs/`, backs up the platform Runtime connection file and appends the starter's MCP/A2A bindings and, for monthly banking, its native-domain binding. It starts no services or simulations. Existing banking bindings, request/poll timeouts or an already initialized starter are refused. Do not remove those checks or erase existing configuration; use the second-domain procedure for its supported monthly-on-marketing case.
 
 Set `BANKING_LLM_API_KEY` in `private/partner.env` for Gemini. Values must be unquoted single lines. Customer model settings remain in the platform's `private/model.env`: the customer and partner are separate agents and may use different providers.
 
@@ -96,6 +96,177 @@ Initialization sets A2A request and poll budgets to the selected partner model d
 For a model or generation-setting change, finish existing runs first. Update `private/partner.env` and `BANKING_LLM_BINDING_REVISION`, keep the Runtime target's `simulation.event.runtime.a2a.targets.banking-advice.binding-revision` aligned, then recreate `advice` and `agent-runtime` and launch a fresh run. For customer-model changes, follow the platform guide, including its `AI_BINDING_REVISION` and memory-store requirements. Initialization does not rewrite an existing private profile.
 
 The advice agent bounds the full upstream response, including reasoning, to 1 MiB and accepts a final answer of at most 4,096 characters. Truncated, oversized or late responses fail without repairing the answer, substituting advice or automatically retrying the model. Thinking and a successful transport response do not guarantee accurate advice or customer understanding; inspect the actual answer against bank records.
+
+## Add Java monthly banking to an existing marketing installation
+
+This route supports the **Java monthly v0.2.1 archive** on a Platform v0.4.0 installation that already runs the marketing starter. Extract a new monthly-banking archive beside that platform and work from the new starter directory. Do not rerun either initializer, reinitialize the platform or reuse an already configured banking starter. The fixed `banking`, `banking-advice` and `banking-reference` binding names must not already be in use.
+
+Finish active simulations before changing Runtime connections. Keep the existing platform project, model files, marketing credentials, database/evidence volumes and saved run IDs. Adding these static connections requires one Runtime recreation; it is not live domain registration. After setup, both configured domains use the same platform SDK endpoint and dashboard.
+
+### 1. Check the existing installation
+
+Use the actual platform folder name in every block. Read its deployment identity and relevant connections:
+
+```sh
+platform=../astraform-platform-v0.4.0
+grep '^COMPOSE_PROJECT_NAME=' "$platform/.env"
+grep -nE '^[[:space:]]*simulation[.]event[.]runtime[.]a2a[.](request-timeout|poll-timeout)[[:space:]]*[=:]' "$platform/private/runtime.properties"
+if grep -Eq '^[[:space:]]*simulation[.]event[.]runtime[.](mcp[.]bindings[.]banking[.]|a2a[.]targets[.]banking-advice[.]|domain[.]bindings[.]banking-reference[.])' "$platform/private/runtime.properties"; then
+  printf 'Banking connections already exist; stop this procedure.\n'
+else
+  printf 'No existing banking connections found.\n'
+fi
+```
+
+The project value identifies the **platform**, not the marketing starter. The output should show the existing A2A request and poll budgets, followed by confirmation that no banking connections exist. Keep both shared budgets unchanged: the supplied marketing profile uses `150s`, which covers this starter's `120s` transport requirement. For customized settings, each shared budget must cover all connected agents; stop and review the configuration if either is missing or below 120 seconds. Do not append duplicate timeout keys or reduce a longer budget. The customer model deadline and durable A2A recovery settings remain unchanged.
+
+### 2. Prepare private banking configuration
+
+The following block generates a separate bank project and database password, joins the existing platform network, copies the selected partner profile and writes only a banking connection fragment. It refuses an existing starter or conflicting banking bindings before creating files. It does not change the platform yet.
+
+Keep `partner_model=gemini`, or select `ollama` to copy that supplied profile. Both templates use a 60-second model deadline. The input schema is read from the downloaded archive and escaped for the Java properties file; do not paste an unescaped JSON schema into that file.
+
+```sh
+(
+  set -eu
+  umask 077
+  platform=../astraform-platform-v0.4.0
+  runtime="$platform/private/runtime.properties"
+  partner_model=gemini
+  test -f "$platform/.env"
+  test -f "$runtime"
+
+  python3 - <<'PY'
+import json
+configuration = json.load(open("starter-config.json"))
+if (configuration.get("bankImplementation"), configuration.get("scenario")) != ("java", "monthly"):
+    raise SystemExit("Use the Java monthly starter for this procedure")
+PY
+  for path in .env private runs; do
+    if [ -e "$path" ]; then
+      printf 'Use a fresh starter extraction; preserving %s\n' "$path" >&2
+      exit 1
+    fi
+  done
+  if grep -Eq '^[[:space:]]*simulation[.]event[.]runtime[.](mcp[.]bindings[.]banking[.]|a2a[.]targets[.]banking-advice[.]|domain[.]bindings[.]banking-reference[.])' "$runtime"; then
+    printf 'Banking connections already exist; do not append another banking starter.\n' >&2
+    exit 1
+  fi
+  platform_project=$(sed -n 's/^COMPOSE_PROJECT_NAME=//p' "$platform/.env")
+  case "$platform_project" in
+    ''|[!a-z0-9]*|*[!a-z0-9_-]*) printf 'Check the existing platform project name.\n' >&2; exit 1 ;;
+  esac
+  test "${#platform_project}" -le 63
+  bank_project=astraform-bank-$(python3 -c 'import secrets; print(secrets.token_hex(5))')
+  bank_password=$(python3 -c 'import secrets; print(secrets.token_hex(24))')
+  schema=$(python3 - <<'PY'
+import json
+with open("bank-backend.input.schema.json") as source:
+    schema = json.dumps(json.load(source), separators=(",", ":"))
+print(schema.replace(chr(92), chr(92) * 2))
+PY
+  )
+
+  mkdir -m 700 private runs
+  cp "models/$partner_model.env.example" private/partner.env
+  revision=$(sed -n 's/^BANKING_LLM_BINDING_REVISION=//p' private/partner.env)
+  test -n "$revision"
+  cat > .env <<EOF
+COMPOSE_PROJECT_NAME=$bank_project
+ASTRAFORM_NETWORK=${platform_project}_default
+BANKING_DB_PASSWORD=$bank_password
+BANKING_SERVICE_PORT=8094
+BANKING_NATIVE_ENABLED=true
+LOCAL_UID=$(id -u)
+LOCAL_GID=$(id -g)
+EOF
+  cat > private/runtime-bindings.properties <<EOF
+
+# Banking starter: $bank_project
+simulation.event.runtime.mcp.bindings.banking.endpoint=http://$bank_project-bank:8094/mcp
+simulation.event.runtime.mcp.bindings.banking.binding-revision=$revision
+simulation.event.runtime.mcp.bindings.banking.allowed-tool-names=get_customer_accounts
+simulation.event.runtime.mcp.bindings.banking.allow-insecure-http=true
+simulation.event.runtime.a2a.targets.banking-advice.base-url=http://$bank_project-advice:8099
+simulation.event.runtime.a2a.targets.banking-advice.binding-revision=$revision
+simulation.event.runtime.a2a.targets.banking-advice.allow-insecure-http=true
+simulation.event.runtime.a2a.targets.banking-advice.input-schema-json=$schema
+simulation.event.runtime.domain.bindings.banking-reference.base-url=http://$bank_project-bank:8094
+simulation.event.runtime.domain.bindings.banking-reference.domain-id=banking
+simulation.event.runtime.domain.bindings.banking-reference.binding-revision=$revision
+simulation.event.runtime.domain.bindings.banking-reference.allow-insecure-http=true
+EOF
+  chmod 600 .env private/partner.env private/runtime-bindings.properties
+)
+```
+
+For Gemini, set `BANKING_LLM_API_KEY` in the new starter's `private/partner.env`. Leave the platform's `private/model.env` and the marketing starter's private files alone. The generated `ASTRAFORM_NETWORK` joins the existing project; the new `COMPOSE_PROJECT_NAME` owns only the bank stack. Keep the generated database password private.
+
+### 3. Install only the new connections
+
+Review `private/runtime-bindings.properties`. It contains the banking MCP endpoint and scoped tool, banking-advice A2A endpoint and input schema, and the monthly native-provider endpoint. Its revisions come from the copied partner profile. It deliberately contains no shared A2A timeout, model setting or marketing credential.
+
+Append it once, retaining a private backup and the existing Runtime file inode:
+
+```sh
+(
+  set -eu
+  umask 077
+  platform=../astraform-platform-v0.4.0
+  runtime="$platform/private/runtime.properties"
+  test -f "$runtime"
+  test -f private/runtime-bindings.properties
+  test ! -e private/runtime.properties.before-starter
+  if grep -Eq '^[[:space:]]*simulation[.]event[.]runtime[.](mcp[.]bindings[.]banking[.]|a2a[.]targets[.]banking-advice[.]|domain[.]bindings[.]banking-reference[.])' "$runtime"; then
+    printf 'Banking connections already exist; nothing was appended.\n' >&2
+    exit 1
+  fi
+  cp "$runtime" private/runtime.properties.before-starter
+  chmod 600 private/runtime.properties.before-starter
+  cat private/runtime-bindings.properties >> "$runtime"
+)
+```
+
+The backup is a snapshot, not a general rollback command: restoring it later could remove connections added afterward. Do not replace the platform file with the banking fragment or remove the existing marketing block.
+
+Start only the new partner stack and load its connections into Runtime:
+
+```sh
+# From the new monthly starter directory:
+./starter.sh config --quiet
+./starter.sh pull
+./starter.sh up -d --wait
+
+# From the existing platform directory:
+./astraform.sh up -d --force-recreate --wait agent-runtime
+```
+
+### 4. Check the shared platform without launching
+
+From the monthly starter directory, inspect the configured banking tool through the native Python SDK:
+
+```sh
+./starter.sh run --rm --entrypoint python customer -c '
+import os
+from astraform_platform_client import ApiClient, Configuration
+from astraform_platform_client.api.simulation_events_api import SimulationEventsApi
+with ApiClient(Configuration(host=os.environ["ASTRAFORM_API_BASE"], retries=0)) as client:
+    result = SimulationEventsApi(client).inspect_public_customer_mcp_capabilities("banking")
+    print("Binding:", result.binding_key)
+    print("Tools:", ", ".join(tool.name for tool in (result.tools or [])))
+'
+```
+
+Check that the response identifies binding `banking` and tool `get_customer_accounts`. This discovers capabilities; it does not seed bank records, create a Catalog definition, launch a Journey or invoke a customer/partner model. It does not replace a real simulation when you intentionally choose to run one.
+
+Read a saved marketing run through the same platform, replacing `EXISTING_MARKETING_RUN_ID` with its ID from the dashboard:
+
+```sh
+./starter.sh run --rm customer --inspect EXISTING_MARKETING_RUN_ID \
+  --output /runs/retained-marketing --timeout 60
+```
+
+This inspection performs only SDK reads and exports. Confirm the saved result is unchanged. After an intentional monthly launch below, the dashboard's simulation library should show both domains. Preserve the same platform project and storage when restarting; stop or remove only the chosen starter when you no longer need its services.
 
 ## Configure the customer and scenario
 

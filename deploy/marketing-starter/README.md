@@ -3,8 +3,8 @@
 These instructions describe the samples **v0.2.1** scheduled-marketing starter,
 using published **`ai.astraform:sdk-java:0.4.5`**, **`astraform-sdk==0.3.5`** and
 **contracts 1.2.3**. Use the selected archive's compatibility manifest and pinned
-images. Download v0.2.1 only after its release assets are published; a source
-version or successful build does not establish availability.
+images. Download the matching archives from the [published samples v0.2.1 release](https://github.com/astraform/samples/releases/tag/v0.2.1); a source
+version or successful build does not update those artifacts.
 
 The historical published samples v0.2.0 archives retain Java SDK 0.4.4,
 Python SDK 0.3.4 and contracts 1.2.2. Their images and archives remain unchanged.
@@ -70,6 +70,16 @@ a private agency token and installs the same value in Runtime's target binding;
 never put it in a scenario, customer prompt or shared evidence. Existing
 connections/timeouts and partial initialization are refused rather than replaced.
 No service or simulation starts during initialization.
+
+For a shared installation, initialize marketing first, then follow the
+[Java monthly banking second-domain procedure](https://astraform.ai/docs/starters/monthly-banking/#existing-platform).
+Use the online procedure with unchanged v0.2.1 downloads; their original
+README files are not updated retroactively. The procedure preserves this
+starter's bindings, agency token, shared timeout budgets and saved platform runs.
+Do not rerun this initializer over an existing banking installation or delete
+its connections to bypass the refusal. This documented route adds monthly
+banking to marketing; it does not automate arbitrary connection replacement or
+live registration. Finish active runs before the required Runtime recreation.
 
 Start the platform, then recreate its Runtime to load the new connections:
 
