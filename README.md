@@ -2,14 +2,15 @@
 
 Build and adapt partner services that Astraform customer agents can exercise.
 Platform operations use the native Java/Python SDKs directly; partner services
-expose A2A, MCP and domain APIs. The published **samples v0.2.0** images and
-starter archives target **platform v0.4.0**, Java **0.4.4**, Python **0.3.4**
-and contracts **1.2.2**. Their dependency names and bytes remain unchanged.
+expose A2A, MCP and domain APIs. The published **samples v0.2.1** images and
+starter archives target **platform v0.4.0**, Java **0.4.5**, Python **0.3.5**
+and contracts **1.2.3**. Their manifests retain that compatibility baseline.
 
 This source checkout uses published **`ai.astraform:sdk-java:0.4.5`** from Maven
 Central and **`astraform-sdk==0.3.5`** from PyPI, built against published
-**contracts 1.2.3**, for the **samples v0.2.1** release candidate. Continue using
-published v0.2.0 downloads until v0.2.1 is available. No SDK source checkout is required.
+**contracts 1.2.3**. The **samples v0.2.2** candidate updates packaged instructions
+while retaining the v0.2.1 images, scenarios and dependencies. Use published
+v0.2.1 downloads until v0.2.2 assets are available. No SDK source checkout is required.
 See [SDK development](#sdk-development) before building this checkout.
 
 Clone the examples to build and adapt them:
@@ -23,7 +24,7 @@ cd samples
 
 | Start here | What it runs |
 | --- | --- |
-| [Python banking starter](deploy/banking-starter/README.md) | An image-only deployment with a separate bank database, an LLM banking partner and one customer asking about an issued statement. Available in the published samples v0.2.0 release. Follow its bundled dependency requirements. |
+| [Python banking starter](deploy/banking-starter/README.md) | An image-only deployment with a separate bank database, an LLM banking partner and one customer asking about an issued statement. Available in the published samples v0.2.1 release. Follow its bundled dependency requirements. |
 | [Banking from sample source](banking-advice-agent/README.md) | Build either bank and configure the shared LLM partner. The default and monthly cases use the published customer SDK; strict issued-statement completion and the declared domain label use the published native SDK and require the supporting platform capabilities described in the guide. |
 | [Marketing from sample source](integration/marketing-ops-a2a/README.md#native-customer-simulation) | Build the Marketing Ops provider and LLM Creative Agency, then launch a customer seeking to understand a readiness finding and get practical advice. |
 
@@ -36,9 +37,11 @@ Agency feedback does not execute a handoff or clear a campaign for launch.
 
 For the historical starter v0.1.0 and compatible non-strict source scenarios,
 the public baseline is [Astraform Platform v0.2.0](https://github.com/astraform/releases/releases/tag/v0.2.0).
-The current source scenarios and published v0.2.0 starters target platform **v0.4.0**
-for explicit banking domain identity and marketing trusted request-fact binding.
-Obtain its archive/checksum from the public platform releases.
+The current source scenarios and published v0.2.1 starters retain platform
+**v0.4.0** as their compatibility baseline for explicit banking domain identity
+and marketing trusted request-fact binding. Use a supporting published platform
+release, including **v0.5.0**, and its actual extracted folder name when following
+setup commands. Obtain its archive/checksum from the public platform releases.
 Platform v0.3.0 supplies strict customer-FINISH behavior but does not supply
 these additional capabilities. Verify the selected server and image versions
 before launching.
@@ -184,21 +187,24 @@ All examples share one repository release version, such as **v0.1.0**. Each
 all examples and any prepared starter archives. Choose the domain/language you
 need; you do not need to install all samples.
 
-The published **v0.2.0** release provides Python-issued, Java-issued and
+The published **v0.2.1** release provides Python-issued, Java-issued and
 Java-monthly [banking starters](deploy/banking-starter/README.md#choose-a-banking-scenario)
 and a [scheduled marketing starter](deploy/marketing-starter/README.md), targeting
-platform **v0.4.0**. Their manifests retain Java SDK **0.4.4**, Python SDK
-**0.3.4** and contracts **1.2.2**. Its published manifests, image digests and
+platform **v0.4.0**. Their manifests retain Java SDK **0.4.5**, Python SDK
+**0.3.5** and contracts **1.2.3**. Its published manifests, image digests and
 archive checksums remain unchanged.
+The historical **v0.2.0** starters retain platform **v0.4.0**, Java SDK
+**0.4.4**, Python SDK **0.3.4** and contracts **1.2.2**.
 The historical **v0.1.0** Python banking starter retains platform **v0.2.0**,
 Python SDK **0.3.2** and contracts **1.2.0**.
 
-The **v0.2.1** candidate keeps the same four starter selections and platform
-**v0.4.0** target, using the published SDK packages described in
-[SDK development](#sdk-development). `release.json` prepares this new selection;
-it remains unready until new images, source revisions, digests and archive
-checksums have been reviewed. Do not reuse v0.2.0 artifact identities or treat
-the candidate as an available download.
+The **v0.2.2** candidate keeps the same four starter selections, platform
+**v0.4.0** baseline, image digests and image-source revisions. It updates the
+bundled setup and second-domain instructions without requiring new images or
+SDK releases. `release.json` remains unready until the final public packaging
+commit and newly generated archive checksums have been reviewed. Keep the
+existing image identities, but do not copy v0.2.1 archive checksums or treat the
+candidate as an available download.
 The generic [Java provider starter](starter-java-spring/README.md) is source-only
 in this checkout. Build or copy it from samples; it is no longer a Maven Central
 template artifact in the Java SDK release. It does not add a new image or starter
@@ -211,22 +217,25 @@ Platform deployment bundles remain in [astraform/releases](https://github.com/as
 Platform and SDK versions are independent of the samples version. Only download
 assets after their release is published; passing CI is not publication.
 
-See the [changelog](CHANGELOG.md), [v0.2.1 candidate notes](docs/releases/v0.2.1.md),
-[v0.2.0 release notes](docs/releases/v0.2.0.md) and [historical v0.1.0 notes](docs/releases/v0.1.0.md)
+See the [changelog](CHANGELOG.md), [v0.2.2 candidate notes](docs/releases/v0.2.2.md),
+[v0.2.1 release notes](docs/releases/v0.2.1.md),
+[v0.2.0 release notes](docs/releases/v0.2.0.md), [historical v0.1.0 notes](docs/releases/v0.1.0.md)
 and [maintainer publication instructions](docs/PUBLICATION_CHECKLIST.md). One
 **Publish Samples Release** workflow prepares or publishes the repository release.
 Image publication is separate and is needed only when images change.
 
-Current source publishes the five sample images in this repository's package set:
+The image workflow publishes five sample images in this repository's package set:
 `ghcr.io/astraform/samples-java-spring-banking`,
 `ghcr.io/astraform/samples-marketing-ops-remote`,
 `ghcr.io/astraform/samples-marketing-ops-creative-agency`,
 `ghcr.io/astraform/samples-banking-starter-bank` and
 `ghcr.io/astraform/samples-banking-starter-advice`. Each image records
 `https://github.com/astraform/samples` as its OCI source and the build commit as
-its revision. Publish the complete set from one reviewed new source commit;
-select only its verified digests for the next starter release. Previously
-published packages and v0.1.0 assets retain their original identities and bytes.
+its revision. When service code, dependencies or schemas require new images,
+publish the complete set from one reviewed image-build commit and select its
+verified digests. A documentation-only starter release can reuse the existing
+image cohort and its recorded source revision. Previously published packages
+and starter assets retain their original identities and bytes.
 The image workflow and the starter release workflow remain separate manual
 actions; changing package names or passing CI does not publish either.
 

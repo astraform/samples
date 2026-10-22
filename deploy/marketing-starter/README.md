@@ -23,12 +23,15 @@ The authored templates require a platform implementing both
 tools image targets **`astraform-sdk==0.3.5`**, which preserves both fields. The
 domain image must implement `marketing-ops.native-events.v4`; current provider
 source targets **`ai.astraform:sdk-java:0.4.5`** and published contracts **1.2.3**.
-Build and verify new images from current source and its registry locks. Use
-matching domain/tools images and a supporting platform
-release, targeting v0.4.0 or later. Download the selected platform only after
-publication and verification. SDK publication does not add server behavior, and platform v0.3.0's
-strict FINISH support does not establish trusted-binding support. Source updates
-do not update existing images or archives.
+The supplied public archives already pin matching domain/tools images; running
+an unmodified archive requires no image build, host SDK installation or private
+source checkout. If you customize service source, dependencies or schemas,
+build and verify matching images from your reviewed source and registry locks.
+Use a supporting platform release, targeting v0.4.0 or later. Download the
+selected platform only after publication and verification. SDK publication does
+not add server behavior, and platform v0.3.0's strict FINISH support does not
+establish trusted-binding support. Source updates do not update existing images
+or archives.
 
 Public archives use anonymous digest-pinned images. Check `image-lock.json`,
 `release.env`, `starter-config.json` and the manifest for the selected images,
@@ -155,8 +158,10 @@ known document supplier from unknown coordination owner, and unknown rights,
 licensing authority and delivery date. `KNOWN` carries a value; `UNKNOWN` and
 `UNREPORTED` do not establish absence. Facts become visible only when the review
 executes; historical missing facts remain unreported. Trusted agency bindings
-use the same selected record. Rebuild the domain image and update its Runtime
-binding revision together with the schema before using these configurations.
+use the same selected record. When changing the provider or schema from source,
+rebuild the domain image and update its matching Runtime binding revision with
+the schema before a fresh run. Unmodified public archives already include the
+matching schema and image bindings.
 
 The current agency templates select Gemini 3.6 Flash with high reasoning or
 Ollama Qwen3.5 4B with thinking enabled by default. They do not
